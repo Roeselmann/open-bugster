@@ -2,6 +2,17 @@
 
 Open-Bugster is a lightweight, self-hosted Kanban board that turns TestFlight feedback into actionable tickets—built for independent iOS developers and small teams, and easy to customize with AI-assisted coding.
 
+## Features
+
+- **Import TestFlight tickets**  
+  Bring feedback and insights from TestFlight directly into the command board.
+- **Create tickets manually**  
+  Quickly capture ideas, tasks, and bugs in one central place.
+- **Attach files directly**  
+  Add screenshots, documents, and other files to the relevant ticket.
+- **Manage to-do lists**  
+  Record the next steps within each ticket and work through them systematically.
+
 ## The idea behind Open-Bugster
 
 Open-Bugster gives independent iOS developers and small teams a fast, simple, and affordable way to turn TestFlight feedback into an actionable ticket workflow. Instead of copying feedback by hand or adopting a large project-management platform, developers can import TestFlight reports into a focused Kanban board, add manual tickets, prioritize the work, and resolve issues together.
