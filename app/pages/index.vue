@@ -255,8 +255,7 @@ async function sync() {
     <main class="mx-auto max-w-[1800px] px-4 py-6 sm:px-6">
       <div class="mb-6 flex flex-col gap-4 md:flex-row md:items-end">
         <div>
-          <p class="muted mb-1 text-[11px] font-bold uppercase tracking-[.14em]">One app · {{ tickets.length }} tickets</p>
-          <h1 class="text-3xl font-bold tracking-[-.045em] sm:text-4xl">Work board</h1>
+          <h1 class="text-3xl font-bold tracking-[-.045em] sm:text-3xl">Workboard - {{ tickets.length }} tickets</h1>
         </div>
         <div class="flex flex-wrap gap-2 md:ml-auto md:justify-end">
           <div class="relative w-full sm:w-72">
