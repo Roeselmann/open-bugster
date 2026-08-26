@@ -1,3 +1,7 @@
+<p align="center">
+<img src="docs/images/open-bugster-screenshot.png">
+</p>
+
 # Open-Bugster
 
 Open-Bugster is a lightweight, self-hosted Kanban board that turns TestFlight feedback into actionable tickets—built for independent iOS developers and small teams, and easy to customize with AI-assisted coding.
