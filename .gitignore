@@ -1,0 +1,10 @@
+node_modules
+.nuxt
+.output
+.env
+data
+secrets
+coverage
+.DS_Store
+.idea
+npm-debug.log*

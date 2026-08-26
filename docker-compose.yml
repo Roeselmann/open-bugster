@@ -1,0 +1,14 @@
+services:
+  bugster:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      - bugster-data:/data
+      - ./secrets/AuthKey.p8:/run/secrets/appstoreconnect.p8:ro
+
+volumes:
+  bugster-data:
