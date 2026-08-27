@@ -4,7 +4,7 @@
 
 :root {
   color-scheme: light;
-  --canvas: #f4f2ed;
+  --canvas: #e5e2d8;
   --panel: #fbfaf7;
   --panel-strong: #ffffff;
   --ink: #171713;
@@ -16,12 +16,12 @@
 
 .dark {
   color-scheme: dark;
-  --canvas: #10110f;
-  --panel: #171815;
-  --panel-strong: #1d1e1a;
+  --canvas: #070806;
+  --panel: #1a1b15;
+  --panel-strong: #33342c;
   --ink: #f5f4ef;
-  --muted: #9b9b93;
-  --line: #30312c;
+  --muted: #a3a39a;
+  --line: #3c3d35;
   --accent: #8c88ff;
   --accent-soft: #29274c;
 }
@@ -51,6 +51,34 @@ button { cursor: pointer; }
 }
 
 .scrollbar-thin { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+
+/*
+ * Category tones: fixed foreground/background pairs, one class per preset. Plain CSS on
+ * purpose — a Tailwind utility that only ever appears as a string in a .ts file is never
+ * generated, which is how the lane colours used to render nothing at all.
+ */
+.tone {
+  color: var(--tone-fg);
+  background-color: var(--tone-bg);
+}
+
+.tone-neutral { --tone-fg: #57534e; --tone-bg: #e9e6df; }
+.tone-rose { --tone-fg: #9f1239; --tone-bg: #ffe4e6; }
+.tone-amber { --tone-fg: #92400e; --tone-bg: #fef3c7; }
+.tone-emerald { --tone-fg: #065f46; --tone-bg: #d1fae5; }
+.tone-teal { --tone-fg: #155e75; --tone-bg: #cffafe; }
+.tone-blue { --tone-fg: #1e40af; --tone-bg: #dbeafe; }
+.tone-violet { --tone-fg: #5b21b6; --tone-bg: #ede9fe; }
+.tone-fuchsia { --tone-fg: #86198f; --tone-bg: #fae8ff; }
+
+:where(.dark) .tone-neutral { --tone-fg: #d6d3cd; --tone-bg: #2c2c27; }
+:where(.dark) .tone-rose { --tone-fg: #fda4af; --tone-bg: #4c0519; }
+:where(.dark) .tone-amber { --tone-fg: #fcd34d; --tone-bg: #451a03; }
+:where(.dark) .tone-emerald { --tone-fg: #6ee7b7; --tone-bg: #022c22; }
+:where(.dark) .tone-teal { --tone-fg: #67e8f9; --tone-bg: #083344; }
+:where(.dark) .tone-blue { --tone-fg: #93c5fd; --tone-bg: #172554; }
+:where(.dark) .tone-violet { --tone-fg: #c4b5fd; --tone-bg: #2e1065; }
+:where(.dark) .tone-fuchsia { --tone-fg: #f0abfc; --tone-bg: #4a044e; }
 
 @keyframes enter {
   from { opacity: 0; transform: translateY(6px); }

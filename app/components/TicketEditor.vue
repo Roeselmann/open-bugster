@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, Calendar, Check, Download, FileText, GripVertical, Image, ListTodo, Paperclip, Plus, Save, Tag, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { Archive, Calendar, Check, Download, FileText, GripVertical, Image, ListTodo, Paperclip, Plus, Save, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogClose,
   DialogContent,
@@ -10,19 +10,19 @@ import {
   DialogTitle,
   VisuallyHidden,
 } from 'reka-ui'
-import type { Attachment, Category, Ticket, TicketPriority, TicketStatus, TicketTodoInput } from '~~/shared/types/domain'
-import { PRIORITY_LABELS, STATUS_LABELS } from '~~/shared/utils/constants'
+import type { Attachment, Category, LabelSummary, Lane, Ticket, TicketPriority, TicketTodoInput } from '~~/shared/types/domain'
+import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 
-const props = defineProps<{ ticket?: Ticket | null; categories?: Category[]; saving?: boolean; deletingAttachmentId?: string | null }>()
+const props = defineProps<{ ticket?: Ticket | null; lanes: Lane[]; categories?: Category[]; labels?: LabelSummary[]; saving?: boolean; deletingAttachmentId?: string | null }>()
 const emit = defineEmits<{
   close: []
   save: [payload: { title?: string; description?: string; comment: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; labels?: string[]; categoryName?: string | null; todos: TicketTodoInput[]; attachments: File[] }]
-  move: [ticket: Ticket, status: TicketStatus]
+  move: [ticket: Ticket, laneId: string]
   archive: [ticket: Ticket]
   removeAttachment: [attachment: Attachment]
 }>()
 
-const form = reactive({ title: '', description: '', comment: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', labels: '', categoryName: '' })
+const form = reactive({ title: '', description: '', comment: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', labels: [] as string[], categoryName: '' })
 interface EditableTodo extends TicketTodoInput { key: string }
 const todos = ref<EditableTodo[]>([])
 let todoSequence = 0
@@ -30,15 +30,25 @@ const isEdit = computed(() => Boolean(props.ticket))
 const isManual = computed(() => !props.ticket || props.ticket.source === 'manual')
 const titleInput = ref<HTMLTextAreaElement | null>(null)
 const commentInput = ref<HTMLTextAreaElement | null>(null)
+
+// Imported tickets carry no author — the person behind them is the TestFlight tester.
+const person = computed(() => {
+  const author = props.ticket?.author
+  if (author) return { name: `${author.firstName} ${author.lastName}`, email: author.email, role: 'Author' }
+  const testerEmail = props.ticket?.feedback?.testerEmail
+  return testerEmail ? { name: testerEmail, email: testerEmail, role: 'TestFlight tester' } : null
+})
 const fileInput = ref<HTMLInputElement | null>(null)
 const pendingFiles = ref<File[]>([])
 const fileError = ref('')
 const dragActive = ref(false)
 const lightboxId = ref<string | null>(null)
 const imageAttachments = computed(() => props.ticket?.attachments.filter(attachment => attachment.mimeType.startsWith('image/')) || [])
-const statusOptions = Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }))
+const laneOptions = computed(() => props.lanes.map(lane => ({ value: lane.id, label: lane.name })))
 const priorityOptions = Object.entries(PRIORITY_LABELS).map(([value, label]) => ({ value, label }))
 const categoryOptions = computed(() => (props.categories || []).map(category => category.name))
+// The picker works on names here: an unknown one is created when the ticket is saved.
+const labelOptions = computed(() => (props.labels || []).map(label => ({ value: label.name, label: label.name })))
 
 watch(() => props.ticket, (ticket, previous) => {
   const keepFiles = pendingFiles.value.length > 0 && (!previous || previous.id === ticket?.id)
@@ -49,7 +59,7 @@ watch(() => props.ticket, (ticket, previous) => {
   form.priority = ticket?.priority || 'medium'
   form.dueDate = ticket?.dueDate || ''
   form.buildNumber = ticket?.buildNumber || ''
-  form.labels = ticket?.labels.map(label => label.name).join(', ') || ''
+  form.labels = ticket?.labels.map(label => label.name) || []
   form.categoryName = ticket?.category?.name || ''
   todos.value = (ticket?.todos || []).map(todo => ({ key: `todo-${++todoSequence}`, text: todo.text, completed: todo.completed }))
 }, { immediate: true })
@@ -61,7 +71,7 @@ function submit() {
     .filter(todo => todo.text)
   const shared = { comment: form.comment, todos: cleanTodos, attachments: [...pendingFiles.value] }
   const manualFields = isManual.value ? { buildNumber: form.buildNumber.trim() || null } : {}
-  emit('save', { ...shared, ...manualFields, title: form.title.trim(), description: form.description, priority: form.priority, dueDate: form.dueDate || null, labels: form.labels.split(',').map(label => label.trim()).filter(Boolean), categoryName: form.categoryName.trim() || null })
+  emit('save', { ...shared, ...manualFields, title: form.title.trim(), description: form.description, priority: form.priority, dueDate: form.dueDate || null, labels: [...form.labels], categoryName: form.categoryName.trim() || null })
 }
 
 function focusTodo(key: string) {
@@ -303,38 +313,25 @@ function focusTitle(event: Event) {
           <DialogDescription>{{ isEdit ? 'Edit and save the ticket.' : 'Create a new ticket.' }}</DialogDescription>
         </VisuallyHidden>
         <form class="flex min-h-full flex-col" @submit.prevent="submit">
-          <header class="sticky top-0 z-10 flex items-center border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_92%,transparent)] px-5 py-4 backdrop-blur-xl sm:px-7">
-            <div>
-              <p class="muted text-[10px] font-bold uppercase tracking-[.14em]">{{ ticket?.source === 'manual' || !ticket ? 'Manual ticket' : 'TestFlight ticket' }}</p>
-              <DialogTitle as-child>
-                <h2 class="mt-0.5 text-xl font-bold tracking-[-.03em]">{{ ticket ? `Ticket #${ticket.ticketNumber}` : 'New ticket' }}</h2>
-              </DialogTitle>
-            </div>
+          <header class="sticky top-0 z-10 grid grid-cols-[1fr_auto_1fr] items-center gap-3 border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_92%,transparent)] px-5 py-4 backdrop-blur-xl sm:px-7">
+            <DialogTitle as-child>
+              <h2 class="min-w-0 truncate text-xl font-bold tracking-[-.03em]">{{ ticket ? `Ticket #${ticket.ticketNumber}` : 'New ticket' }}</h2>
+            </DialogTitle>
+            <span
+              v-if="person"
+              class="surface-strong col-start-2 flex min-w-0 items-center gap-2 rounded-xl px-2.5 py-1"
+              :title="`${person.role} · ${person.email}`"
+            >
+              <UserRound :size="15" class="muted shrink-0" aria-hidden="true" />
+              <span class="truncate text-xs font-semibold">{{ person.name }}</span>
+              <span class="sr-only">({{ person.role }}, {{ person.email }})</span>
+            </span>
             <DialogClose as-child>
-              <button type="button" class="focus-ring ml-auto grid size-10 place-items-center rounded-xl hover:bg-[var(--panel-strong)]" aria-label="Close"><X :size="20" /></button>
+              <button type="button" class="focus-ring col-start-3 grid size-10 place-items-center justify-self-end rounded-xl hover:bg-[var(--panel-strong)]" aria-label="Close"><X :size="20" /></button>
             </DialogClose>
           </header>
 
           <div class="flex-1 space-y-6 px-5 py-6 sm:px-7">
-            <div v-if="ticket" class="block">
-              <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Lane</span>
-              <UiSelect
-                :model-value="ticket.status"
-                :options="statusOptions"
-                aria-label="Lane"
-                @update:model-value="emit('move', ticket, $event as TicketStatus)"
-              />
-            </div>
-
-            <section v-if="ticket?.author" class="surface-strong flex items-center gap-3 rounded-xl p-3.5">
-              <UserRound :size="18" class="muted shrink-0" />
-              <div class="min-w-0">
-                <p class="text-sm font-semibold">{{ ticket.author.firstName }} {{ ticket.author.lastName }}</p>
-                <p class="muted truncate text-xs" :title="ticket.author.email">{{ ticket.author.email }}</p>
-              </div>
-              <span class="muted ml-auto text-[10px] font-bold uppercase tracking-[.08em]">Author</span>
-            </section>
-
             <label class="block">
               <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Title</span>
               <textarea ref="titleInput" v-model="form.title" :maxlength="isManual ? 160 : 10000" required rows="2" class="focus-ring surface-strong min-h-20 w-full resize-none overflow-hidden rounded-xl px-3.5 py-3 text-[15px] leading-snug outline-none [field-sizing:content]" placeholder="What needs to be done?" />
@@ -398,6 +395,16 @@ function focusTitle(event: Event) {
               <textarea ref="commentInput" v-model="form.comment" maxlength="10000" rows="4" class="focus-ring surface-strong w-full resize-y rounded-xl px-3.5 py-3 text-sm leading-relaxed outline-none" placeholder="Internal notes and additional information…" />
             </label>
 
+            <div v-if="ticket" class="block border-t border-[var(--line)] pt-6">
+              <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Lane</span>
+              <UiSelect
+                :model-value="ticket.laneId"
+                :options="laneOptions"
+                aria-label="Lane"
+                @update:model-value="emit('move', ticket, $event)"
+              />
+            </div>
+
             <div class="grid gap-4 sm:grid-cols-2">
               <div class="block">
                 <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Priority</span>
@@ -432,11 +439,19 @@ function focusTitle(event: Event) {
               <span class="muted mt-1.5 block text-[11px]">Optional · New names are created when you save.</span>
             </div>
 
-            <label class="block">
-              <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Labels</span>
-              <input v-model="form.labels" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none" placeholder="Frontend, Regression, iOS 18">
-              <span class="muted mt-1.5 block text-[11px]">Separate multiple labels with commas.</span>
-            </label>
+            <div class="block">
+              <label for="ticket-labels" class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Tags :size="14" /> Labels</label>
+              <UiMultiCombobox
+                id="ticket-labels"
+                v-model="form.labels"
+                :options="labelOptions"
+                allow-create
+                aria-label="Labels"
+                placeholder="Select or type a new label"
+                empty-text="No labels on this board yet."
+              />
+              <span class="muted mt-1.5 block text-[11px]">New names are created when you save · a label no ticket uses any more is removed.</span>
+            </div>
 
             <section v-if="ticket?.attachments.length" class="space-y-3">
               <h3 class="text-xs font-bold uppercase tracking-[.08em]">Existing attachments</h3>

@@ -8,7 +8,10 @@ services:
       - .env
     volumes:
       - bugster-data:/data
-      - ./secrets/AuthKey.p8:/run/secrets/appstoreconnect.p8:ro
+      # Only needed when upgrading an installation that configured TestFlight through
+      # ASC_* variables. The key is imported into the first board on the next start;
+      # after that it can be removed. New installations upload the .p8 in the UI.
+      # - ./secrets/AuthKey.p8:/run/secrets/appstoreconnect.p8:ro
 
 volumes:
   bugster-data:

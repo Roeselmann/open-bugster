@@ -1,44 +1,34 @@
 <script setup lang="ts">
-import { Image, Inbox } from '@lucide/vue'
-import type { Ticket, TicketStatus } from '~~/shared/types/domain'
-import { STATUS_LABELS } from '~~/shared/utils/constants'
+import { Image, Inbox, Plus } from '@lucide/vue'
+import type { Lane, Ticket } from '~~/shared/types/domain'
 
-const props = defineProps<{ tickets: Ticket[]; showImportLane?: boolean }>()
-const emit = defineEmits<{ open: [ticket: Ticket]; move: [id: string, status: TicketStatus, index: number] }>()
+const props = defineProps<{ boardId: string; lanes: Lane[]; tickets: Ticket[] }>()
+const emit = defineEmits<{ open: [ticket: Ticket]; move: [id: string, laneId: string, index: number]; create: [laneId: string] }>()
 
-const statuses = Object.keys(STATUS_LABELS) as TicketStatus[]
-const showScreenshotByStatus = reactive<Record<TicketStatus, boolean>>({
-  import: false,
-  backlog: false,
-  open: false,
-  question: false,
-  in_progress: false,
-  done: false,
-})
-const screenshotVisibilityStorageKey = 'open-bugster-lane-screenshot-visibility'
+const showScreenshotByLane = reactive<Record<string, boolean>>({})
+const screenshotVisibilityStorageKey = computed(() => `open-bugster-lane-screenshot-visibility:${props.boardId}`)
 let screenshotPreferencesLoaded = false
 const cardGap = 10
 const dragThreshold = 6
 const draggedId = ref<string | null>(null)
-const targetStatus = ref<TicketStatus | null>(null)
+const targetLaneId = ref<string | null>(null)
 const targetIndex = ref<number | null>(null)
 const draggedCardHeight = ref(0)
 const dragPreview = ref<{ x: number; y: number; width: number } | null>(null)
 const dragPreviewElement = ref<HTMLElement | null>(null)
 
-const ticketsFor = (status: TicketStatus) => props.tickets
-  .filter(ticket => ticket.status === status)
+const ticketsFor = (laneId: string) => props.tickets
+  .filter(ticket => ticket.laneId === laneId)
   .sort((a, b) => a.position - b.position)
 
-const visibleStatuses = computed(() => statuses.filter(status => (
-  status !== 'import' || (props.showImportLane ?? ticketsFor('import').length > 0)
-)))
+// The import lane only earns its column once something has been imported into it.
+const visibleLanes = computed(() => props.lanes.filter(lane => !lane.isImport || ticketsFor(lane.id).length > 0))
 
 const draggedTicket = computed(() => props.tickets.find(ticket => ticket.id === draggedId.value) || null)
 
-function sortItemsFor(status: TicketStatus): Array<Ticket | null> {
-  const items: Array<Ticket | null> = ticketsFor(status).filter(ticket => ticket.id !== draggedId.value)
-  if (targetStatus.value === status && targetIndex.value !== null) {
+function sortItemsFor(laneId: string): Array<Ticket | null> {
+  const items: Array<Ticket | null> = ticketsFor(laneId).filter(ticket => ticket.id !== draggedId.value)
+  if (targetLaneId.value === laneId && targetIndex.value !== null) {
     items.splice(Math.min(targetIndex.value, items.length), 0, null)
   }
   return items
@@ -65,25 +55,35 @@ let pointerY = 0
 let previousBodyCursor = ''
 let previousBodyUserSelect = ''
 
-onMounted(() => {
+function loadScreenshotPreferences() {
+  screenshotPreferencesLoaded = false
+  for (const key of Object.keys(showScreenshotByLane)) delete showScreenshotByLane[key]
   try {
-    const storedPreferences = JSON.parse(localStorage.getItem(screenshotVisibilityStorageKey) || localStorage.getItem('bugster-lane-screenshot-visibility') || '{}') as Record<string, unknown>
-    for (const status of statuses) {
-      if (typeof storedPreferences[status] === 'boolean') {
-        showScreenshotByStatus[status] = storedPreferences[status]
-      }
+    const storedPreferences = JSON.parse(localStorage.getItem(screenshotVisibilityStorageKey.value) || '{}') as Record<string, unknown>
+    for (const lane of props.lanes) {
+      showScreenshotByLane[lane.id] = typeof storedPreferences[lane.id] === 'boolean' ? storedPreferences[lane.id] as boolean : false
     }
   } catch {
     // Ignore malformed or unavailable browser storage and keep the defaults.
+    for (const lane of props.lanes) showScreenshotByLane[lane.id] = false
   } finally {
     screenshotPreferencesLoaded = true
   }
+}
+
+onMounted(loadScreenshotPreferences)
+watch(() => props.boardId, loadScreenshotPreferences)
+watch(() => props.lanes.map(lane => lane.id).join(','), () => {
+  // Lanes can be added or removed from the settings page while the board stays open.
+  for (const lane of props.lanes) {
+    if (!(lane.id in showScreenshotByLane)) showScreenshotByLane[lane.id] = false
+  }
 })
 
-watch(showScreenshotByStatus, (preferences) => {
+watch(showScreenshotByLane, (preferences) => {
   if (!screenshotPreferencesLoaded) return
   try {
-    localStorage.setItem(screenshotVisibilityStorageKey, JSON.stringify(preferences))
+    localStorage.setItem(screenshotVisibilityStorageKey.value, JSON.stringify(preferences))
   } catch {
     // The toggle should still work when browser storage is unavailable.
   }
@@ -117,7 +117,7 @@ function beginPointerDrag(event: PointerEvent) {
 }
 
 function laneAt(x: number, y: number) {
-  return document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-lane-status]') || null
+  return document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-lane-id]') || null
 }
 
 function dropPosition(lane: HTMLElement, clientY: number) {
@@ -144,15 +144,15 @@ function dropPosition(lane: HTMLElement, clientY: number) {
 
 function updateDropTarget(x: number, y: number) {
   const lane = laneAt(x, y)
-  const status = lane?.dataset.laneStatus as TicketStatus | undefined
-  if (!lane || !status) {
-    targetStatus.value = null
+  const laneId = lane?.dataset.laneId
+  if (!lane || !laneId) {
+    targetLaneId.value = null
     targetIndex.value = null
     return
   }
 
   const index = dropPosition(lane, y)
-  if (targetStatus.value !== status) targetStatus.value = status
+  if (targetLaneId.value !== laneId) targetLaneId.value = laneId
   if (targetIndex.value !== index) targetIndex.value = index
 }
 
@@ -170,7 +170,7 @@ function schedulePreviewPosition() {
 function runAutoScroll() {
   scrollFrame = null
   if (!pointerDrag?.active) return
-  const lane = laneAt(pointerX, pointerY)
+  const lane = laneAt(pointerX, pointerY)?.querySelector<HTMLElement>('[data-lane-scroll]')
   if (!lane) return
 
   const bounds = lane.getBoundingClientRect()
@@ -234,8 +234,8 @@ function finishPointerDrag(event: PointerEvent) {
   if (!pointerDrag || event.pointerId !== pointerDrag.pointerId) return
   if (pointerDrag.active) {
     const lane = laneAt(event.clientX, event.clientY)
-    const status = lane?.dataset.laneStatus as TicketStatus | undefined
-    if (lane && status) emit('move', pointerDrag.id, status, dropPosition(lane, event.clientY))
+    const laneId = lane?.dataset.laneId
+    if (lane && laneId) emit('move', pointerDrag.id, laneId, dropPosition(lane, event.clientY))
     suppressClick = true
     window.setTimeout(() => { suppressClick = false }, 0)
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
@@ -263,7 +263,7 @@ function cleanupPointerDrag() {
   previewFrame = null
   scrollFrame = null
   draggedId.value = null
-  targetStatus.value = null
+  targetLaneId.value = null
   targetIndex.value = null
   draggedCardHeight.value = 0
   dragPreview.value = null
@@ -280,79 +280,89 @@ onBeforeUnmount(cleanupPointerDrag)
 
 <template>
   <div
-    class="scrollbar-thin grid gap-4 pb-6 xl:gap-5"
-    :class="visibleStatuses.length === 6 ? 'min-w-[1700px] grid-cols-6' : 'min-w-[1400px] grid-cols-5'"
+    class="scrollbar-thin grid items-start gap-4 pb-6 xl:gap-5"
+    :style="{
+      minWidth: `${visibleLanes.length * 280}px`,
+      gridTemplateColumns: `repeat(${visibleLanes.length}, minmax(260px, 1fr))`,
+    }"
     @pointerdown="beginPointerDrag"
     @click.capture="preventClickAfterDrag"
   >
-    <section v-for="status in visibleStatuses" :key="status" class="min-w-0">
-      <header class="mb-3 flex items-center gap-2 px-1 transition-colors duration-150" :class="targetStatus === status ? 'text-[var(--accent)]' : ''">
-        <span
-          class="size-2 rounded-full transition-colors duration-150"
-          :class="[
-            ['bg-cyan-500', 'bg-slate-400', 'bg-blue-500', 'bg-violet-500', 'bg-amber-500', 'bg-emerald-500'][statuses.indexOf(status)],
-            targetStatus === status ? '!bg-[var(--accent)]' : '',
-          ]"
-        />
-        <h2 class="text-[13px] font-bold uppercase tracking-[.1em]">{{ STATUS_LABELS[status] }}</h2>
-        <div class="ml-auto flex items-center gap-2">
+    <section v-for="lane in visibleLanes" :key="lane.id" class="min-w-0">
+      <div
+        :data-lane-id="lane.id"
+        class="flex max-h-[calc(100vh-230px)] flex-col rounded-[12px] bg-[color-mix(in_srgb,var(--panel)_70%,transparent)] transition-colors duration-150 dark:bg-[color-mix(in_srgb,var(--panel-strong)_50%,var(--canvas))]"
+        :class="targetLaneId === lane.id ? 'bg-[color-mix(in_srgb,var(--accent)_7%,var(--panel))] dark:bg-[color-mix(in_srgb,var(--accent)_16%,var(--panel-strong))]' : ''"
+      >
+        <header class="flex shrink-0 items-center gap-2 px-3.5 pb-1.5 pt-3 transition-colors duration-150" :class="targetLaneId === lane.id ? 'text-[var(--accent)]' : ''">
+          <h2 class="truncate text-[13px] font-bold uppercase tracking-[.1em]">{{ lane.name }}</h2>
+          <div class="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              role="switch"
+              :aria-checked="showScreenshotByLane[lane.id] === true"
+              :aria-label="`${showScreenshotByLane[lane.id] ? 'Hide' : 'Show'} screenshots in ${lane.name}`"
+              class="focus-ring muted flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-[10px] font-semibold normal-case tracking-normal transition hover:bg-[var(--panel-strong)]"
+              @click="showScreenshotByLane[lane.id] = !showScreenshotByLane[lane.id]"
+            >
+              <Image aria-hidden="true" class="size-4" />
+              <span
+                aria-hidden="true"
+                class="relative h-4 w-7 rounded-full border transition-colors"
+                :class="showScreenshotByLane[lane.id] ? 'border-[var(--accent)] bg-[var(--accent)]' : 'border-[var(--line)] bg-[var(--panel-strong)]'"
+              >
+                <span
+                  class="absolute left-0.5 top-0.5 size-2.5 rounded-full shadow-sm transition-transform"
+                  :class="showScreenshotByLane[lane.id] ? 'translate-x-3 bg-white' : 'bg-[var(--muted)]'"
+                />
+              </span>
+            </button>
+            <span class="muted text-[13px] font-semibold tabular-nums">{{ ticketsFor(lane.id).length }}</span>
+          </div>
+        </header>
+        <div data-lane-scroll class="scrollbar-thin relative min-h-0 flex-1 overflow-y-auto px-2.5 pb-2.5 pt-1">
+          <TransitionGroup name="ticket-sort" tag="div" data-ticket-stack class="relative flex flex-col gap-2.5">
+            <div
+              v-for="(item, index) in sortItemsFor(lane.id)"
+              :key="item?.id || '__drop-placeholder'"
+              :data-sort-ticket="item?.id"
+            >
+              <TicketCard
+                v-if="item"
+                :ticket="item"
+                :index="index"
+                :lanes="lanes"
+                :show-screenshot="showScreenshotByLane[lane.id]"
+                @open="emit('open', $event)"
+                @move="nextLaneId => emit('move', item.id, nextLaneId, ticketsFor(nextLaneId).length)"
+              />
+              <div
+                v-else
+                data-drop-placeholder
+                class="pointer-events-none rounded-[10px] bg-[color-mix(in_srgb,var(--accent)_9%,transparent)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--accent)_22%,transparent)]"
+                :style="{ height: `${draggedCardHeight}px` }"
+                aria-hidden="true"
+              />
+            </div>
+          </TransitionGroup>
+          <div v-if="!ticketsFor(lane.id).length && targetLaneId !== lane.id" class="muted grid min-h-28 place-items-center text-center">
+            <div>
+              <Inbox :size="21" class="mx-auto mb-2 opacity-50" />
+              <p class="text-xs">No tickets</p>
+            </div>
+          </div>
+        </div>
+
+        <footer class="shrink-0 px-2.5 pb-2.5 pt-1">
           <button
             type="button"
-            role="switch"
-            :aria-checked="showScreenshotByStatus[status]"
-            :aria-label="`${showScreenshotByStatus[status] ? 'Hide' : 'Show'} screenshots in ${STATUS_LABELS[status]}`"
-            class="focus-ring muted flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-[10px] font-semibold normal-case tracking-normal transition hover:bg-[var(--panel-strong)]"
-            @click="showScreenshotByStatus[status] = !showScreenshotByStatus[status]"
+            class="focus-ring muted flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-sm font-semibold transition hover:bg-[var(--panel-strong)] hover:text-[var(--ink)]"
+            :aria-label="`Add a ticket to ${lane.name}`"
+            @click="emit('create', lane.id)"
           >
-            <Image aria-hidden="true" class="size-4" />
-            <span
-              aria-hidden="true"
-              class="relative h-4 w-7 rounded-full border transition-colors"
-              :class="showScreenshotByStatus[status] ? 'border-[var(--accent)] bg-[var(--accent)]' : 'border-[var(--line)] bg-[var(--panel-strong)]'"
-            >
-              <span
-                class="absolute left-0.5 top-0.5 size-2.5 rounded-full shadow-sm transition-transform"
-                :class="showScreenshotByStatus[status] ? 'translate-x-3 bg-white' : 'bg-[var(--muted)]'"
-              />
-            </span>
+            <Plus :size="16" aria-hidden="true" /> Add ticket
           </button>
-          <span class="muted rounded-full border border-[var(--line)] px-2 py-0.5 text-[11px] font-semibold">{{ ticketsFor(status).length }}</span>
-        </div>
-      </header>
-      <div
-        :data-lane-status="status"
-        class="scrollbar-thin relative h-[calc(100vh-230px)] overflow-y-auto rounded-[18px] border border-dashed border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_45%,transparent)] p-2.5 transition-[border-color,background-color] duration-150"
-        :class="targetStatus === status ? 'border-[color-mix(in_srgb,var(--accent)_48%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_4%,var(--panel))]' : ''"
-      >
-        <TransitionGroup name="ticket-sort" tag="div" data-ticket-stack class="relative flex flex-col gap-2.5">
-          <div
-            v-for="(item, index) in sortItemsFor(status)"
-            :key="item?.id || '__drop-placeholder'"
-            :data-sort-ticket="item?.id"
-          >
-            <TicketCard
-              v-if="item"
-              :ticket="item"
-              :index="index"
-              :show-screenshot="showScreenshotByStatus[status]"
-              @open="emit('open', $event)"
-              @move="nextStatus => emit('move', item.id, nextStatus, ticketsFor(nextStatus).length)"
-            />
-            <div
-              v-else
-              data-drop-placeholder
-              class="pointer-events-none rounded-[14px] bg-[color-mix(in_srgb,var(--accent)_9%,transparent)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--accent)_22%,transparent)]"
-              :style="{ height: `${draggedCardHeight}px` }"
-              aria-hidden="true"
-            />
-          </div>
-        </TransitionGroup>
-        <div v-if="!ticketsFor(status).length && targetStatus !== status" class="muted grid min-h-36 place-items-center text-center">
-          <div>
-            <Inbox :size="21" class="mx-auto mb-2 opacity-50" />
-            <p class="text-xs">No tickets</p>
-          </div>
-        </div>
+        </footer>
       </div>
     </section>
   </div>
@@ -369,7 +379,7 @@ onBeforeUnmount(cleanupPointerDrag)
       }"
       aria-hidden="true"
     >
-      <TicketCard :ticket="draggedTicket" :index="0" :show-screenshot="showScreenshotByStatus[draggedTicket.status]" preview />
+      <TicketCard :ticket="draggedTicket" :index="0" :lanes="lanes" :show-screenshot="showScreenshotByLane[draggedTicket.laneId]" preview />
     </div>
   </Teleport>
 </template>

@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { CalendarClock, Check, Image, ListTodo, Tag, TestTubeDiagonal, TriangleAlert, UserRound } from '@lucide/vue'
-import type { Ticket, TicketStatus } from '~~/shared/types/domain'
-import { STATUS_LABELS } from '~~/shared/utils/constants'
+import type { Lane, Ticket } from '~~/shared/types/domain'
+import { CATEGORY_TONE_CLASSES } from '~~/shared/utils/constants'
 
-const props = defineProps<{ ticket: Ticket; index: number; preview?: boolean; showScreenshot?: boolean }>()
+const props = defineProps<{ ticket: Ticket; index: number; lanes: Lane[]; preview?: boolean; showScreenshot?: boolean }>()
 const emit = defineEmits<{
   open: [ticket: Ticket]
-  move: [status: TicketStatus]
+  move: [laneId: string]
 }>()
 
 const dateFormatter = new Intl.DateTimeFormat('en', {
@@ -31,16 +31,16 @@ const authorText = computed(() => props.ticket.author
   : props.ticket.feedback?.testerEmail || null)
 const authorTitle = computed(() => props.ticket.author?.email || props.ticket.feedback?.testerEmail || '')
 const completedTodoCount = computed(() => props.ticket.todos.filter(todo => todo.completed).length)
-const statusOptions = Object.entries(STATUS_LABELS).map(([value, label]) => ({ value, label }))
+const laneOptions = computed(() => props.lanes.map(lane => ({ value: lane.id, label: lane.name })))
 </script>
 
 <template>
   <article
     :data-ticket-id="ticket.id"
-    class="surface-strong group relative cursor-grab rounded-[14px] p-4 shadow-[0_1px_0_rgba(0,0,0,.04)] transition-[border-color,box-shadow,transform] duration-150 ease-out active:cursor-grabbing"
+    class="group relative cursor-grab rounded-[10px] bg-[var(--panel-strong)] p-4 shadow-[0_1px_1px_rgba(0,0,0,.10),0_0_1px_rgba(0,0,0,.12)] transition-[box-shadow,transform] duration-150 ease-out active:cursor-grabbing dark:shadow-[0_1px_2px_rgba(0,0,0,.55),0_0_1px_rgba(0,0,0,.6)]"
     :class="preview
       ? 'scale-[.99] cursor-grabbing opacity-[.96] shadow-[0_18px_45px_rgba(0,0,0,.18),0_3px_12px_rgba(0,0,0,.12)]'
-      : 'hover:-translate-y-0.5 hover:border-[color-mix(in_srgb,var(--line)_50%,var(--accent))] hover:shadow-lg hover:shadow-black/5'"
+      : 'hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/10'"
   >
     <button class="focus-ring block w-full rounded-lg text-left" :tabindex="preview ? -1 : undefined" @click="!preview && emit('open', ticket)">
       <div class="mb-3 flex items-center justify-between gap-2">
@@ -66,7 +66,7 @@ const statusOptions = Object.entries(STATUS_LABELS).map(([value, label]) => ({ v
       >
 
       <div v-if="ticket.category" class="mt-3">
-        <span class="inline-flex items-center gap-1 rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent)]"><Tag :size="11" /> {{ ticket.category.name }}</span>
+        <span class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold" :class="CATEGORY_TONE_CLASSES[ticket.category.color]"><Tag :size="11" /> {{ ticket.category.name }}</span>
       </div>
 
       <div v-if="ticket.todos.length" class="mt-3 rounded-lg bg-[color-mix(in_srgb,var(--panel)_65%,transparent)] px-2.5 py-2">
@@ -90,14 +90,17 @@ const statusOptions = Object.entries(STATUS_LABELS).map(([value, label]) => ({ v
         <span v-for="label in ticket.labels.slice(0, 3)" :key="label.id" class="rounded-md border border-[var(--line)] px-1.5 py-0.5 text-[10px] font-semibold">{{ label.name }}</span>
       </div>
 
-      <div v-if="ticket.feedback || ticket.author || cardDateText" class="muted mt-4 border-t border-[var(--line)] pt-3 text-[11px]">
-        <span v-if="authorText" class="flex min-w-0 items-center gap-1" :title="authorTitle">
-          <UserRound :size="13" class="shrink-0" />
-          <span class="truncate">{{ authorText }}</span>
-        </span>
-        <div v-if="ticket.buildNumber || cardDateText" class="flex items-center gap-3" :class="authorText ? 'mt-2' : ''">
-          <span v-if="ticket.buildNumber" class="flex items-center gap-1"><TestTubeDiagonal :size="13" /> Build {{ ticket.buildNumber }}</span>
-          <span v-if="cardDateText" class="ml-auto flex items-center gap-1"><CalendarClock :size="13" /> {{ cardDateText }}</span>
+      <div class="muted mt-4 border-t border-[var(--line)] pt-3 text-[11px]">
+        <div v-if="authorText || cardDateText" class="flex items-center gap-3">
+          <span v-if="authorText" class="flex min-w-0 items-center gap-1" :title="authorTitle">
+            <UserRound :size="13" class="shrink-0" />
+            <span class="truncate">{{ authorText }}</span>
+          </span>
+          <span v-if="cardDateText" class="ml-auto flex shrink-0 items-center gap-1"><CalendarClock :size="13" /> {{ cardDateText }}</span>
+        </div>
+        <div class="flex items-center gap-3" :class="authorText || cardDateText ? 'mt-2' : ''">
+          <span v-if="ticket.buildNumber" class="flex min-w-0 items-center gap-1"><TestTubeDiagonal :size="13" class="shrink-0" /> <span class="truncate">Build {{ ticket.buildNumber }}</span></span>
+          <span class="ml-auto shrink-0 font-semibold tabular-nums">#{{ ticket.ticketNumber }}</span>
         </div>
       </div>
     </button>
@@ -105,16 +108,13 @@ const statusOptions = Object.entries(STATUS_LABELS).map(([value, label]) => ({ v
     <div class="muted mt-3 block text-[10px] font-semibold uppercase tracking-wider sm:hidden">
       <span class="mb-1 block">Move</span>
       <UiSelect
-        :model-value="ticket.status"
-        :options="statusOptions"
+        :model-value="ticket.laneId"
+        :options="laneOptions"
         aria-label="Move ticket"
         compact
-        @update:model-value="emit('move', $event as TicketStatus)"
+        @update:model-value="emit('move', $event)"
       />
     </div>
 
-    <div class="muted mt-3 border-t border-[var(--line)] pt-3 text-right text-[11px] font-semibold tabular-nums">
-      #{{ ticket.ticketNumber }}
-    </div>
   </article>
 </template>

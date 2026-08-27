@@ -1,11 +1,11 @@
-import { readFile, mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
 import { importPKCS8, SignJWT } from 'jose'
 import { addAttachment, createSyncRun, finishSyncRun, hasExternalTicket, insertImportedTicket, latestSyncRun } from './db'
 import { computeImportCutoff, isWithinImportWindow, titleFromFeedback } from './import-policy'
 
 const APPLE_API = 'https://api.appstoreconnect.apple.com'
-let syncInProgress = false
+const syncingBoards = new Set<string>()
 
 type AppleResource = {
   id: string
@@ -26,10 +26,9 @@ export class AppleApiError extends Error {
   }
 }
 
-export async function createAppleToken(config: { issuerId: string; keyId: string; privateKeyPath: string }, now = Math.floor(Date.now() / 1000)) {
+export async function createAppleToken(config: { issuerId: string; keyId: string; privateKeyPem: string }, now = Math.floor(Date.now() / 1000)) {
   try {
-    const pem = await readFile(config.privateKeyPath, 'utf8')
-    const key = await importPKCS8(pem, 'ES256')
+    const key = await importPKCS8(config.privateKeyPem, 'ES256')
     return new SignJWT({})
       .setProtectedHeader({ alg: 'ES256', kid: config.keyId, typ: 'JWT' })
       .setIssuer(config.issuerId)
@@ -107,29 +106,41 @@ async function saveCrashLog(ticketId: string, feedbackId: string, token: string,
 
 async function importType(params: {
   type: 'screenshot' | 'crash'
+  boardId: string
+  laneId: string
   appId: string
   token: string
   cutoff: Date
+  limit: number
   attachmentsPath: string
 }) {
   const resource = params.type === 'screenshot' ? 'betaFeedbackScreenshotSubmissions' : 'betaFeedbackCrashSubmissions'
   const fields = 'createdDate,comment,email,deviceModel,osVersion,locale,buildBundleId,build' + (params.type === 'screenshot' ? ',screenshots' : ',crashLog')
-  let next: string | undefined = `${APPLE_API}/v1/apps/${encodeURIComponent(params.appId)}/${resource}?fields[${resource}]=${fields}&fields[builds]=version&include=build&limit=200&sort=-createdDate`
+  const pageSize = Math.min(200, Math.max(1, params.limit))
+  let next: string | undefined = `${APPLE_API}/v1/apps/${encodeURIComponent(params.appId)}/${resource}?fields[${resource}]=${fields}&fields[builds]=version&include=build&limit=${pageSize}&sort=-createdDate`
   let imported = 0
   let skipped = 0
   let failed = 0
+  let examined = 0
   let reachedCutoff = false
 
+  // Apple returns newest first, so the scan stops at whichever comes first: a submission
+  // older than the cutoff, or the configured number of most recent submissions.
   while (next && !reachedCutoff) {
     const page: AppleList = await appleFetch<AppleList>(next, params.token)
     for (const item of page.data) {
+      if (examined >= params.limit) {
+        reachedCutoff = true
+        break
+      }
+      examined++
       const attributes = item.attributes || {}
       const createdDate = text(attributes.createdDate)
       if (!createdDate || !isWithinImportWindow(createdDate, params.cutoff)) {
         reachedCutoff = true
         break
       }
-      if (hasExternalTicket(item.id)) {
+      if (hasExternalTicket(params.boardId, item.id)) {
         skipped++
         continue
       }
@@ -138,6 +149,8 @@ async function importType(params: {
       const deviceModel = text(attributes.deviceModel)
       try {
         const ticket = insertImportedTicket({
+          boardId: params.boardId,
+          laneId: params.laneId,
           externalId: item.id,
           type: params.type,
           title: titleFromFeedback(params.type, comment, deviceModel),
@@ -166,7 +179,7 @@ async function importType(params: {
           failed++
         }
       } catch (error) {
-        if (error instanceof Error && /UNIQUE constraint failed: tickets.external_id/.test(error.message)) skipped++
+        if (error instanceof Error && /UNIQUE constraint failed: .*tickets\.external_id/.test(error.message)) skipped++
         else failed++
       }
     }
@@ -175,33 +188,70 @@ async function importType(params: {
   return { imported, skipped, failed }
 }
 
-export async function syncTestFlight(config: { issuerId: string; keyId: string; appId: string; privateKeyPath: string; attachmentsPath: string }) {
-  if (syncInProgress) throw new AppleApiError(409, 'A TestFlight sync is already in progress.')
-  if (!config.issuerId || !config.keyId || !config.appId || !config.privateKeyPath) {
-    throw new AppleApiError(503, 'The App Store Connect configuration is incomplete.')
+export async function syncTestFlight(config: {
+  boardId: string
+  laneId: string
+  issuerId: string
+  keyId: string
+  appId: string
+  privateKeyPem: string | null
+  syncLimit: number
+  attachmentsPath: string
+}) {
+  if (syncingBoards.has(config.boardId)) throw new AppleApiError(409, 'A TestFlight sync is already in progress for this board.')
+  if (!config.issuerId || !config.keyId || !config.appId || !config.privateKeyPem) {
+    throw new AppleApiError(503, 'The App Store Connect configuration of this board is incomplete.')
   }
-  syncInProgress = true
-  const previous = latestSyncRun(true)
-  const run = createSyncRun()
+  syncingBoards.add(config.boardId)
+  const previous = latestSyncRun(config.boardId, true)
+  const run = createSyncRun(config.boardId)
   let imported = 0
   let skipped = 0
   let failed = 0
   try {
-    const token = await createAppleToken(config)
+    const token = await createAppleToken({ issuerId: config.issuerId, keyId: config.keyId, privateKeyPem: config.privateKeyPem })
     const cutoff = computeImportCutoff(previous?.startedAt || null)
     for (const type of ['screenshot', 'crash'] as const) {
-      const result = await importType({ type, appId: config.appId, token, cutoff, attachmentsPath: config.attachmentsPath })
+      const result = await importType({
+        type,
+        boardId: config.boardId,
+        laneId: config.laneId,
+        appId: config.appId,
+        token,
+        cutoff,
+        limit: config.syncLimit,
+        attachmentsPath: config.attachmentsPath
+      })
       imported += result.imported
       skipped += result.skipped
       failed += result.failed
     }
-    return finishSyncRun(run.id, failed ? 'partial' : 'success', imported, skipped, failed, failed ? 'Some attachments or feedback records could not be imported.' : null)
+    return finishSyncRun(config.boardId, run.id, failed ? 'partial' : 'success', imported, skipped, failed, failed ? 'Some attachments or feedback records could not be imported.' : null)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown import error.'
-    finishSyncRun(run.id, 'failed', imported, skipped, failed + 1, message)
+    finishSyncRun(config.boardId, run.id, 'failed', imported, skipped, failed + 1, message)
     throw error
   } finally {
-    syncInProgress = false
+    syncingBoards.delete(config.boardId)
+  }
+}
+
+/**
+ * Verifies the credentials without importing anything: signs a token, resolves the app,
+ * and confirms the key actually has access to it.
+ */
+export async function verifyTestFlightAccess(config: { issuerId: string; keyId: string; appId: string; privateKeyPem: string | null }) {
+  if (!config.issuerId || !config.keyId || !config.appId || !config.privateKeyPem) {
+    throw new AppleApiError(503, 'The App Store Connect configuration of this board is incomplete.')
+  }
+  const token = await createAppleToken({ issuerId: config.issuerId, keyId: config.keyId, privateKeyPem: config.privateKeyPem })
+  const response = await appleFetch<{ data?: AppleResource }>(
+    `${APPLE_API}/v1/apps/${encodeURIComponent(config.appId)}?fields[apps]=name,bundleId`,
+    token
+  )
+  return {
+    name: text(response.data?.attributes?.name),
+    bundleId: text(response.data?.attributes?.bundleId)
   }
 }
 
