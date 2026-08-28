@@ -59,6 +59,7 @@ export const boardCreateSchema = z.object({
 
 export const boardUpdateSchema = z.object({
   name: z.string().trim().min(1, 'A board name is required.').max(40),
+  description: z.string().trim().max(200, 'A board description is at most 200 characters.'),
   issuerId: z.string().trim().max(120),
   keyId: z.string().trim().max(120),
   appId: z.string().trim().max(120),

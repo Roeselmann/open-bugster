@@ -15,8 +15,15 @@ const categories = computed(() => categoryData.value?.categories || [])
 const isLastBoard = computed(() => boards.value.length <= 1)
 
 const name = ref('')
-watchEffect(() => { if (board.value) name.value = board.value.name })
-const renaming = ref(false)
+const description = ref('')
+watchEffect(() => {
+  if (!board.value) return
+  name.value = board.value.name
+  description.value = board.value.description
+})
+const saving = ref(false)
+const unsaved = computed(() => Boolean(board.value)
+  && (name.value.trim() !== board.value!.name || description.value.trim() !== board.value!.description))
 
 const confirmation = ref<PendingConfirmation | null>(null)
 const confirmationPending = ref(false)
@@ -26,18 +33,20 @@ async function refreshAll() {
   await Promise.all([refreshBoards(), refreshCategories()])
 }
 
-async function renameBoard() {
-  const value = name.value.trim()
-  if (!value || !board.value || value === board.value.name || renaming.value) return
-  renaming.value = true
+async function saveDetails() {
+  if (!board.value || !name.value.trim() || !unsaved.value || saving.value) return
+  saving.value = true
   try {
-    await $fetch(`/api/boards/${board.value.id}`, { method: 'PATCH', body: { name: value } })
+    await $fetch(`/api/boards/${board.value.id}`, {
+      method: 'PATCH',
+      body: { name: name.value.trim(), description: description.value.trim() },
+    })
     await refreshBoards()
-    notify('success', 'Board renamed.')
+    notify('success', 'Board saved.')
   } catch (error) {
     notify('error', errorText(error))
   } finally {
-    renaming.value = false
+    saving.value = false
   }
 }
 
@@ -77,9 +86,15 @@ async function executeConfirmation() {
 <template>
   <div v-if="board" class="space-y-6">
     <section class="surface rounded-2xl">
-      <form class="flex flex-wrap items-end gap-3 px-5 py-5" @submit.prevent="renameBoard">
-        <label class="min-w-0 flex-1">
-          <span class="sr-only">Board name</span>
+      <header class="border-b border-[var(--line)] px-5 py-4">
+        <h2 class="text-lg font-bold">Name and description</h2>
+        <p class="muted mt-1 text-sm">
+          The description sits under the board title, so a line saying what this board is for reads best.
+        </p>
+      </header>
+      <form class="px-5 py-5" @submit.prevent="saveDetails">
+        <label class="block">
+          <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Name</span>
           <input
             v-model="name"
             placeholder="Board name"
@@ -87,14 +102,27 @@ async function executeConfirmation() {
             maxlength="40"
           >
         </label>
-        <button
-          type="submit"
-          :disabled="renaming || !name.trim() || name.trim() === board.name"
-          class="focus-ring flex h-11 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"
-        >
-          <Save :size="16" />
-          {{ renaming ? 'Saving…' : 'Save' }}
-        </button>
+        <label class="mt-4 block">
+          <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Description</span>
+          <textarea
+            v-model="description"
+            rows="2"
+            placeholder="What this board is for"
+            class="focus-ring surface-strong w-full resize-none rounded-xl px-3 py-2.5 text-sm outline-none"
+            maxlength="200"
+          />
+          <span class="muted mt-1.5 block text-xs">{{ description.trim().length }}/200 · leave it empty to show nothing under the title.</span>
+        </label>
+        <div class="mt-4 flex justify-end">
+          <button
+            type="submit"
+            :disabled="saving || !name.trim() || !unsaved"
+            class="focus-ring flex h-11 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"
+          >
+            <Save :size="16" />
+            {{ saving ? 'Saving…' : 'Save' }}
+          </button>
+        </div>
       </form>
     </section>
 

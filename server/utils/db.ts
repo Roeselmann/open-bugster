@@ -26,6 +26,7 @@ const schema = `
 CREATE TABLE IF NOT EXISTS boards (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
   position INTEGER NOT NULL,
   asc_issuer_id TEXT NOT NULL DEFAULT '',
   asc_key_id TEXT NOT NULL DEFAULT '',
@@ -255,6 +256,7 @@ export function getDb() {
   ensureTicketCommentThread(database)
   ensureActivityLog(database)
   ensureBoardAutoAuthor(database)
+  ensureBoardDescription(database)
   // Last: every migration above it still speaks in email columns.
   ensurePersonIdentity(database)
   database.exec(boardIndexes)
@@ -974,6 +976,16 @@ export function ensureBoardAutoAuthor(db: Database.Database) {
   return true
 }
 
+/**
+ * Adds the line shown under the board title. Empty rather than null, so every board has a
+ * description and the UI only has to ask whether it is blank.
+ */
+export function ensureBoardDescription(db: Database.Database) {
+  if (tableColumns(db, 'boards').has('description')) return false
+  db.exec(`ALTER TABLE boards ADD COLUMN description TEXT NOT NULL DEFAULT ''`)
+  return true
+}
+
 /** The email columns `ensurePersonIdentity` replaces, as `[table, column]`. */
 const legacyPersonColumns: Array<[string, string]> = [
   ['tickets', 'author_email'],
@@ -1269,7 +1281,7 @@ export function restoreImportedTitles(db: Database.Database) {
 }
 
 type BoardRow = {
-  id: string; name: string; position: number
+  id: string; name: string; description: string; position: number
   asc_issuer_id: string; asc_key_id: string; asc_app_id: string
   asc_private_key: string | null; asc_key_filename: string | null; asc_key_uploaded_at: string | null
   sync_limit: number; auto_author: number; created_at: string
@@ -1285,7 +1297,7 @@ type TicketRow = {
 }
 
 function toBoard(row: BoardRow): Board {
-  return { id: row.id, name: row.name, position: row.position, syncLimit: row.sync_limit, autoAuthor: Boolean(row.auto_author), createdAt: row.created_at }
+  return { id: row.id, name: row.name, description: row.description, position: row.position, syncLimit: row.sync_limit, autoAuthor: Boolean(row.auto_author), createdAt: row.created_at }
 }
 
 function toCredentials(row: BoardRow): BoardCredentials {
@@ -1393,6 +1405,7 @@ export function createBoard(name: string, creatorId: string | null = null): Boar
 
 export interface BoardUpdateInput {
   name?: string
+  description?: string
   issuerId?: string
   keyId?: string
   appId?: string
@@ -1404,8 +1417,9 @@ export function updateBoard(id: string, input: BoardUpdateInput, viewer?: BoardV
   const db = getDb()
   const row = db.prepare('SELECT * FROM boards WHERE id = ?').get(id) as BoardRow | undefined
   if (!row) return null
-  db.prepare('UPDATE boards SET name = ?, asc_issuer_id = ?, asc_key_id = ?, asc_app_id = ?, sync_limit = ?, auto_author = ? WHERE id = ?').run(
+  db.prepare('UPDATE boards SET name = ?, description = ?, asc_issuer_id = ?, asc_key_id = ?, asc_app_id = ?, sync_limit = ?, auto_author = ? WHERE id = ?').run(
     input.name ?? row.name,
+    input.description ?? row.description,
     input.issuerId ?? row.asc_issuer_id,
     input.keyId ?? row.asc_key_id,
     input.appId ?? row.asc_app_id,

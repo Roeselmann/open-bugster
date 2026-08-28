@@ -116,6 +116,8 @@ export interface BoardCredentials {
 export interface Board {
   id: string
   name: string
+  /** Shown under the board title. Empty when the board has none. */
+  description: string
   position: number
   /** How many of the newest TestFlight submissions each sync looks at, per feedback type. */
   syncLimit: number

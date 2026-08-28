@@ -125,6 +125,19 @@ describe('boards and lanes', () => {
     expect(db.updateBoard(board.id, { name: 'Limits renamed' })?.syncLimit).toBe(25)
   })
 
+  it('carries a board description that survives unrelated updates', () => {
+    const board = db.createBoard('Described')
+    // A board starts without one, so the header has nothing to render until it is set.
+    expect(board.description).toBe('')
+
+    expect(db.updateBoard(board.id, { description: 'Everything the radio app ships.' })?.description)
+      .toBe('Everything the radio app ships.')
+    expect(db.updateBoard(board.id, { syncLimit: 10 })?.description).toBe('Everything the radio app ships.')
+
+    // Clearing it is a real value, not a missing one.
+    expect(db.updateBoard(board.id, { description: '' })?.description).toBe('')
+  })
+
   it('deletes a board with everything on it', () => {
     const board = db.createBoard('Disposable')
     const ticket = db.createTicket(board.id, { title: 'Goes away', categoryName: 'Temp' })!

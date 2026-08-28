@@ -63,100 +63,107 @@ async function createBoard() {
 </script>
 
 <template>
-  <div class="flex min-w-0 items-center gap-2">
-    <h1 v-if="!hasChoice" class="truncate text-3xl font-bold tracking-[-.045em]">{{ board.name }}</h1>
+  <div class="min-w-0">
+    <div class="flex min-w-0 items-center gap-2">
+      <h1 v-if="!hasChoice" class="truncate text-3xl font-bold tracking-[-.045em]">{{ board.name }}</h1>
 
-    <DropdownMenuRoot v-else>
-      <DropdownMenuTrigger
-        class="focus-ring group flex min-w-0 items-center gap-2 rounded-xl px-1 text-left transition hover:bg-[var(--panel-strong)]"
-        :aria-label="`Switch board, currently ${board.name}`"
-      >
-        <h1 class="truncate text-3xl font-bold tracking-[-.045em]">{{ board.name }}</h1>
-        <ChevronDown :size="20" class="muted shrink-0 transition-transform duration-150 group-data-[state=open]:rotate-180" aria-hidden="true" />
-      </DropdownMenuTrigger>
-      <DropdownMenuPortal>
-        <DropdownMenuContent
-          align="start"
-          :side-offset="6"
-          class="ui-popover z-[100] min-w-64 overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel-strong)] p-1 text-[var(--ink)] shadow-[0_18px_45px_rgba(0,0,0,.16),0_3px_12px_rgba(0,0,0,.08)]"
+      <DropdownMenuRoot v-else>
+        <DropdownMenuTrigger
+          class="focus-ring group flex min-w-0 items-center gap-2 rounded-xl px-1 text-left transition hover:bg-[var(--panel-strong)]"
+          :aria-label="`Switch board, currently ${board.name}`"
         >
-          <DropdownMenuItem
-            v-for="item in boards"
-            :key="item.id"
-            class="relative flex h-10 cursor-default select-none items-center gap-2 rounded-lg py-0 pl-8 pr-3 text-sm outline-none data-[highlighted]:bg-[var(--accent-soft)]"
-            @select="navigateTo(`/b/${item.id}`)"
+          <h1 class="truncate text-3xl font-bold tracking-[-.045em]">{{ board.name }}</h1>
+          <ChevronDown :size="20" class="muted shrink-0 transition-transform duration-150 group-data-[state=open]:rotate-180" aria-hidden="true" />
+        </DropdownMenuTrigger>
+        <DropdownMenuPortal>
+          <DropdownMenuContent
+            align="start"
+            :side-offset="6"
+            class="ui-popover z-[100] min-w-64 overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel-strong)] p-1 text-[var(--ink)] shadow-[0_18px_45px_rgba(0,0,0,.16),0_3px_12px_rgba(0,0,0,.08)]"
           >
-            <Check v-if="item.id === board.id" :size="15" stroke-width="2.5" class="absolute left-2.5 text-[var(--accent)]" aria-hidden="true" />
-            <span class="min-w-0 flex-1 truncate font-medium">{{ item.name }}</span>
-            <span class="muted shrink-0 text-[11px] font-semibold tabular-nums">{{ item.ticketCount }}</span>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator v-if="instanceAdmin" class="my-1 h-px bg-[var(--line)]" />
-          <DropdownMenuItem
-            v-if="instanceAdmin"
-            class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-semibold outline-none data-[highlighted]:bg-[var(--accent-soft)]"
-            @select="openCreate"
-          >
-            <Plus :size="15" aria-hidden="true" /> New board…
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenuPortal>
-    </DropdownMenuRoot>
-
-    <!-- Everything the page offers belongs to board administrators, so for anyone else the
-         icon would only lead to the member roster, the one section they may read. -->
-    <NuxtLink
-      v-if="board.role === 'admin'"
-      :to="`/b/${board.id}/settings/board`"
-      class="focus-ring surface grid size-9 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]"
-      aria-label="Board settings"
-      title="Board settings"
-    >
-      <Settings2 :size="17" />
-    </NuxtLink>
-
-    <button
-      v-if="!hasChoice && instanceAdmin"
-      class="focus-ring surface grid size-9 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]"
-      aria-label="New board"
-      title="New board"
-      @click="openCreate"
-    >
-      <Plus :size="17" />
-    </button>
-
-    <DialogRoot :open="createOpen" @update:open="open => !creating && (createOpen = open)">
-      <DialogPortal>
-        <DialogOverlay class="ui-dialog-overlay fixed inset-0 z-[70] bg-black/35 backdrop-blur-[2px]" />
-        <DialogContent class="ui-dialog-content surface fixed left-1/2 top-1/2 z-[71] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl p-5 shadow-2xl sm:p-6">
-          <VisuallyHidden>
-            <DialogDescription>Create a board with its own lanes and TestFlight app.</DialogDescription>
-          </VisuallyHidden>
-          <DialogTitle as-child>
-            <h2 class="text-lg font-bold tracking-[-.025em]">New board</h2>
-          </DialogTitle>
-          <p class="muted mt-2 text-sm">The board starts with an Import, Backlog, In Progress and Done lane. Add its TestFlight credentials in the board settings.</p>
-          <form class="mt-5" @submit.prevent="createBoard">
-            <label class="mb-2 block text-xs font-bold uppercase tracking-[.08em]" for="new-board-name">Name</label>
-            <input
-              id="new-board-name"
-              v-model="newName"
-              class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
-              maxlength="40"
-              placeholder="Radio app"
-              autofocus
+            <DropdownMenuItem
+              v-for="item in boards"
+              :key="item.id"
+              class="relative flex h-10 cursor-default select-none items-center gap-2 rounded-lg py-0 pl-8 pr-3 text-sm outline-none data-[highlighted]:bg-[var(--accent-soft)]"
+              @select="navigateTo(`/b/${item.id}`)"
             >
-            <p v-if="createError" class="mt-2 text-sm text-rose-600">{{ createError }}</p>
-            <div class="mt-6 flex justify-end gap-2.5">
-              <DialogClose as-child>
-                <button type="button" :disabled="creating" class="focus-ring h-10 rounded-xl px-4 text-sm font-semibold hover:bg-[var(--panel-strong)] disabled:opacity-50">Cancel</button>
-              </DialogClose>
-              <button type="submit" :disabled="creating || !newName.trim()" class="focus-ring h-10 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50">
-                {{ creating ? 'Creating…' : 'Create board' }}
-              </button>
-            </div>
-          </form>
-        </DialogContent>
-      </DialogPortal>
-    </DialogRoot>
+              <Check v-if="item.id === board.id" :size="15" stroke-width="2.5" class="absolute left-2.5 text-[var(--accent)]" aria-hidden="true" />
+              <span class="min-w-0 flex-1 truncate font-medium">{{ item.name }}</span>
+              <span class="muted shrink-0 text-[11px] font-semibold tabular-nums">{{ item.ticketCount }}</span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator v-if="instanceAdmin" class="my-1 h-px bg-[var(--line)]" />
+            <DropdownMenuItem
+              v-if="instanceAdmin"
+              class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-semibold outline-none data-[highlighted]:bg-[var(--accent-soft)]"
+              @select="openCreate"
+            >
+              <Plus :size="15" aria-hidden="true" /> New board…
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenuPortal>
+      </DropdownMenuRoot>
+
+      <!-- Everything the page offers belongs to board administrators, so for anyone else the
+           icon would only lead to the member roster, the one section they may read. -->
+      <NuxtLink
+        v-if="board.role === 'admin'"
+        :to="`/b/${board.id}/settings/board`"
+        class="focus-ring surface grid size-9 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]"
+        aria-label="Board settings"
+        title="Board settings"
+      >
+        <Settings2 :size="17" />
+      </NuxtLink>
+
+      <button
+        v-if="!hasChoice && instanceAdmin"
+        class="focus-ring surface grid size-9 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]"
+        aria-label="New board"
+        title="New board"
+        @click="openCreate"
+      >
+        <Plus :size="17" />
+      </button>
+
+      <DialogRoot :open="createOpen" @update:open="open => !creating && (createOpen = open)">
+        <DialogPortal>
+          <DialogOverlay class="ui-dialog-overlay fixed inset-0 z-[70] bg-black/35 backdrop-blur-[2px]" />
+          <DialogContent class="ui-dialog-content surface fixed left-1/2 top-1/2 z-[71] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl p-5 shadow-2xl sm:p-6">
+            <VisuallyHidden>
+              <DialogDescription>Create a board with its own lanes and TestFlight app.</DialogDescription>
+            </VisuallyHidden>
+            <DialogTitle as-child>
+              <h2 class="text-lg font-bold tracking-[-.025em]">New board</h2>
+            </DialogTitle>
+            <p class="muted mt-2 text-sm">The board starts with an Import, Backlog, In Progress and Done lane. Add its TestFlight credentials in the board settings.</p>
+            <form class="mt-5" @submit.prevent="createBoard">
+              <label class="mb-2 block text-xs font-bold uppercase tracking-[.08em]" for="new-board-name">Name</label>
+              <input
+                id="new-board-name"
+                v-model="newName"
+                class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
+                maxlength="40"
+                placeholder="Radio app"
+                autofocus
+              >
+              <p v-if="createError" class="mt-2 text-sm text-rose-600">{{ createError }}</p>
+              <div class="mt-6 flex justify-end gap-2.5">
+                <DialogClose as-child>
+                  <button type="button" :disabled="creating" class="focus-ring h-10 rounded-xl px-4 text-sm font-semibold hover:bg-[var(--panel-strong)] disabled:opacity-50">Cancel</button>
+                </DialogClose>
+                <button type="submit" :disabled="creating || !newName.trim()" class="focus-ring h-10 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50">
+                  {{ creating ? 'Creating…' : 'Create board' }}
+                </button>
+              </div>
+            </form>
+          </DialogContent>
+        </DialogPortal>
+      </DialogRoot>
+    </div>
+
+    <!-- Two lines at most: the title has to stay the thing the eye lands on. -->
+    <p v-if="board.description" class="muted mt-1 line-clamp-2 max-w-2xl text-sm" :class="hasChoice ? 'px-1' : ''">
+      {{ board.description }}
+    </p>
   </div>
 </template>
