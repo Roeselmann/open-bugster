@@ -86,13 +86,27 @@ function record<I, O>(operation: Operation<I, O>, actor: Actor, input: I, result
   if (spec === false && outcome === 'ok') return
 
   const shape: AuditSpec<I> = spec === false ? { targetType: 'operation' } : spec
+
+  // `writeAudit` already refuses to throw, and the spec's own callbacks have to hold to the
+  // same rule. A refused operation has no result for `targetId` to read, so anything that
+  // reaches into one has to survive being handed nothing — losing an id off one log entry is
+  // acceptable, turning somebody's 403 into a 500 is not.
+  let targetId: string | null = null
+  let changes: Record<string, unknown> = {}
+  try {
+    targetId = shape.targetId?.(input, result) ?? null
+    if (outcome === 'ok') changes = selectChanges(shape, input, result)
+  } catch (error) {
+    console.warn(`[open-bugster] audit spec for ${operation.name} threw:`, (error as Error).message)
+  }
+
   writeAudit({
     actor,
     operation: operation.name,
     targetType: shape.targetType,
-    targetId: shape.targetId?.(input, result) ?? null,
+    targetId,
     boardId,
-    changes: outcome === 'ok' ? selectChanges(shape, input, result) : {},
+    changes,
     result: outcome,
     ip: options.ip ?? null
   })

@@ -2,18 +2,18 @@ import { rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createError } from 'h3'
 import { z } from 'zod'
-import { AppleApiError, syncTestFlight } from '../utils/app-store-connect'
+import { AppleApiError, syncTestFlight, verifyTestFlightAccess } from '../utils/app-store-connect'
 import { getServerConfig } from '../utils/config'
 import { SecretBoxError } from '../utils/secret-box'
 import { boardViewer } from '../utils/access'
 import {
   CategoryNameTakenError, LaneDeleteError, boardMembers, boardRoleFor, countBoardAdmins, countBoards,
   createBoard, createComment, createLane, deleteBoard, deleteCategory, deleteComment, deleteLane, findBoardSummary,
-  boardSyncCredentials, findCategory, findLane, importLaneFor, latestSyncRun, listBoards, listCategories, listComments, listLabels, listLanes,
-  listUsers, removeBoardMember, reorderLanes, setBoardMember, updateBoard, updateCategory, updateComment, updateLane
+  boardSyncCredentials, clearBoardPrivateKey, findCategory, findLane, importLaneFor, latestSyncRun, listBoards, listCategories, listComments, listLabels, listLanes,
+  listUsers, removeBoardMember, reorderLanes, setBoardMember, setBoardPrivateKey, updateBoard, updateCategory, updateComment, updateLane
 } from '../utils/db'
 import {
-  boardCreateSchema, boardMemberSchema, boardUpdateSchema, categoryUpdateSchema, commentSaveSchema,
+  boardCreateSchema, boardMemberSchema, boardUpdateSchema, categoryUpdateSchema, commentSaveSchema, connectionTestSchema,
   importRequestSchema, laneCreateSchema, laneOrderSchema, laneUpdateSchema
 } from '../utils/validation'
 import { createdId, defineOperation } from './types'
@@ -337,6 +337,66 @@ export const labelList = defineOperation({
   requires: { scope: 'board', role: 'viewer', boardId: boardOf },
   audit: false,
   run: (_ctx, input) => ({ labels: listLabels(input.boardId) })
+})
+
+/* ── App Store Connect credentials ──────────────────────────────────────── */
+
+/**
+ * The PEM reaches this operation because storing it is the point, and it is kept out of the
+ * audit log by the one mechanism that cannot be forgotten: `changes` is an allowlist, and
+ * nobody listed it. Only the filename is recorded, which is what an administrator reading
+ * the log later actually needs.
+ */
+export const boardKeySet = defineOperation({
+  name: 'board.setKey',
+  summary: 'Store a board’s App Store Connect private key',
+  input: z.object({ boardId: id, filename: z.string().trim().min(1).max(255), pem: z.string().min(1) }),
+  requires: { scope: 'board', role: 'admin', boardId: boardOf },
+  audit: { targetType: 'board', targetId: input => input.boardId, changes: ['filename'] },
+  run: (ctx, input) => ({
+    board: orNotFound(setBoardPrivateKey(input.boardId, input.pem, input.filename, boardViewer(ctx.account)), 'Board')
+  })
+})
+
+export const boardKeyClear = defineOperation({
+  name: 'board.clearKey',
+  summary: 'Remove a board’s App Store Connect private key',
+  input: z.object({ boardId: id }),
+  requires: { scope: 'board', role: 'admin', boardId: boardOf },
+  audit: { targetType: 'board', targetId: input => input.boardId },
+  run: (ctx, input) => ({
+    board: orNotFound(clearBoardPrivateKey(input.boardId, boardViewer(ctx.account)), 'Board')
+  })
+})
+
+export const boardTestConnection = defineOperation({
+  name: 'board.testConnection',
+  summary: 'Check that a board’s App Store Connect credentials work',
+  input: connectionTestSchema.extend({ boardId: id }),
+  requires: { scope: 'board', role: 'admin', boardId: boardOf },
+  // A read against Apple rather than a change here, but worth an entry: it is the one call
+  // that proves a stored key is live, and a burst of them is worth being able to see.
+  audit: { targetType: 'board', targetId: input => input.boardId },
+  run: async (_ctx, input) => {
+    // The settings form may hold edits that were never saved, and testing the stored values
+    // instead would answer a question nobody asked. Only the private key has to come from the
+    // vault, because it is write-only and never leaves the server.
+    const stored = boardSyncCredentials(input.boardId)!
+    try {
+      return {
+        app: await verifyTestFlightAccess({
+          ...stored,
+          issuerId: input.issuerId ?? stored.issuerId,
+          keyId: input.keyId ?? stored.keyId,
+          appId: input.appId ?? stored.appId
+        })
+      }
+    } catch (error) {
+      if (error instanceof AppleApiError) throw createError({ statusCode: error.statusCode, statusMessage: error.message })
+      if (error instanceof SecretBoxError) throw createError({ statusCode: 500, statusMessage: error.message })
+      throw createError({ statusCode: 500, statusMessage: error instanceof Error ? error.message : 'The connection test failed.' })
+    }
+  }
 })
 
 /* ── import ─────────────────────────────────────────────────────────────── */

@@ -9,6 +9,8 @@ describe('the operation registry', () => {
   let audit: typeof import('../server/utils/audit')
   let actorModule: typeof import('../server/utils/actor')
   let ops: typeof import('../server/operations')
+  let invite: typeof import('../server/utils/invite')
+  let password: typeof import('../server/utils/password')
 
   let boardId = ''
   let laneId = ''
@@ -41,6 +43,8 @@ describe('the operation registry', () => {
     audit = await import('../server/utils/audit')
     actorModule = await import('../server/utils/actor')
     ops = await import('../server/operations')
+    invite = await import('../server/utils/invite')
+    password = await import('../server/utils/password')
 
     people.owner = db.listUsers()[0]!.id
     for (const who of ['editor', 'viewer', 'stranger']) {
@@ -179,6 +183,97 @@ describe('the operation registry', () => {
         .map(operation => operation.name)
       // Everything left is a read; the naming convention is what makes that checkable.
       expect(unaudited.every(name => /\.(list|get|activity|status|candidates)$/.test(name))).toBe(true)
+    })
+  })
+
+  /**
+   * The routes that were left calling `db.ts` directly until now. Role changes, invitations
+   * and account deletions are exactly what an audit log is for, and they were invisible to it.
+   */
+  describe('account administration', () => {
+    it('audits a role change by value, and a rename by field name only', async () => {
+      const target = db.createUser({ email: 'promoted@example.com', firstName: 'Pat', lastName: 'R', role: 'member' })
+
+      await ops.run(ops.userUpdate, actorOf('owner'), { userId: target.id, role: 'admin' })
+      expect(audit.listAudit({ operation: 'user.update' })[0]!.changes).toEqual({ fields: ['role'], role: 'admin' })
+
+      await ops.run(ops.userUpdate, actorOf('owner'), { userId: target.id, firstName: 'Patricia' })
+      const renamed = audit.listAudit({ operation: 'user.update' })[0]!
+      expect(renamed.changes).toEqual({ fields: ['firstName'] })
+      // A name in the log would survive anonymizing the person it names.
+      expect(JSON.stringify(renamed)).not.toContain('Patricia')
+    })
+
+    it('keeps the owner and the caller’s own account out of reach', async () => {
+      const self = db.findUser(people.owner!)!
+      expect(await statusOf(ops.run(ops.userUpdate, actorOf('owner'), { userId: self.id, role: 'member' }))).toBe(409)
+      expect(await statusOf(ops.run(ops.userDelete, actorOf('owner'), { userId: self.id }))).toBe(409)
+      expect(await statusOf(ops.run(ops.userAnonymize, actorOf('owner'), { userId: self.id }))).toBe(409)
+    })
+
+    it('is closed to anyone who is not an instance admin', async () => {
+      expect(await statusOf(ops.run(ops.userList, actorOf('editor'), {}))).toBe(403)
+      expect(await statusOf(ops.run(ops.userCreate, agentOf('editor'), { email: 'x@example.com', firstName: 'X', lastName: 'Y', role: 'member' }))).toBe(403)
+    })
+
+    it('never lets an invite token reach the log', async () => {
+      const { user, inviteToken } = await ops.run(ops.userCreate, actorOf('owner'), {
+        email: 'invited@example.com', firstName: 'In', lastName: 'Vited', role: 'member'
+      }) as { user: { id: string }; inviteToken: string }
+
+      expect(inviteToken).toMatch(/^[A-Za-z0-9_-]{20,}$/)
+      const entry = audit.listAudit({ operation: 'user.create' })[0]!
+      expect(entry.targetId).toBe(user.id)
+      expect(entry.changes).toEqual({ role: 'member' })
+      // Neither the token nor the address the account was opened under.
+      expect(JSON.stringify(entry)).not.toContain(inviteToken)
+      expect(JSON.stringify(entry)).not.toContain('invited@example.com')
+    })
+
+    it('hands back a token an administrator can turn into a link, and can revoke it', async () => {
+      const target = db.findUserByEmail('invited@example.com')!
+      const { inviteToken, purpose } = await ops.run(ops.userInvite, actorOf('owner'), { userId: target.id }) as { inviteToken: string; purpose: string }
+      expect(purpose).toBe('invite')
+      // The operation returns the raw token; only the transport knows what origin to put it on.
+      expect(db.findUserByInviteToken(invite.hashInviteToken(inviteToken))?.id).toBe(target.id)
+
+      await ops.run(ops.userRevokeInvite, actorOf('owner'), { userId: target.id })
+      expect(db.findUserByInviteToken(invite.hashInviteToken(inviteToken))).toBeNull()
+    })
+
+    it('refuses a link for a disabled account', async () => {
+      const target = db.findUserByEmail('invited@example.com')!
+      db.updateUser(target.id, { status: 'disabled' })
+      expect(await statusOf(ops.run(ops.userInvite, actorOf('owner'), { userId: target.id }))).toBe(409)
+    })
+  })
+
+  describe('secrets never reach the audit log', () => {
+    it('records a password change without anything derived from the password', async () => {
+      const person = db.createUser({ email: 'pw@example.com', firstName: 'P', lastName: 'W', role: 'member' })
+      db.setUserPassword(person.id, password.hashStoredPassword('the-old-password-here'))
+      const self = actorModule.actorFor(db.findUser(person.id)!)
+
+      expect(await statusOf(ops.run(ops.profileChangePassword, self, { currentPassword: 'wrong-password-here', newPassword: 'a-brand-new-password' }))).toBe(401)
+      await ops.run(ops.profileChangePassword, self, { currentPassword: 'the-old-password-here', newPassword: 'a-brand-new-password' })
+
+      for (const entry of audit.listAudit({ operation: 'profile.changePassword' })) {
+        expect(entry.changes).toEqual({})
+        const text = JSON.stringify(entry)
+        expect(text).not.toContain('the-old-password-here')
+        expect(text).not.toContain('a-brand-new-password')
+      }
+    })
+
+    it('records a key upload by filename and never by its contents', async () => {
+      const pem = '-----BEGIN PRIVATE KEY-----\nSUPERSECRETKEYMATERIAL\n-----END PRIVATE KEY-----'
+      await ops.run(ops.boardKeySet, actorOf('owner'), { boardId, filename: 'AuthKey_ABC123.p8', pem })
+
+      const entry = audit.listAudit({ operation: 'board.setKey' })[0]!
+      expect(entry.changes).toEqual({ filename: 'AuthKey_ABC123.p8' })
+      // The allowlist is what makes this true, rather than anybody having remembered.
+      expect(JSON.stringify(entry)).not.toContain('SUPERSECRETKEYMATERIAL')
+      expect(JSON.stringify(entry)).not.toContain('PRIVATE KEY')
     })
   })
 

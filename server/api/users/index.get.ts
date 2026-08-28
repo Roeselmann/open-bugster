@@ -1,8 +1,4 @@
-import { listUsers } from '~~/server/utils/db'
-import { requireInstanceAdmin } from '~~/server/utils/access'
+import { run, userList } from '~~/server/operations'
 import { sessionActor } from '~~/server/utils/actor'
 
-export default defineEventHandler((event) => {
-  requireInstanceAdmin(sessionActor(event))
-  return { users: listUsers() }
-})
+export default defineEventHandler(event => run(userList, sessionActor(event), {}))

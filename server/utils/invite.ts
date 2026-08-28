@@ -1,5 +1,5 @@
+import { createError } from 'h3'
 import { createHash, randomBytes } from 'node:crypto'
-import type { H3Event } from 'h3'
 import { findUserByInviteToken, type UserRecord } from './db'
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000
@@ -27,9 +27,12 @@ export function inviteExpired(expiresAt: string | null): boolean {
 /**
  * The link an administrator copies. There is no mail delivery here, so it is built from
  * the address the browser actually reached — behind a proxy that is the public one.
+ *
+ * The origin comes from the request and never from a caller's input: an origin somebody
+ * could supply would make this a way to mint a valid-looking link pointing anywhere.
  */
-export function inviteUrl(event: H3Event, token: string): string {
-  return new URL(`/invite/${token}`, getRequestURL(event).origin).toString()
+export function inviteUrl(origin: string, token: string): string {
+  return new URL(`/invite/${token}`, origin).toString()
 }
 
 /**
