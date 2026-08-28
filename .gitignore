@@ -2,6 +2,7 @@ node_modules
 .nuxt
 .output
 .env
+.env.replaced-*
 data
 secrets
 coverage
@@ -10,3 +11,4 @@ coverage
 npm-debug.log*
 /bugster-assets/
 /backlog/
+backups
