@@ -1,10 +1,11 @@
-import { findBoard, setBoardPrivateKey } from '~~/server/utils/db'
+import { setBoardPrivateKey } from '~~/server/utils/db'
+import { boardViewer, requireBoardAccess } from '~~/server/utils/access'
 import { MAX_PRIVATE_KEY_SIZE, PrivateKeyPolicyError, validatePrivateKey } from '~~/server/utils/private-key-policy'
 import { SecretBoxError } from '~~/server/utils/secret-box'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id') || ''
-  if (!findBoard(id)) throw createError({ statusCode: 404, statusMessage: 'Board not found.' })
+  const { account } = requireBoardAccess(event, id, 'admin')
 
   const contentLength = Number(getRequestHeader(event, 'content-length') || 0)
   if (contentLength > MAX_PRIVATE_KEY_SIZE + 8 * 1024) throw createError({ statusCode: 413, statusMessage: 'The upload is too large to be a .p8 key.' })
@@ -15,7 +16,7 @@ export default defineEventHandler(async (event) => {
 
   try {
     const { filename, pem } = await validatePrivateKey({ filename: file.filename!, data: file.data })
-    return { board: setBoardPrivateKey(id, pem, filename) }
+    return { board: setBoardPrivateKey(id, pem, filename, boardViewer(account)) }
   } catch (error) {
     if (error instanceof PrivateKeyPolicyError) throw createError({ statusCode: 422, statusMessage: error.message })
     if (error instanceof SecretBoxError) throw createError({ statusCode: 500, statusMessage: error.message })

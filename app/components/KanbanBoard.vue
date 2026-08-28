@@ -2,7 +2,7 @@
 import { Image, Inbox, Plus } from '@lucide/vue'
 import type { Lane, Ticket } from '~~/shared/types/domain'
 
-const props = defineProps<{ boardId: string; lanes: Lane[]; tickets: Ticket[] }>()
+const props = withDefaults(defineProps<{ boardId: string; lanes: Lane[]; tickets: Ticket[]; canEdit?: boolean }>(), { canEdit: true })
 const emit = defineEmits<{ open: [ticket: Ticket]; move: [id: string, laneId: string, index: number]; create: [laneId: string] }>()
 
 const showScreenshotByLane = reactive<Record<string, boolean>>({})
@@ -285,7 +285,7 @@ onBeforeUnmount(cleanupPointerDrag)
       minWidth: `${visibleLanes.length * 280}px`,
       gridTemplateColumns: `repeat(${visibleLanes.length}, minmax(260px, 1fr))`,
     }"
-    @pointerdown="beginPointerDrag"
+    @pointerdown="canEdit && beginPointerDrag($event)"
     @click.capture="preventClickAfterDrag"
   >
     <section v-for="lane in visibleLanes" :key="lane.id" class="min-w-0">
@@ -353,7 +353,7 @@ onBeforeUnmount(cleanupPointerDrag)
           </div>
         </div>
 
-        <footer class="shrink-0 px-2.5 pb-2.5 pt-1">
+        <footer v-if="canEdit" class="shrink-0 px-2.5 pb-2.5 pt-1">
           <button
             type="button"
             class="focus-ring muted flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-sm font-semibold transition hover:bg-[var(--panel-strong)] hover:text-[var(--ink)]"

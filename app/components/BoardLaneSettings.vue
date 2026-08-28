@@ -46,10 +46,6 @@ const moveTargets = computed(() => lanes.value
   .filter(lane => lane.id !== doomed.value?.id)
   .map(lane => ({ value: lane.id, label: lane.name })))
 
-function errorText(error: any) {
-  return error?.data?.statusMessage || error?.statusMessage || 'Something went wrong.'
-}
-
 async function addLane() {
   const name = newLaneName.value.trim()
   if (!name || adding.value) return

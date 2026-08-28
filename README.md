@@ -4,10 +4,12 @@
 
 # Open-Bugster
 
-Open-Bugster is a lightweight, self-hosted Kanban board that turns TestFlight feedback into actionable tickets—built for independent iOS developers and small teams, and easy to customize with AI-assisted coding.
+Open-Bugster is a lightweight, self-hosted Kanban board for small teams—with a TestFlight integration that turns beta feedback into tickets on its own. Built for independent iOS developers, useful to any team that wants a board of its own, and easy to customize with AI-assisted coding.
 
 ## Features
 
+- **Work as a team**  
+  Real accounts with per-board roles, ticket assignment, comment threads, and a history on every ticket.
 - **Import TestFlight feedback**  
   Screenshots and crash reports land as tickets, with tester, device, system, build, and the original comment attached.
 - **Run several boards**  
@@ -18,10 +20,12 @@ Open-Bugster is a lightweight, self-hosted Kanban board that turns TestFlight fe
   Drag cards between lanes and to any position within a lane.
 - **Create tickets manually**  
   Capture ideas, tasks, and bugs with priority, due date, build number, and an internal comment.
+- **Discuss in the ticket**  
+  A comment thread per ticket instead of one shared note, with a history of moves, assignments and priority changes.
 - **Organize with categories and labels**  
   One colored category per ticket, plus as many labels as needed. Labels are suggested while typing and created on the fly.
 - **Filter and search**  
-  Filter by labels or category, and search titles, descriptions, comments, to-dos, authors, build numbers, and ticket numbers.
+  Filter by labels, category, or assignee—including everything still unassigned—and search titles, descriptions, to-dos, authors, assignees, build numbers, and ticket numbers.
 - **Attach files directly**  
   Add screenshots, documents, and other files to the relevant ticket.
 - **Manage to-do lists**  
@@ -33,11 +37,92 @@ Open-Bugster is a lightweight, self-hosted Kanban board that turns TestFlight fe
 
 ## The idea behind Open-Bugster
 
-Open-Bugster gives independent iOS developers and small teams a fast, simple, and affordable way to turn TestFlight feedback into an actionable ticket workflow. Instead of copying feedback by hand or adopting a large project-management platform, developers can import TestFlight reports into a focused Kanban board, add manual tickets, prioritize the work, and resolve issues together.
+**It is a Kanban board first.** Several boards side by side, lanes you arrange yourself, and tickets with a priority, due date, assignee, labels, a category, a to-do list, attachments, and a comment thread—plus per-board roles so a team can share one instance, and an archive so nothing is ever really lost. None of that needs an Apple account, and a board that imports nothing never even shows an import lane. Used this way it is simply a small, self-hosted work tracker that a team can run for the cost of a container.
 
-The application is intentionally small and straightforward. It provides a useful workflow out of the box without trying to become a complete enterprise issue tracker. This makes it suitable for solo developers and small teams that need a practical process without significant setup, administration, or hosting costs.
+**The TestFlight integration is the shortcut on top.** For an iOS team it removes the most tedious part of beta testing: feedback arrives as tickets by itself, with the tester, device, system, locale, build, and the original screenshot or crash report already attached. Nothing gets copied out of App Store Connect by hand, and no device details are re-typed. Because people are matched by email address, a tester who is also on the team shows up as a colleague rather than as a string—and the same will hold for any other source that is wired up later.
 
-Open-Bugster is also intended as a launchpad rather than a fixed product. AI-assisted coding makes it easier than ever to understand and adapt a compact codebase to a team's specific needs. Developers can add fields, change the workflow, connect other services, introduce full multi-user accounts and permissions, or deploy the application on their preferred infrastructure.
+**It is deliberately small.** It gives a useful workflow out of the box without trying to become an enterprise issue tracker: no sprints, no burndowns, no workflow engine. That is what makes it suitable for solo developers and small teams who want a practical process without meaningful setup, administration, or hosting costs.
+
+**And it is a launchpad rather than a fixed product.** AI-assisted coding makes it easier than ever to read a compact codebase and bend it to a specific team. Add fields, change the workflow, connect other services, extend the permission model, or deploy it wherever you like.
+
+## Setup
+
+Open-Bugster is one container and one data volume. From nothing to a working board is about five minutes.
+
+**You need** Docker on the machine that will host it, and—only if you want to import TestFlight feedback—an App Store Connect API key (see [App Store Connect](#app-store-connect) below). The board works fine without one.
+
+1. **Get the code and the configuration file.**
+
+   ```bash
+   git clone https://github.com/Roeselmann/open-bugster.git
+   cd open-bugster
+   cp .env.example .env
+   ```
+
+2. **Hash your password.** Open-Bugster never stores a password in plain text, so `.env` holds a hash rather than the password itself.
+
+   ```bash
+   npm run password:hash -- "your-secure-password"
+   ```
+
+   That needs Node.js 22 or newer on the host, but no `npm install`—the script uses nothing but Node's own crypto module. With Docker only, let the container do it instead (this builds the image first, so it takes a minute):
+
+   ```bash
+   docker compose run --rm bugster npm run password:hash -- "your-secure-password"
+   ```
+
+   Copy the whole `APP_PASSWORD_HASH='scrypt$…'` line it prints into `.env`, unchanged—the single quotes protect the `$` characters. Remember the password you typed; that is what you will sign in with.
+
+3. **Generate the two secrets.** Run this twice and keep both values:
+
+   ```bash
+   openssl rand -base64 32
+   ```
+
+   One goes into `NUXT_SESSION_PASSWORD` (it signs the login cookie), the other into `BUGSTER_SECRET_KEY` (it encrypts the App Store Connect keys stored in the database).
+
+4. **Say who the first account is.** `APP_ADMIN_EMAIL` becomes your sign-in name and the owner of the instance. Your `.env` should now look like this:
+
+   ```dotenv
+   APP_USERNAME=admin
+   APP_ADMIN_FIRST_NAME=Ada
+   APP_ADMIN_LAST_NAME=Lovelace
+   APP_ADMIN_EMAIL=ada@example.com
+   APP_PASSWORD_HASH='scrypt$1f3c…$9ab2…'
+
+   NUXT_SESSION_PASSWORD=first-generated-value
+   NUXT_SESSION_COOKIE_SECURE=false
+   BUGSTER_SECRET_KEY=second-generated-value
+
+   DATABASE_PATH=/data/open-bugster.sqlite
+   ATTACHMENTS_PATH=/data/attachments
+   ```
+
+   Keep the two paths as they are—they point inside the container. Leave `ASC_*` empty.
+
+5. **Start it.**
+
+   ```bash
+   docker compose up --build -d
+   ```
+
+   The first start creates the database, a default board, and your owner account.
+
+6. **Sign in** at `http://<host>:3000` with `APP_ADMIN_EMAIL` and the password from step 2.
+
+   From here on the database is the only source of truth: the variables in step 4 are never read again, and passwords are changed in the app. If you mistyped something and cannot get in, see [If nobody can sign in](#if-nobody-can-sign-in).
+
+7. **Set up the board.** Rename it, adjust its lanes, and—if you have an API key—enter the credentials under **Board settings → TestFlight**, press **Test connection**, then **TestFlight Sync** in the header.
+
+8. **Invite your team.** **Users** in the account menu (top right) creates an account and shows a one-time link to pass on. Then add them to the board under **Board settings → Members**, as viewer, editor, or administrator.
+
+### After the first start
+
+Behind an HTTPS reverse proxy, set `NUXT_SESSION_COOKIE_SECURE=true` in `.env` and restart.
+
+Data lives in the named volume `bugster-data`, mounted at `/data`. It survives restarts, image rebuilds, and `docker compose down`—but not `docker compose down -v`. Back it up together with `.env`: without the original `BUGSTER_SECRET_KEY` the stored App Store Connect keys cannot be decrypted again.
+
+Updating is `git pull && docker compose up --build -d`; schema changes are applied automatically on start.
 
 ## Working with the board
 
@@ -82,6 +167,80 @@ Labels are a per-board list, edited directly in the ticket. The field suggests t
 Labels clean themselves up: when the last ticket that carried a label drops it, the label disappears from the board's list. A ticket can hold up to twelve labels of 30 characters each.
 
 Next to the board search sits the same control as a filter. Picking several labels shows the tickets that carry **any** of them.
+
+## Users and access
+
+Open-Bugster is built for a small team sharing one instance. **An account is its email address**: that address is the sign-in name, and it is what every ticket, comment, and imported TestFlight report is matched against.
+
+That matching happens when a page is rendered, not when a ticket is written, which has one useful consequence. A TestFlight report from `jane@example.com` shows the raw address for as long as no account carries it. Create an account with that address a month later and every one of her past reports shows her name and avatar—no re-import, no migration. The same holds for a rename: changing your name in **Your profile** updates it on everything you have ever written.
+
+### Roles
+
+Two levels, kept deliberately small.
+
+| Instance role | What it allows |
+| --- | --- |
+| **Owner** | The account seeded on first start. Like an administrator, but cannot be demoted, disabled, or deleted. |
+| **Administrator** | Manages accounts, creates boards, and has access to every board. |
+| **Member** | Sees only the boards they have been added to. |
+
+| Board role | What it allows |
+| --- | --- |
+| **Viewer** | Read the board and write comments. |
+| **Editor** | Everything a viewer can do, plus creating, editing, moving, and archiving tickets, and running a TestFlight sync. |
+| **Administrator** | Everything an editor can do, plus lanes, categories, members, the App Store Connect key, and deleting the board. |
+
+Instance administrators always reach every board, so nobody can lock themselves out of their own server.
+
+### Adding someone
+
+Open-Bugster sends no mail, so an invitation is a link you pass on yourself. Under **Users**, enter the person's email and name; the app creates the account and shows a one-time link, valid for seven days, directly beneath their row. They open it, choose a password, and are signed in.
+
+Each row reports what its invitation is actually doing—*expires in 5 days*, *expired*, or *no invitation link*—so a stale invite is not mistaken for a live one. Only the hash of a link is stored, so it is shown exactly once: **Hide** closes the panel without revoking anything, and the link cannot be displayed again. **New link** issues a fresh one, which immediately invalidates the previous link. **Revoke** stops the current link from working and leaves the account in place, for when an invitation went to the wrong address. An unused link simply lapses after its seven days.
+
+The account exists from the moment you create it, before the link is ever opened—so it can already be added to boards and assigned tickets, and any feedback that address left behind is already attributed to it.
+
+**Disable** blocks sign-in and ends any session that account still has open, while keeping everything it wrote. **Delete** removes the account; its tickets, comments, and history stay on the boards, attributed to the email address they were written with.
+
+### Members of a board
+
+**Board settings → Members** lists who has access and at what role. Board administrators add and remove people and change their role; everyone else sees the list read-only. A board always keeps at least one administrator.
+
+### Assignment and discussion
+
+A ticket can be assigned to any member of its board, and the assignee's avatar appears on the card. The **All assignees** filter next to the search box narrows the board to your own work, to a colleague's, or to everything nobody has picked up yet.
+
+Each ticket carries a comment thread—viewers included—and a history that records when it was created, moved, assigned, re-prioritised, archived, or restored. Authors edit and delete their own comments; board administrators can also remove someone else's.
+
+### Your profile
+
+Name and password live under **Your profile** in the account menu. Changing your password signs out every other device.
+
+### If nobody can sign in
+
+The owner is seeded from the bootstrap variables **only on the very first start**, and only when `APP_PASSWORD_HASH` is set. If it was missing, the database comes up with its default board but no account, and the login page rejects everything—the server log says so on every start:
+
+```
+[open-bugster] No account exists yet, so nobody can sign in: APP_PASSWORD_HASH is not set.
+```
+
+Because the seed never runs again once an account exists, a forgotten password cannot be fixed by editing `.env` either. Both cases are handled by the same command, run on the host that holds the database:
+
+```bash
+npm run owner:reset -- you@example.com "a-new-long-password"
+```
+
+It reads `DATABASE_PATH` from the environment or from `.env`, and then:
+
+- **the address exists**—sets the new password, re-enables the account if it was disabled, and signs out every session it still had open;
+- **there are no accounts at all**—creates that address as the **owner**, with administrator access to every existing board;
+- **the address is unknown but others exist**—changes nothing and lists the addresses that do exist.
+
+In Docker, run it inside the container so it sees the same volume:
+
+```bash
+docker compose exec bugster npm run owner:reset -- you@example.com "a-new-long-password"
+```
 
 ## App Store Connect
 
@@ -145,41 +304,6 @@ If the configured database does not exist, Open-Bugster creates it on first acce
 
 Existing installations may continue to use a database file named `bugster.sqlite`; no rename is required.
 
-## Docker
-
-Run these commands on the Docker host, in the directory that contains `docker-compose.yml`.
-
-1. Create the configuration and set a password:
-
-   ```bash
-   cp .env.example .env
-   npm run password:hash -- "your-secure-password"
-   ```
-
-   Copy the generated `APP_PASSWORD_HASH` line into `.env` unchanged—the single quotes protect the `$` characters. Set `NUXT_SESSION_PASSWORD` to at least 32 random characters, and generate the encryption key for stored App Store Connect keys:
-
-   ```bash
-   openssl rand -base64 32
-   ```
-
-   ```dotenv
-   BUGSTER_SECRET_KEY=the-generated-value
-   ```
-
-   Leave the `ASC_*` variables empty; they exist only to import an older single-board configuration. Keep the container paths `DATABASE_PATH=/data/open-bugster.sqlite` and `ATTACHMENTS_PATH=/data/attachments`.
-
-2. Start Open-Bugster:
-
-   ```bash
-   docker compose up --build -d
-   ```
-
-3. Open `http://<host>:3000`, sign in, and set up the board under **Board settings → TestFlight** as described above. Then run **TestFlight Sync**.
-
-Behind an HTTPS reverse proxy, set `NUXT_SESSION_COOKIE_SECURE=true` in `.env`.
-
-Data lives in the named volume `bugster-data`, mounted at `/data`. It survives restarts, image rebuilds, and `docker compose down`—but not `docker compose down -v`. Back up the volume together with `.env`; without the original `BUGSTER_SECRET_KEY` the stored App Store Connect keys cannot be decrypted again.
-
 ## Local development
 
 Requirements: Node.js 22 or newer.
@@ -190,7 +314,7 @@ cp .env.example .env
 npm run password:hash -- "your-secure-password"
 ```
 
-Copy the generated `APP_PASSWORD_HASH` line into `.env` without modifying it. The paths in `.env.example` point at the Docker container, so set local ones:
+Fill in `.env` as described in [Setup](#setup) steps 2 to 4. The paths there point at the Docker container, so set local ones instead:
 
 ```dotenv
 DATABASE_PATH=./data/local/open-bugster.sqlite
@@ -202,8 +326,6 @@ npm run dev
 ```
 
 The directories, the SQLite file, and a default board are created automatically. `data`, `.env`, and `secrets` are excluded from Git and must not be committed. A board works without App Store Connect credentials; the sync then reports a clear configuration error.
-
-`APP_ADMIN_FIRST_NAME`, `APP_ADMIN_LAST_NAME`, and `APP_ADMIN_EMAIL` define the administrator identity. A fixed snapshot of it is stored as the author whenever a manual ticket is created.
 
 Any number of data sets can live side by side—switching is a matter of pointing both paths at another directory while the dev server is stopped. To work with a copy of the Docker data, stop the container first so the SQLite file, its WAL, and the attachments form a consistent snapshot:
 
@@ -223,11 +345,22 @@ npm run typecheck
 npm run build
 ```
 
+## Operations
+
+```bash
+npm run password:hash -- "a-long-password"        # hash for APP_PASSWORD_HASH in .env
+npm run owner:reset -- you@example.com "a-password"  # restore access, see "If nobody can sign in"
+```
+
 ## API
 
-Authentication
+Authentication and accounts
 
 - `POST /api/auth/login`, `POST /api/auth/logout`
+- `GET /api/users`, `POST /api/users`, `PATCH /api/users/:id`, `DELETE /api/users/:id`
+- `POST /api/users/:id/invite`
+- `GET /api/invite/:token`, `POST /api/invite/:token`
+- `PATCH /api/profile`, `POST /api/profile/password`
 
 Boards, lanes, and credentials
 
@@ -237,6 +370,8 @@ Boards, lanes, and credentials
 - `PATCH /api/boards/:id/lane-order`
 - `POST /api/boards/:id/key`, `DELETE /api/boards/:id/key`
 - `POST /api/boards/:id/test-connection`
+- `GET /api/boards/:id/members`, `GET /api/boards/:id/members/candidates`
+- `PUT /api/boards/:id/members/:userId`, `DELETE /api/boards/:id/members/:userId`
 
 Tickets
 

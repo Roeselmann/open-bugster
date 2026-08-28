@@ -3,13 +3,21 @@ import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type {
-  AppleFeedback, Attachment, Board, BoardCredentials, BoardSummary, Category, CategoryColor, CategorySummary, Label, LabelSummary, Lane,
-  LaneSummary, SyncRun, Ticket, TicketAuthor, TicketPriority, TicketSource, TicketTodo, TicketTodoInput
+  ActivityKind, AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardRole, BoardSummary, Category, CategoryColor,
+  CategorySummary, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
+  TicketPriority, TicketSource, TicketTodo, TicketTodoInput, UserAccount, UserRole, UserStatus
 } from '../../shared/types/domain'
 import { decryptSecret, encryptSecret, secretKeyAvailable } from './secret-box'
 import { getServerConfig } from './config'
 
 let database: Database.Database | null = null
+
+/** The denormalised author columns on `tickets`, without the read-time resolution. */
+export interface AuthorSnapshot {
+  firstName: string
+  lastName: string
+  email: string
+}
 
 const schema = `
 CREATE TABLE IF NOT EXISTS boards (
@@ -45,7 +53,6 @@ CREATE TABLE IF NOT EXISTS tickets (
   lane_id TEXT NOT NULL REFERENCES lanes(id),
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
-  comment TEXT NOT NULL DEFAULT '',
   position INTEGER NOT NULL,
   priority TEXT NOT NULL CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
   due_date TEXT,
@@ -58,6 +65,7 @@ CREATE TABLE IF NOT EXISTS tickets (
   author_first_name TEXT,
   author_last_name TEXT,
   author_email TEXT,
+  assignee_email TEXT,
   category_id TEXT REFERENCES categories(id) ON DELETE SET NULL
 );
 CREATE TABLE IF NOT EXISTS labels (
@@ -100,6 +108,43 @@ CREATE TABLE IF NOT EXISTS attachments (
   mime_type TEXT NOT NULL,
   size INTEGER NOT NULL,
   relative_path TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  first_name TEXT NOT NULL DEFAULT '',
+  last_name TEXT NOT NULL DEFAULT '',
+  password_hash TEXT,
+  role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'admin', 'member')),
+  status TEXT NOT NULL DEFAULT 'invited' CHECK (status IN ('invited', 'active', 'disabled')),
+  session_version INTEGER NOT NULL DEFAULT 1,
+  invite_token_hash TEXT,
+  invite_expires_at TEXT,
+  created_at TEXT NOT NULL,
+  last_login_at TEXT
+);
+CREATE TABLE IF NOT EXISTS board_members (
+  board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'editor' CHECK (role IN ('admin', 'editor', 'viewer')),
+  added_at TEXT NOT NULL,
+  PRIMARY KEY (board_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS ticket_comments (
+  id TEXT PRIMARY KEY,
+  ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  author_email TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ticket_activity (
+  id TEXT PRIMARY KEY,
+  ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  actor_email TEXT,
+  kind TEXT NOT NULL,
+  payload TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sync_runs (
@@ -190,19 +235,94 @@ export function getDb() {
   ensureLanesWithoutColor(database)
   ensureCategoryColor(database)
   ensureBoardSyncLimit(database)
-  database.exec(boardIndexes)
+  // Ahead of the comment-thread migration, which reads `tickets.author_email`.
   ensureTicketAuthor(database, configuredAdminAuthor())
+  ensureUsers(database, configuredOwnerSeed())
+  warnWhenNobodyCanSignIn(database)
+  ensureTicketAssignee(database)
+  ensureTicketCommentThread(database)
+  ensureActivityLog(database)
+  database.exec(boardIndexes)
   clearImportedDescriptions(database)
   restoreImportedTitles(database)
   database.pragma('optimize')
   return database
 }
 
-function configuredAdminAuthor(): TicketAuthor | null {
+/** Only ever used to backfill the author snapshot on tickets that predate accounts. */
+function configuredAdminAuthor(): AuthorSnapshot | null {
   const firstName = process.env.APP_ADMIN_FIRST_NAME?.trim() || ''
   const lastName = process.env.APP_ADMIN_LAST_NAME?.trim() || ''
   const email = process.env.APP_ADMIN_EMAIL?.trim() || ''
   return firstName && lastName && email ? { firstName, lastName, email } : null
+}
+
+/**
+ * The bootstrap identity, read once on first start to seed the owner account. After that
+ * the `users` table is the only source of truth and these variables are ignored.
+ */
+function configuredOwnerSeed(): OwnerSeed | null {
+  const passwordHash = process.env.APP_PASSWORD_HASH?.trim() || ''
+  if (!passwordHash) return null
+  const username = process.env.APP_USERNAME?.trim() || 'admin'
+  return {
+    email: (process.env.APP_ADMIN_EMAIL?.trim() || `${username}@localhost`).toLowerCase(),
+    firstName: process.env.APP_ADMIN_FIRST_NAME?.trim() || username,
+    lastName: process.env.APP_ADMIN_LAST_NAME?.trim() || '',
+    passwordHash,
+  }
+}
+
+/**
+ * A first start without APP_PASSWORD_HASH seeds no owner, and the login page then rejects
+ * every attempt with the same deliberately vague message. Say so on the console rather
+ * than leaving the operator to guess why their password does not work.
+ */
+function warnWhenNobodyCanSignIn(db: Database.Database) {
+  const accounts = (db.prepare('SELECT COUNT(*) AS value FROM users').get() as { value: number }).value
+  if (accounts > 0) return
+  console.warn('[open-bugster] No account exists yet, so nobody can sign in: APP_PASSWORD_HASH is not set.')
+  console.warn('[open-bugster] Generate one with:  npm run password:hash -- "a-long-password"')
+  console.warn('[open-bugster] Put that APP_PASSWORD_HASH line and APP_ADMIN_EMAIL into .env, then restart.')
+}
+
+type UserRef = { id: string; email: string; firstName: string; lastName: string; status: UserStatus }
+
+/**
+ * Accounts by lowercased email. `hydrateTicket` runs once per row, so looking an account
+ * up per ticket would add an N+1 on top of the sub-queries it already makes; every write
+ * to `users` drops the cache instead.
+ */
+let directoryCache: Map<string, UserRef> | null = null
+
+function userDirectory(): Map<string, UserRef> {
+  if (directoryCache) return directoryCache
+  const rows = getDb().prepare('SELECT id, email, first_name, last_name, status FROM users').all() as Array<{
+    id: string; email: string; first_name: string; last_name: string; status: UserStatus
+  }>
+  directoryCache = new Map(rows.map(row => [row.email.trim().toLowerCase(), {
+    id: row.id, email: row.email, firstName: row.first_name, lastName: row.last_name, status: row.status
+  }]))
+  return directoryCache
+}
+
+export function invalidateUserDirectory() {
+  directoryCache = null
+}
+
+/**
+ * Turns a stored email into a person. When an account carries that address it wins, so a
+ * rename shows up everywhere at once; otherwise the row's own snapshot is used and the
+ * entry starts resolving by itself as soon as somebody creates that account.
+ */
+export function resolvePerson(email: string | null | undefined, snapshot?: { firstName?: string | null; lastName?: string | null }): Person | null {
+  const trimmed = email?.trim()
+  if (!trimmed) return null
+  const account = userDirectory().get(trimmed.toLowerCase())
+  if (account) {
+    return { email: account.email, firstName: account.firstName, lastName: account.lastName, userId: account.id, status: account.status }
+  }
+  return { email: trimmed, firstName: snapshot?.firstName || '', lastName: snapshot?.lastName || '', userId: null, status: null }
 }
 
 /** Quotes a value as a SQL string literal for statements that cannot be parameterised. */
@@ -381,7 +501,7 @@ export function ensureTicketNumber(db: Database.Database) {
   return !hasTicketNumber
 }
 
-export function ensureTicketAuthor(db: Database.Database, author: TicketAuthor | null = null) {
+export function ensureTicketAuthor(db: Database.Database, author: AuthorSnapshot | null = null) {
   const columns = tableColumns(db, 'tickets')
   const authorColumns: Array<[string, string]> = [
     ['author_first_name', 'TEXT'],
@@ -669,6 +789,126 @@ export function ensureBoardSyncLimit(db: Database.Database) {
   return !hasSyncLimit
 }
 
+/** The instance owner seeded on first start, read from the bootstrap environment variables. */
+export interface OwnerSeed {
+  email: string
+  firstName: string
+  lastName: string
+  passwordHash: string
+}
+
+/**
+ * Introduces accounts and board membership. On a database that has never had a user, the
+ * bootstrap environment variables become the owner and every existing board is handed to
+ * them, so an installation that upgrades keeps signing in with the credentials it had.
+ */
+export function ensureUsers(db: Database.Database, seed: OwnerSeed | null = null) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      first_name TEXT NOT NULL DEFAULT '',
+      last_name TEXT NOT NULL DEFAULT '',
+      password_hash TEXT,
+      role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'admin', 'member')),
+      status TEXT NOT NULL DEFAULT 'invited' CHECK (status IN ('invited', 'active', 'disabled')),
+      session_version INTEGER NOT NULL DEFAULT 1,
+      invite_token_hash TEXT,
+      invite_expires_at TEXT,
+      created_at TEXT NOT NULL,
+      last_login_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS board_members (
+      board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL DEFAULT 'editor' CHECK (role IN ('admin', 'editor', 'viewer')),
+      added_at TEXT NOT NULL,
+      PRIMARY KEY (board_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_board_members_user ON board_members(user_id);
+  `)
+
+  const populated = (db.prepare('SELECT COUNT(*) AS value FROM users').get() as { value: number }).value > 0
+  if (populated || !seed) return false
+
+  const id = randomUUID()
+  const now = new Date().toISOString()
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO users (id, email, first_name, last_name, password_hash, role, status, created_at)
+      VALUES (?, ?, ?, ?, ?, 'owner', 'active', ?)
+    `).run(id, seed.email, seed.firstName, seed.lastName, seed.passwordHash, now)
+    const boards = db.prepare('SELECT id FROM boards').all() as Array<{ id: string }>
+    const addMember = db.prepare("INSERT OR IGNORE INTO board_members (board_id, user_id, role, added_at) VALUES (?, ?, 'admin', ?)")
+    for (const board of boards) addMember.run(board.id, id, now)
+  })()
+  invalidateUserDirectory()
+  return true
+}
+
+export function ensureTicketAssignee(db: Database.Database) {
+  const hasAssignee = tableColumns(db, 'tickets').has('assignee_email')
+  if (!hasAssignee) db.exec('ALTER TABLE tickets ADD COLUMN assignee_email TEXT')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_tickets_assignee ON tickets(board_id, assignee_email)')
+  return !hasAssignee
+}
+
+/**
+ * Turns the single internal comment field into a thread. The old text becomes the first
+ * entry, attributed to the ticket author, and the column goes away — leaving it in place
+ * would keep a second, silently diverging copy of the same information.
+ *
+ * Deliberately not named `ensureTicketComment`: that legacy migration adds the very column
+ * this one removes, and runs earlier in `getDb`. On a pre-boards database the order is
+ * add, rebuild, migrate, drop, which is why this has to stay last.
+ */
+export function ensureTicketCommentThread(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ticket_comments (
+      id TEXT PRIMARY KEY,
+      ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+      author_email TEXT NOT NULL,
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ticket_comments_ticket ON ticket_comments(ticket_id, created_at);
+  `)
+  if (!tableColumns(db, 'tickets').has('comment')) return false
+
+  const carried = db.prepare(`
+    SELECT id, comment, author_email, created_at, updated_at
+    FROM tickets
+    WHERE comment IS NOT NULL AND TRIM(comment) <> ''
+  `).all() as Array<{ id: string; comment: string; author_email: string | null; created_at: string; updated_at: string }>
+
+  db.transaction(() => {
+    const insert = db.prepare('INSERT INTO ticket_comments (id, ticket_id, author_email, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+    for (const ticket of carried) {
+      // An imported ticket has no author; its carried-over note becomes an unattributed entry.
+      insert.run(randomUUID(), ticket.id, ticket.author_email || '', ticket.comment, ticket.updated_at || ticket.created_at, ticket.updated_at || ticket.created_at)
+    }
+    db.exec('ALTER TABLE tickets DROP COLUMN comment')
+  })()
+  return true
+}
+
+export function ensureActivityLog(db: Database.Database) {
+  const existed = Boolean(db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'ticket_activity'").get())
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ticket_activity (
+      id TEXT PRIMARY KEY,
+      ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+      actor_email TEXT,
+      kind TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ticket_activity_ticket ON ticket_activity(ticket_id, created_at DESC);
+  `)
+  return !existed
+}
+
 export function clearImportedDescriptions(db: Database.Database) {
   return db.prepare("UPDATE tickets SET description = '' WHERE source IN ('testflight_screenshot', 'testflight_crash') AND description <> ''").run().changes
 }
@@ -703,9 +943,10 @@ type LaneRow = { id: string; board_id: string; name: string; position: number; i
 
 type TicketRow = {
   id: string; ticket_number: number; board_id: string; lane_id: string; title: string; description: string
-  comment: string; position: number; priority: TicketPriority; due_date: string | null; build_number: string | null
+  position: number; priority: TicketPriority; due_date: string | null; build_number: string | null
   source: TicketSource; external_id: string | null; created_at: string; updated_at: string; archived_at: string | null
   category_id: string | null; author_first_name: string | null; author_last_name: string | null; author_email: string | null
+  assignee_email: string | null
 }
 
 function toBoard(row: BoardRow): Board {
@@ -727,15 +968,62 @@ function toLane(row: LaneRow): Lane {
   return { id: row.id, boardId: row.board_id, name: row.name, position: row.position, isImport: Boolean(row.is_import) }
 }
 
-export function listBoards(): BoardSummary[] {
-  const db = getDb()
-  const rows = db.prepare('SELECT * FROM boards ORDER BY position, created_at').all() as BoardRow[]
-  return rows.map(row => ({
+/** Who is asking. Omitted for internal callers and tests, which see every board as an admin. */
+export interface BoardViewer {
+  userId: string
+  instanceAdmin: boolean
+}
+
+export function boardMembers(boardId: string): BoardMember[] {
+  return (getDb().prepare(`
+    SELECT u.id AS userId, u.email, u.first_name AS firstName, u.last_name AS lastName, u.status, m.role, m.added_at AS addedAt
+    FROM board_members m
+    JOIN users u ON u.id = m.user_id
+    WHERE m.board_id = ?
+    ORDER BY u.first_name COLLATE NOCASE, u.last_name COLLATE NOCASE, u.email COLLATE NOCASE
+  `).all(boardId)) as BoardMember[]
+}
+
+function toBoardSummary(row: BoardRow, viewer?: BoardViewer | null): BoardSummary {
+  const members = boardMembers(row.id)
+  const own = viewer ? members.find(member => member.userId === viewer.userId)?.role || null : null
+  return {
     ...toBoard(row),
     credentials: toCredentials(row),
     lanes: listLanes(row.id),
-    ticketCount: (db.prepare('SELECT COUNT(*) AS value FROM tickets WHERE board_id = ? AND archived_at IS NULL').get(row.id) as { value: number }).value
-  }))
+    ticketCount: (getDb().prepare('SELECT COUNT(*) AS value FROM tickets WHERE board_id = ? AND archived_at IS NULL').get(row.id) as { value: number }).value,
+    members,
+    // An instance admin keeps full control of every board — outranking even a membership
+    // row that says otherwise — so nobody can lock themselves out of their own server.
+    // No viewer at all means an internal call, which is likewise unrestricted.
+    role: !viewer || viewer.instanceAdmin ? 'admin' : own || 'viewer'
+  }
+}
+
+export function listBoards(viewer?: BoardViewer | null): BoardSummary[] {
+  const db = getDb()
+  const scoped = viewer && !viewer.instanceAdmin
+  const rows = (scoped
+    ? db.prepare(`
+        SELECT b.* FROM boards b
+        JOIN board_members m ON m.board_id = b.id AND m.user_id = ?
+        ORDER BY b.position, b.created_at
+      `).all(viewer.userId)
+    : db.prepare('SELECT * FROM boards ORDER BY position, created_at').all()) as BoardRow[]
+  return rows.map(row => toBoardSummary(row, viewer))
+}
+
+/** The boards a user may see, or null when they may see all of them. */
+export function accessibleBoardIds(viewer: BoardViewer): string[] | null {
+  if (viewer.instanceAdmin) return null
+  return (getDb().prepare('SELECT board_id FROM board_members WHERE user_id = ?').all(viewer.userId) as Array<{ board_id: string }>)
+    .map(row => row.board_id)
+}
+
+/** The role a user holds on a board, or null when they hold none. */
+export function boardRoleFor(boardId: string, userId: string): BoardRole | null {
+  const row = getDb().prepare('SELECT role FROM board_members WHERE board_id = ? AND user_id = ?').get(boardId, userId) as { role: BoardRole } | undefined
+  return row?.role || null
 }
 
 export function findBoard(id: string): Board | null {
@@ -743,24 +1031,29 @@ export function findBoard(id: string): Board | null {
   return row ? toBoard(row) : null
 }
 
-export function findBoardSummary(id: string): BoardSummary | null {
-  return listBoards().find(board => board.id === id) || null
+export function findBoardSummary(id: string, viewer?: BoardViewer | null): BoardSummary | null {
+  const row = getDb().prepare('SELECT * FROM boards WHERE id = ?').get(id) as BoardRow | undefined
+  return row ? toBoardSummary(row, viewer) : null
 }
 
 export function countBoards(): number {
   return (getDb().prepare('SELECT COUNT(*) AS value FROM boards').get() as { value: number }).value
 }
 
-export function createBoard(name: string): BoardSummary {
+export function createBoard(name: string, creatorId: string | null = null): BoardSummary {
   const db = getDb()
   const id = randomUUID()
+  const now = new Date().toISOString()
   const position = (db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM boards').get() as { position: number }).position
   db.transaction(() => {
-    db.prepare('INSERT INTO boards (id, name, position, created_at) VALUES (?, ?, ?, ?)').run(id, name, position, new Date().toISOString())
+    db.prepare('INSERT INTO boards (id, name, position, created_at) VALUES (?, ?, ?, ?)').run(id, name, position, now)
     const insertLane = db.prepare('INSERT INTO lanes (id, board_id, name, position, is_import) VALUES (?, ?, ?, ?, ?)')
     newBoardLanes.forEach((lane, lanePosition) => insertLane.run(randomUUID(), id, lane.name, lanePosition, lane.isImport ? 1 : 0))
+    if (creatorId) {
+      db.prepare("INSERT INTO board_members (board_id, user_id, role, added_at) VALUES (?, ?, 'admin', ?)").run(id, creatorId, now)
+    }
   })()
-  return findBoardSummary(id)!
+  return findBoardSummary(id, creatorId ? { userId: creatorId, instanceAdmin: false } : null)!
 }
 
 export interface BoardUpdateInput {
@@ -771,7 +1064,7 @@ export interface BoardUpdateInput {
   syncLimit?: number
 }
 
-export function updateBoard(id: string, input: BoardUpdateInput): BoardSummary | null {
+export function updateBoard(id: string, input: BoardUpdateInput, viewer?: BoardViewer | null): BoardSummary | null {
   const db = getDb()
   const row = db.prepare('SELECT * FROM boards WHERE id = ?').get(id) as BoardRow | undefined
   if (!row) return null
@@ -783,7 +1076,7 @@ export function updateBoard(id: string, input: BoardUpdateInput): BoardSummary |
     input.syncLimit ?? row.sync_limit,
     id
   )
-  return findBoardSummary(id)
+  return findBoardSummary(id, viewer)
 }
 
 /** Returns the ids of the deleted tickets so the caller can drop their attachment folders. */
@@ -795,19 +1088,19 @@ export function deleteBoard(id: string): { ticketIds: string[] } | null {
   return { ticketIds }
 }
 
-export function setBoardPrivateKey(id: string, pem: string, filename: string): BoardSummary | null {
+export function setBoardPrivateKey(id: string, pem: string, filename: string, viewer?: BoardViewer | null): BoardSummary | null {
   const db = getDb()
   if (!findBoard(id)) return null
   db.prepare('UPDATE boards SET asc_private_key = ?, asc_key_filename = ?, asc_key_uploaded_at = ? WHERE id = ?')
     .run(encryptSecret(pem), filename, new Date().toISOString(), id)
-  return findBoardSummary(id)
+  return findBoardSummary(id, viewer)
 }
 
-export function clearBoardPrivateKey(id: string): BoardSummary | null {
+export function clearBoardPrivateKey(id: string, viewer?: BoardViewer | null): BoardSummary | null {
   const db = getDb()
   if (!findBoard(id)) return null
   db.prepare('UPDATE boards SET asc_private_key = NULL, asc_key_filename = NULL, asc_key_uploaded_at = NULL WHERE id = ?').run(id)
-  return findBoardSummary(id)
+  return findBoardSummary(id, viewer)
 }
 
 /** Server-only: decrypts the stored key. Never expose the result over the API. */
@@ -934,10 +1227,12 @@ function hydrateTicket(row: TicketRow): Ticket {
   const feedbackRow = db.prepare('SELECT * FROM apple_feedback WHERE ticket_id = ?').get(row.id) as Record<string, string | null> | undefined
   const attachmentRows = db.prepare('SELECT id, kind, filename, mime_type, size FROM attachments WHERE ticket_id = ? ORDER BY created_at').all(row.id) as Array<{ id: string; kind: Attachment['kind']; filename: string; mime_type: string; size: number }>
   const todoRows = db.prepare('SELECT id, text, completed, position FROM ticket_todos WHERE ticket_id = ? ORDER BY position').all(row.id) as Array<{ id: string; text: string; completed: number; position: number }>
+  const commentCount = (db.prepare('SELECT COUNT(*) AS value FROM ticket_comments WHERE ticket_id = ?').get(row.id) as { value: number }).value
   const feedback: AppleFeedback | null = feedbackRow ? {
     feedbackType: feedbackRow.feedback_type as 'screenshot' | 'crash',
     comment: feedbackRow.comment ?? null,
     testerEmail: feedbackRow.tester_email ?? null,
+    tester: resolvePerson(feedbackRow.tester_email),
     deviceModel: feedbackRow.device_model ?? null,
     osVersion: feedbackRow.os_version ?? null,
     locale: feedbackRow.locale ?? null,
@@ -954,9 +1249,7 @@ function hydrateTicket(row: TicketRow): Ticket {
     size: item.size,
     url: `/api/attachments/${item.id}`
   }))
-  const author: TicketAuthor | null = row.author_first_name && row.author_last_name && row.author_email
-    ? { firstName: row.author_first_name, lastName: row.author_last_name, email: row.author_email }
-    : null
+  const author: TicketAuthor | null = resolvePerson(row.author_email, { firstName: row.author_first_name, lastName: row.author_last_name })
   const todos: TicketTodo[] = todoRows.map(todo => ({
     id: todo.id,
     text: todo.text,
@@ -970,7 +1263,6 @@ function hydrateTicket(row: TicketRow): Ticket {
     laneId: row.lane_id,
     title: row.title,
     description: row.description,
-    comment: row.comment,
     position: row.position,
     priority: row.priority,
     dueDate: row.due_date,
@@ -981,6 +1273,8 @@ function hydrateTicket(row: TicketRow): Ticket {
     updatedAt: row.updated_at,
     archivedAt: row.archived_at,
     author,
+    assignee: resolvePerson(row.assignee_email),
+    commentCount,
     category: category || null,
     labels,
     feedback,
@@ -1122,7 +1416,6 @@ function setTicketTodos(ticketId: string, todos: TicketTodoInput[]) {
 export interface TicketInput {
   title: string
   description?: string
-  comment?: string
   priority?: TicketPriority
   dueDate?: string | null
   buildNumber?: string | null
@@ -1130,10 +1423,17 @@ export interface TicketInput {
   laneId?: string
   categoryName?: string | null
   todos?: TicketTodoInput[]
+  assigneeEmail?: string | null
 }
 
 function nextPosition(laneId: string): number {
   return (getDb().prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM tickets WHERE lane_id = ? AND archived_at IS NULL').get(laneId) as { position: number }).position
+}
+
+/** Appends one entry to a ticket's history. Always called from inside the caller's transaction. */
+function recordActivity(ticketId: string, actorEmail: string | null, kind: ActivityKind, payload: Record<string, string | null> = {}) {
+  getDb().prepare('INSERT INTO ticket_activity (id, ticket_id, actor_email, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(randomUUID(), ticketId, actorEmail, kind, JSON.stringify(payload), new Date().toISOString())
 }
 
 export function createTicket(boardId: string, input: TicketInput, author: TicketAuthor | null = null): Ticket | null {
@@ -1147,37 +1447,47 @@ export function createTicket(boardId: string, input: TicketInput, author: Ticket
   const position = nextPosition(lane.id)
   db.transaction(() => {
     const categoryId = resolveCategoryId(boardId, input.categoryName)
-    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, comment, position, priority, due_date, build_number, source, created_at, updated_at, author_first_name, author_last_name, author_email, category_id)
-      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?)`).run(
-      id, boardId, lane.id, input.title, input.description || '', input.comment || '', position, input.priority || 'medium',
+    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, source, created_at, updated_at, author_first_name, author_last_name, author_email, assignee_email, category_id)
+      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?)`).run(
+      id, boardId, lane.id, input.title, input.description || '', position, input.priority || 'medium',
       input.dueDate || null, input.buildNumber || null, now, now,
-      author?.firstName || null, author?.lastName || null, author?.email || null, categoryId
+      author?.firstName || null, author?.lastName || null, author?.email || null, input.assigneeEmail || null, categoryId
     )
     setTicketLabels(id, boardId, input.labels || [])
     setTicketTodos(id, input.todos || [])
+    recordActivity(id, author?.email || null, 'created', { lane: lane.name })
+    if (input.assigneeEmail) recordActivity(id, author?.email || null, 'assigned', { to: input.assigneeEmail })
   })()
   return findTicket(id)!
 }
 
-export function updateTicket(id: string, input: Partial<TicketInput>): Ticket | null {
+export function updateTicket(id: string, input: Partial<TicketInput>, actorEmail: string | null = null): Ticket | null {
   const existing = findTicket(id)
   if (!existing) return null
   const now = new Date().toISOString()
+  const priority = input.priority ?? existing.priority
+  const dueDate = input.dueDate === undefined ? existing.dueDate : input.dueDate || null
+  const assigneeEmail = input.assigneeEmail === undefined ? existing.assignee?.email || null : input.assigneeEmail || null
   getDb().transaction(() => {
     const categoryId = input.categoryName === undefined ? existing.category?.id || null : resolveCategoryId(existing.boardId, input.categoryName)
-    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, comment = ?, priority = ?, due_date = ?, build_number = ?, category_id = ?, updated_at = ? WHERE id = ?`).run(
+    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, due_date = ?, build_number = ?, assignee_email = ?, category_id = ?, updated_at = ? WHERE id = ?`).run(
       input.title ?? existing.title,
       input.description ?? existing.description,
-      input.comment ?? existing.comment,
-      input.priority ?? existing.priority,
-      input.dueDate === undefined ? existing.dueDate : input.dueDate || null,
+      priority,
+      dueDate,
       input.buildNumber === undefined ? (existing.source === 'manual' ? existing.buildNumber : null) : input.buildNumber || null,
+      assigneeEmail,
       categoryId,
       now,
       id
     )
     if (input.labels) setTicketLabels(id, existing.boardId, input.labels)
     if (input.todos !== undefined) setTicketTodos(id, input.todos)
+    if (priority !== existing.priority) recordActivity(id, actorEmail, 'priority', { from: existing.priority, to: priority })
+    if (dueDate !== existing.dueDate) recordActivity(id, actorEmail, 'due_date', { from: existing.dueDate, to: dueDate })
+    if (assigneeEmail !== (existing.assignee?.email || null)) {
+      recordActivity(id, actorEmail, assigneeEmail ? 'assigned' : 'unassigned', { from: existing.assignee?.email || null, to: assigneeEmail })
+    }
   })()
   return findTicket(id)
 }
@@ -1191,7 +1501,7 @@ function reindexLane(laneId: string, orderedIds?: string[]) {
   ids.forEach((id, index) => update.run(laneId, index, now, id))
 }
 
-export function moveTicket(id: string, targetLaneId: string, targetIndex: number): Ticket | null {
+export function moveTicket(id: string, targetLaneId: string, targetIndex: number, actorEmail: string | null = null): Ticket | null {
   const current = findTicket(id)
   if (!current || current.archivedAt) return null
   const targetLane = findLane(targetLaneId)
@@ -1204,19 +1514,24 @@ export function moveTicket(id: string, targetLaneId: string, targetIndex: number
       : (db.prepare('SELECT id FROM tickets WHERE lane_id = ? AND archived_at IS NULL ORDER BY position, created_at').all(targetLaneId) as Array<{ id: string }>).map(row => row.id).filter(ticketId => ticketId !== id)
     const index = Math.max(0, Math.min(targetIndex, targetIds.length))
     targetIds.splice(index, 0, id)
-    if (current.laneId !== targetLaneId) reindexLane(current.laneId, sourceIds)
+    if (current.laneId !== targetLaneId) {
+      reindexLane(current.laneId, sourceIds)
+      recordActivity(id, actorEmail, 'moved', { from: findLane(current.laneId)?.name || null, to: targetLane.name })
+    }
     reindexLane(targetLaneId, targetIds)
   })()
   return findTicket(id)
 }
 
-export function archiveTicket(id: string): Ticket | null {
+export function archiveTicket(id: string, actorEmail: string | null = null): Ticket | null {
   const now = new Date().toISOString()
   const result = getDb().prepare('UPDATE tickets SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL').run(now, now, id)
-  return result.changes ? findTicket(id) : null
+  if (!result.changes) return null
+  recordActivity(id, actorEmail, 'archived')
+  return findTicket(id)
 }
 
-export function restoreTicket(id: string): Ticket | null {
+export function restoreTicket(id: string, actorEmail: string | null = null): Ticket | null {
   const db = getDb()
   const ticket = findTicket(id)
   if (!ticket || !ticket.archivedAt) return null
@@ -1225,6 +1540,7 @@ export function restoreTicket(id: string): Ticket | null {
   const now = new Date().toISOString()
   db.prepare('UPDATE tickets SET archived_at = NULL, lane_id = ?, position = ?, updated_at = ? WHERE id = ?')
     .run(lane.id, nextPosition(lane.id), now, id)
+  recordActivity(id, actorEmail, 'restored', { lane: lane.name })
   return findTicket(id)
 }
 
@@ -1298,6 +1614,8 @@ export function insertImportedTicket(input: ImportedTicketInput): Ticket {
       input.buildId, input.buildVersion, input.buildBundleId, input.sourceCreatedAt, JSON.stringify(input.raw)
     )
     setTicketLabels(id, input.boardId, ['TestFlight', input.type === 'crash' ? 'Crash' : 'Screenshot'])
+    // No actor: the ticket came from Apple, not from anyone signed in here.
+    recordActivity(id, null, 'created', { source: input.type })
   })()
   return findTicket(id)!
 }
@@ -1315,4 +1633,247 @@ export function findAttachment(id: string) {
 
 export function deleteAttachment(id: string) {
   return getDb().prepare('DELETE FROM attachments WHERE id = ?').run(id).changes > 0
+}
+
+/* -------------------------------------------------------------------------- *
+ * Accounts, membership, comments, activity
+ *
+ * Everything person-shaped is keyed by email. Nothing here writes a user id into
+ * a ticket, comment, or activity row, which is what lets an address that has no
+ * account yet start resolving the moment somebody creates one.
+ * -------------------------------------------------------------------------- */
+
+export interface UserRecord {
+  id: string
+  email: string
+  firstName: string
+  lastName: string
+  passwordHash: string | null
+  role: UserRole
+  status: UserStatus
+  sessionVersion: number
+  inviteTokenHash: string | null
+  inviteExpiresAt: string | null
+  createdAt: string
+  lastLoginAt: string | null
+}
+
+type UserRow = {
+  id: string; email: string; first_name: string; last_name: string; password_hash: string | null
+  role: UserRole; status: UserStatus; session_version: number; invite_token_hash: string | null
+  invite_expires_at: string | null; created_at: string; last_login_at: string | null
+}
+
+function toUser(row: UserRow): UserRecord {
+  return {
+    id: row.id,
+    email: row.email,
+    firstName: row.first_name,
+    lastName: row.last_name,
+    passwordHash: row.password_hash,
+    role: row.role,
+    status: row.status,
+    sessionVersion: row.session_version,
+    inviteTokenHash: row.invite_token_hash,
+    inviteExpiresAt: row.invite_expires_at,
+    createdAt: row.created_at,
+    lastLoginAt: row.last_login_at,
+  }
+}
+
+export function listUsers(): UserAccount[] {
+  return (getDb().prepare(`
+    SELECT u.id, u.email, u.first_name AS firstName, u.last_name AS lastName, u.role, u.status,
+           u.created_at AS createdAt, u.last_login_at AS lastLoginAt, u.invite_expires_at AS inviteExpiresAt,
+           (SELECT COUNT(*) FROM board_members m WHERE m.user_id = u.id) AS boardCount
+    FROM users u
+    ORDER BY u.first_name COLLATE NOCASE, u.last_name COLLATE NOCASE, u.email COLLATE NOCASE
+  `).all()) as UserAccount[]
+}
+
+export function countUsers(): number {
+  return (getDb().prepare('SELECT COUNT(*) AS value FROM users').get() as { value: number }).value
+}
+
+export function findUser(id: string): UserRecord | null {
+  const row = getDb().prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRow | undefined
+  return row ? toUser(row) : null
+}
+
+export function findUserByEmail(email: string): UserRecord | null {
+  const row = getDb().prepare('SELECT * FROM users WHERE email = ? COLLATE NOCASE').get(email.trim()) as UserRow | undefined
+  return row ? toUser(row) : null
+}
+
+export function findUserByInviteToken(tokenHash: string): UserRecord | null {
+  const row = getDb().prepare('SELECT * FROM users WHERE invite_token_hash = ?').get(tokenHash) as UserRow | undefined
+  return row ? toUser(row) : null
+}
+
+export class EmailTakenError extends Error {
+  constructor() { super('An account with this email address already exists.') }
+}
+
+export interface UserCreateInput {
+  email: string
+  firstName: string
+  lastName: string
+  role: UserRole
+}
+
+export function createUser(input: UserCreateInput): UserRecord {
+  const db = getDb()
+  const email = input.email.trim().toLowerCase()
+  if (findUserByEmail(email)) throw new EmailTakenError()
+  const id = randomUUID()
+  db.prepare(`
+    INSERT INTO users (id, email, first_name, last_name, role, status, created_at)
+    VALUES (?, ?, ?, ?, ?, 'invited', ?)
+  `).run(id, email, input.firstName, input.lastName, input.role, new Date().toISOString())
+  invalidateUserDirectory()
+  return findUser(id)!
+}
+
+export interface UserUpdateInput {
+  firstName?: string
+  lastName?: string
+  role?: UserRole
+  status?: UserStatus
+}
+
+export function updateUser(id: string, input: UserUpdateInput): UserRecord | null {
+  const existing = findUser(id)
+  if (!existing) return null
+  const status = input.status ?? existing.status
+  // Locking an account out only helps if the sessions it already has stop working.
+  const sessionVersion = status === 'disabled' && existing.status !== 'disabled' ? existing.sessionVersion + 1 : existing.sessionVersion
+  getDb().prepare('UPDATE users SET first_name = ?, last_name = ?, role = ?, status = ?, session_version = ? WHERE id = ?').run(
+    input.firstName ?? existing.firstName,
+    input.lastName ?? existing.lastName,
+    input.role ?? existing.role,
+    status,
+    sessionVersion,
+    id
+  )
+  invalidateUserDirectory()
+  return findUser(id)
+}
+
+export function deleteUser(id: string): boolean {
+  const changes = getDb().prepare('DELETE FROM users WHERE id = ?').run(id).changes
+  if (changes) invalidateUserDirectory()
+  return changes > 0
+}
+
+/** Stores a password, activates the account, and retires the invite and every live session. */
+export function setUserPassword(id: string, passwordHash: string): UserRecord | null {
+  const existing = findUser(id)
+  if (!existing) return null
+  getDb().prepare(`
+    UPDATE users
+    SET password_hash = ?, status = 'active', invite_token_hash = NULL, invite_expires_at = NULL, session_version = session_version + 1
+    WHERE id = ?
+  `).run(passwordHash, id)
+  invalidateUserDirectory()
+  return findUser(id)
+}
+
+export function setInviteToken(id: string, tokenHash: string, expiresAt: string): UserRecord | null {
+  const changes = getDb().prepare('UPDATE users SET invite_token_hash = ?, invite_expires_at = ? WHERE id = ?').run(tokenHash, expiresAt, id).changes
+  return changes ? findUser(id) : null
+}
+
+/** Retires an outstanding invitation without touching the account it belongs to. */
+export function clearInviteToken(id: string): UserRecord | null {
+  const changes = getDb().prepare('UPDATE users SET invite_token_hash = NULL, invite_expires_at = NULL WHERE id = ?').run(id).changes
+  return changes ? findUser(id) : null
+}
+
+export function touchLastLogin(id: string) {
+  getDb().prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(new Date().toISOString(), id)
+}
+
+export function setBoardMember(boardId: string, userId: string, role: BoardRole): BoardMember | null {
+  if (!findBoard(boardId) || !findUser(userId)) return null
+  getDb().prepare(`
+    INSERT INTO board_members (board_id, user_id, role, added_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT (board_id, user_id) DO UPDATE SET role = excluded.role
+  `).run(boardId, userId, role, new Date().toISOString())
+  return boardMembers(boardId).find(member => member.userId === userId) || null
+}
+
+export function removeBoardMember(boardId: string, userId: string): boolean {
+  return getDb().prepare('DELETE FROM board_members WHERE board_id = ? AND user_id = ?').run(boardId, userId).changes > 0
+}
+
+export function countBoardAdmins(boardId: string): number {
+  return (getDb().prepare("SELECT COUNT(*) AS value FROM board_members WHERE board_id = ? AND role = 'admin'").get(boardId) as { value: number }).value
+}
+
+type CommentRow = { id: string; ticket_id: string; author_email: string; body: string; created_at: string; updated_at: string }
+
+function toComment(row: CommentRow): TicketComment {
+  return {
+    id: row.id,
+    ticketId: row.ticket_id,
+    author: resolvePerson(row.author_email),
+    authorEmail: row.author_email,
+    body: row.body,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+export function listComments(ticketId: string): TicketComment[] {
+  const rows = getDb().prepare('SELECT * FROM ticket_comments WHERE ticket_id = ? ORDER BY created_at, rowid').all(ticketId) as CommentRow[]
+  return rows.map(toComment)
+}
+
+export function findComment(id: string): TicketComment | null {
+  const row = getDb().prepare('SELECT * FROM ticket_comments WHERE id = ?').get(id) as CommentRow | undefined
+  return row ? toComment(row) : null
+}
+
+export function createComment(ticketId: string, authorEmail: string, body: string): TicketComment | null {
+  const db = getDb()
+  if (!db.prepare('SELECT 1 FROM tickets WHERE id = ?').get(ticketId)) return null
+  const id = randomUUID()
+  const now = new Date().toISOString()
+  db.transaction(() => {
+    db.prepare('INSERT INTO ticket_comments (id, ticket_id, author_email, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, ticketId, authorEmail, body, now, now)
+    recordActivity(ticketId, authorEmail, 'commented')
+  })()
+  return findComment(id)
+}
+
+export function updateComment(id: string, body: string): TicketComment | null {
+  const changes = getDb().prepare('UPDATE ticket_comments SET body = ?, updated_at = ? WHERE id = ?').run(body, new Date().toISOString(), id).changes
+  return changes ? findComment(id) : null
+}
+
+export function deleteComment(id: string): boolean {
+  return getDb().prepare('DELETE FROM ticket_comments WHERE id = ?').run(id).changes > 0
+}
+
+export function listActivity(ticketId: string, limit = 100): TicketActivityEntry[] {
+  const rows = getDb().prepare('SELECT * FROM ticket_activity WHERE ticket_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?')
+    .all(ticketId, limit) as Array<{ id: string; ticket_id: string; actor_email: string | null; kind: ActivityKind; payload: string; created_at: string }>
+  return rows.map(row => ({
+    id: row.id,
+    ticketId: row.ticket_id,
+    actor: resolvePerson(row.actor_email),
+    kind: row.kind,
+    payload: safeJson(row.payload),
+    createdAt: row.created_at,
+  }))
+}
+
+function safeJson(value: string): Record<string, string | null> {
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
 }

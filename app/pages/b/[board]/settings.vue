@@ -25,20 +25,10 @@ const renaming = ref(false)
 
 const confirmation = ref<PendingConfirmation | null>(null)
 const confirmationPending = ref(false)
-const notice = ref<{ id: number; type: 'success' | 'error'; text: string } | null>(null)
-let noticeId = 0
+const { notice, notify, closeNotice } = useNotify()
 
-function notify(type: 'success' | 'error', text: string) {
-  notice.value = { id: ++noticeId, type, text }
-}
-
-function closeNotice(id: number) {
-  if (notice.value?.id === id) notice.value = null
-}
-
-function errorText(error: any) {
-  return error?.data?.statusMessage || error?.statusMessage || 'Something went wrong.'
-}
+// Everything on this page except the member list belongs to board administrators.
+const canManage = computed(() => board.value?.role === 'admin')
 
 async function refreshAll() {
   await Promise.all([refreshBoards(), refreshCategories()])
@@ -91,16 +81,11 @@ async function executeConfirmation() {
   }
 }
 
-async function logout() {
-  await $fetch('/api/auth/logout', { method: 'POST' })
-  await useUserSession().fetch()
-  await navigateTo('/login')
-}
 </script>
 
 <template>
   <div v-if="board" class="min-h-screen">
-    <AppHeader :board-id="board.id" :syncing="false" :latest-run="null" archive-mode @logout="logout" />
+    <AppHeader :board-id="board.id" :syncing="false" :latest-run="null" archive-mode />
 
     <main class="mx-auto max-w-4xl space-y-6 px-4 py-8 sm:px-6">
       <div>
@@ -110,7 +95,7 @@ async function logout() {
         <h1 class="mt-2 text-3xl font-bold tracking-[-.045em]">Board settings</h1>
       </div>
 
-        <section class="surface rounded-2xl">
+        <section v-if="canManage" class="surface rounded-2xl">
             <form class="flex flex-wrap items-end gap-3 px-5 py-5" @submit.prevent="renameBoard">
                 <label class="min-w-0 flex-1">
                     <span class="sr-only">Board name</span>
@@ -127,13 +112,22 @@ async function logout() {
             </form>
         </section>
 
-      <BoardLaneSettings :board="board" @changed="refreshAll" @notify="notify" />
+      <BoardMemberSettings :board="board" @changed="refreshBoards" @notify="notify" />
 
-      <BoardTestFlightSettings :board="board" @changed="refreshBoards" @notify="notify" />
+      <template v-if="canManage">
+        <BoardLaneSettings :board="board" @changed="refreshAll" @notify="notify" />
 
-      <BoardCategorySettings :categories="categories" @changed="refreshCategories" @notify="notify" />
+        <BoardTestFlightSettings :board="board" @changed="refreshBoards" @notify="notify" />
 
-      <section class="rounded-2xl border border-rose-500/30 bg-rose-500/5">
+        <BoardCategorySettings :categories="categories" @changed="refreshCategories" @notify="notify" />
+      </template>
+      <section v-else class="surface rounded-2xl px-5 py-6">
+        <p class="muted text-sm">
+          Lanes, categories and the App Store Connect key are managed by this board's administrators.
+        </p>
+      </section>
+
+      <section v-if="canManage" class="rounded-2xl border border-rose-500/30 bg-rose-500/5">
         <header class="border-b border-rose-500/20 px-5 py-4">
           <p class="text-[10px] font-bold uppercase tracking-[.14em] text-rose-600">Irreversible</p>
           <h2 class="mt-0.5 text-lg font-bold">Delete board</h2>

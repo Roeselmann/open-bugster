@@ -1,9 +1,14 @@
+import type { UserRole } from './domain'
+
 declare module '#auth-utils' {
   interface User {
-    username: string
+    id: string
+    email: string
     firstName: string
     lastName: string
-    email: string
+    role: UserRole
+    /** Bumped whenever an account is disabled or its password changes, to retire live sessions. */
+    sessionVersion: number
   }
 }
 

@@ -46,10 +46,6 @@ const keyUploadedText = computed(() => {
   return Number.isNaN(date.getTime()) ? '' : dateFormatter.format(date)
 })
 
-function errorText(error: any) {
-  return error?.data?.statusMessage || error?.statusMessage || 'Something went wrong.'
-}
-
 async function testConnection() {
   testing.value = true
   testResult.value = null

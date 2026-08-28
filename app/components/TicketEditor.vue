@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, Calendar, Check, Download, FileText, GripVertical, Image, ListTodo, Paperclip, Plus, Save, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { Archive, Calendar, Check, Download, FileText, GripVertical, Image, ListTodo, MessageSquare, Paperclip, Plus, Save, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogClose,
   DialogContent,
@@ -10,34 +10,62 @@ import {
   DialogTitle,
   VisuallyHidden,
 } from 'reka-ui'
-import type { Attachment, Category, LabelSummary, Lane, Ticket, TicketPriority, TicketTodoInput } from '~~/shared/types/domain'
+import type { Attachment, BoardMember, Category, LabelSummary, Lane, Ticket, TicketPriority, TicketTodoInput } from '~~/shared/types/domain'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 
-const props = defineProps<{ ticket?: Ticket | null; lanes: Lane[]; categories?: Category[]; labels?: LabelSummary[]; saving?: boolean; deletingAttachmentId?: string | null }>()
+const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; saving?: boolean; deletingAttachmentId?: string | null }>(), { canEdit: true })
 const emit = defineEmits<{
   close: []
-  save: [payload: { title?: string; description?: string; comment: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; labels?: string[]; categoryName?: string | null; todos: TicketTodoInput[]; attachments: File[] }]
+  save: [payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeEmail?: string | null; labels?: string[]; categoryName?: string | null; todos: TicketTodoInput[]; attachments: File[] }]
+  commented: []
+  notify: [type: 'success' | 'error', text: string]
   move: [ticket: Ticket, laneId: string]
   archive: [ticket: Ticket]
   removeAttachment: [attachment: Attachment]
 }>()
 
-const form = reactive({ title: '', description: '', comment: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', labels: [] as string[], categoryName: '' })
+const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', assigneeEmail: 'unassigned', labels: [] as string[], categoryName: '' })
 interface EditableTodo extends TicketTodoInput { key: string }
 const todos = ref<EditableTodo[]>([])
 let todoSequence = 0
 const isEdit = computed(() => Boolean(props.ticket))
 const isManual = computed(() => !props.ticket || props.ticket.source === 'manual')
 const titleInput = ref<HTMLTextAreaElement | null>(null)
-const commentInput = ref<HTMLTextAreaElement | null>(null)
 
-// Imported tickets carry no author — the person behind them is the TestFlight tester.
+// Imported tickets carry no author — the person behind them is the TestFlight tester, who
+// shows up as a colleague as soon as an account carries the same address.
 const person = computed(() => {
   const author = props.ticket?.author
-  if (author) return { name: `${author.firstName} ${author.lastName}`, email: author.email, role: 'Author' }
-  const testerEmail = props.ticket?.feedback?.testerEmail
-  return testerEmail ? { name: testerEmail, email: testerEmail, role: 'TestFlight tester' } : null
+  if (author) return { name: displayName(author), email: author.email, role: 'Author' }
+  const tester = props.ticket?.feedback?.tester
+  return tester ? { name: displayName(tester), email: tester.email, role: 'TestFlight tester' } : null
 })
+
+// reka-ui refuses an empty `SelectItem` value, so "nobody" needs a sentinel. No email can
+// collide with it, since every address contains an "@".
+const UNASSIGNED = 'unassigned'
+const assigneeOptions = computed(() => [
+  { value: UNASSIGNED, label: 'Unassigned' },
+  ...(props.members || []).map(member => ({ value: member.email, label: displayName(member) })),
+])
+const commentRefreshKey = ref(0)
+
+/**
+ * The thread gets its own column beside the ticket, but only once there is a conversation
+ * to show — an empty one would cost half the drawer for nothing. `commentCount` comes with
+ * the ticket, so the column is already open on the first paint rather than appearing late.
+ */
+const commentsOpen = ref(false)
+
+function openComments() {
+  commentsOpen.value = true
+  nextTick(() => document.querySelector<HTMLTextAreaElement>('[data-comment-input]')?.focus())
+}
+
+function onCommented() {
+  commentRefreshKey.value += 1
+  emit('commented')
+}
 const fileInput = ref<HTMLInputElement | null>(null)
 const pendingFiles = ref<File[]>([])
 const fileError = ref('')
@@ -55,10 +83,11 @@ watch(() => props.ticket, (ticket, previous) => {
   if (!keepFiles) pendingFiles.value = []
   form.title = ticket?.title || ''
   form.description = ticket?.description || ''
-  form.comment = ticket?.comment || ''
   form.priority = ticket?.priority || 'medium'
   form.dueDate = ticket?.dueDate || ''
   form.buildNumber = ticket?.buildNumber || ''
+  form.assigneeEmail = ticket?.assignee?.email || UNASSIGNED
+  commentsOpen.value = (ticket?.commentCount || 0) > 0
   form.labels = ticket?.labels.map(label => label.name) || []
   form.categoryName = ticket?.category?.name || ''
   todos.value = (ticket?.todos || []).map(todo => ({ key: `todo-${++todoSequence}`, text: todo.text, completed: todo.completed }))
@@ -69,7 +98,7 @@ function submit() {
   const cleanTodos = todos.value
     .map(todo => ({ text: todo.text.trim(), completed: todo.completed }))
     .filter(todo => todo.text)
-  const shared = { comment: form.comment, todos: cleanTodos, attachments: [...pendingFiles.value] }
+  const shared = { todos: cleanTodos, attachments: [...pendingFiles.value], assigneeEmail: form.assigneeEmail === UNASSIGNED ? null : form.assigneeEmail }
   const manualFields = isManual.value ? { buildNumber: form.buildNumber.trim() || null } : {}
   emit('save', { ...shared, ...manualFields, title: form.title.trim(), description: form.description, priority: form.priority, dueDate: form.dueDate || null, labels: [...form.labels], categoryName: form.categoryName.trim() || null })
 }
@@ -306,7 +335,8 @@ function focusTitle(event: Event) {
       <DialogOverlay class="ui-dialog-overlay fixed inset-0 z-50 bg-black/35" />
       <DialogContent
         data-ticket-editor-scroll
-        class="ui-dialog-content fixed inset-y-0 right-0 z-[51] h-full w-full max-w-xl overflow-y-auto bg-[var(--panel)] shadow-2xl outline-none"
+        class="ui-dialog-content fixed inset-y-0 right-0 z-[51] h-full w-full overflow-y-auto bg-[var(--panel)] shadow-2xl outline-none transition-[max-width] duration-200 ease-out"
+        :class="commentsOpen ? 'max-w-xl lg:max-w-5xl' : 'max-w-xl'"
         @open-auto-focus="focusTitle"
       >
         <VisuallyHidden>
@@ -331,7 +361,8 @@ function focusTitle(event: Event) {
             </DialogClose>
           </header>
 
-          <div class="flex-1 space-y-6 px-5 py-6 sm:px-7">
+          <div class="flex-1" :class="commentsOpen ? 'lg:grid lg:grid-cols-2 lg:items-start' : ''">
+          <div class="space-y-6 px-5 py-6 sm:px-7">
             <label class="block">
               <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Title</span>
               <textarea ref="titleInput" v-model="form.title" :maxlength="isManual ? 160 : 10000" required rows="2" class="focus-ring surface-strong min-h-20 w-full resize-none overflow-hidden rounded-xl px-3.5 py-3 text-[15px] leading-snug outline-none [field-sizing:content]" placeholder="What needs to be done?" />
@@ -387,21 +418,31 @@ function focusTitle(event: Event) {
                   </div>
                 </TransitionGroup>
               </div>
-              <button type="button" :disabled="todos.length >= 100" class="focus-ring flex h-10 items-center gap-2 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50" @click="addTodo()"><Plus :size="16" /> Add to-do</button>
+              <div class="flex flex-wrap gap-2">
+                <button type="button" :disabled="todos.length >= 100" class="focus-ring flex h-10 items-center gap-2 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50" @click="addTodo()"><Plus :size="16" /> Add to-do</button>
+                <button v-if="ticket && !commentsOpen" type="button" class="focus-ring flex h-10 items-center gap-2 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]" @click="openComments"><MessageSquare :size="16" /> Add comment</button>
+              </div>
             </section>
 
-            <label class="block">
-              <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Comment</span>
-              <textarea ref="commentInput" v-model="form.comment" maxlength="10000" rows="4" class="focus-ring surface-strong w-full resize-y rounded-xl px-3.5 py-3 text-sm leading-relaxed outline-none" placeholder="Internal notes and additional information…" />
-            </label>
 
             <div v-if="ticket" class="block border-t border-[var(--line)] pt-6">
               <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Lane</span>
               <UiSelect
                 :model-value="ticket.laneId"
                 :options="laneOptions"
+                :disabled="!canEdit"
                 aria-label="Lane"
                 @update:model-value="emit('move', ticket, $event)"
+              />
+            </div>
+
+            <div class="block">
+              <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><UserRound :size="14" /> Assignee</span>
+              <UiSelect
+                :model-value="form.assigneeEmail"
+                :options="assigneeOptions"
+                aria-label="Assignee"
+                @update:model-value="form.assigneeEmail = $event"
               />
             </div>
 
@@ -522,14 +563,31 @@ function focusTitle(event: Event) {
                 <p class="whitespace-pre-wrap text-xs leading-relaxed">{{ ticket.feedback.comment }}</p>
               </div>
             </section>
+
+            <TicketActivity v-if="ticket" :ticket-id="ticket.id" :refresh-key="commentRefreshKey" />
+          </div>
+
+          <!-- The thread lives on the saved ticket, so a brand-new one gets it after the first save. -->
+          <aside
+            v-if="ticket && commentsOpen"
+            class="border-t border-[var(--line)] px-5 py-6 sm:px-7 lg:sticky lg:top-[4.5rem] lg:border-l lg:border-t-0"
+          >
+            <TicketComments
+              :ticket-id="ticket.id"
+              :can-moderate="canModerate"
+              @changed="onCommented"
+              @notify="(type, text) => emit('notify', type, text)"
+            />
+          </aside>
           </div>
 
           <footer class="sticky bottom-0 flex items-center gap-3 border-t border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_92%,transparent)] px-5 py-4 backdrop-blur-xl sm:px-7">
-            <button v-if="ticket" type="button" class="focus-ring flex h-10 items-center gap-2 rounded-xl px-3 text-sm font-semibold text-rose-600 hover:bg-rose-500/10" @click="emit('archive', ticket)"><Archive :size="16" /> Archive</button>
+            <button v-if="ticket && canEdit" type="button" class="focus-ring flex h-10 items-center gap-2 rounded-xl px-3 text-sm font-semibold text-rose-600 hover:bg-rose-500/10" @click="emit('archive', ticket)"><Archive :size="16" /> Archive</button>
+            <p v-if="!canEdit" class="muted text-sm">You can read and comment on this board.</p>
             <DialogClose as-child>
-              <button type="button" class="focus-ring ml-auto h-10 rounded-xl px-4 text-sm font-semibold hover:bg-[var(--panel-strong)]">Cancel</button>
+              <button type="button" class="focus-ring ml-auto h-10 rounded-xl px-4 text-sm font-semibold hover:bg-[var(--panel-strong)]">{{ canEdit ? 'Cancel' : 'Close' }}</button>
             </DialogClose>
-            <button type="submit" :disabled="saving || !form.title.trim()" class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"><Save :size="16" /> {{ saving ? 'Saving…' : 'Save' }}</button>
+            <button v-if="canEdit" type="submit" :disabled="saving || !form.title.trim()" class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"><Save :size="16" /> {{ saving ? 'Saving…' : 'Save' }}</button>
           </footer>
         </form>
       </DialogContent>

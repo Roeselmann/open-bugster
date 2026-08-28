@@ -4,7 +4,7 @@ import { boardUpdateSchema, connectionTestSchema, importedTicketUpdateSchema, ti
 describe('ticket validation', () => {
   it('normalizes a valid manual ticket', () => {
     const result = ticketCreateSchema.parse({ boardId: 'board-1', title: '  Fix login  ', buildNumber: ' 42 ', labels: ['Auth'] })
-    expect(result).toEqual({ boardId: 'board-1', title: 'Fix login', description: '', comment: '', priority: 'medium', buildNumber: '42', labels: ['Auth'], todos: [] })
+    expect(result).toEqual({ boardId: 'board-1', title: 'Fix login', description: '', priority: 'medium', buildNumber: '42', labels: ['Auth'], todos: [] })
   })
 
   it('rejects empty titles and invalid board moves', () => {
@@ -36,17 +36,17 @@ describe('ticket validation', () => {
     expect(ticketCreateSchema.safeParse({ boardId: 'board-1', title: 'Ticket', todos: [{ text: '   ', completed: false }] }).success).toBe(false)
     expect(ticketCreateSchema.safeParse({ boardId: 'board-1', title: 'Ticket', todos: [{ text: 'x'.repeat(501), completed: false }] }).success).toBe(false)
     expect(ticketCreateSchema.safeParse({ boardId: 'board-1', title: 'Ticket', todos: Array.from({ length: 101 }, (_, index) => ({ text: `To-do ${index}`, completed: false })) }).success).toBe(false)
-    expect(ticketUpdateSchema.parse({ comment: 'Only change the comment' })).toEqual({ comment: 'Only change the comment' })
+    expect(ticketUpdateSchema.parse({ priority: 'high' })).toEqual({ priority: 'high' })
   })
 
   it('allows all regular fields of imported tickets to be updated', () => {
     const update = importedTicketUpdateSchema.parse({
-      title: '  Complete title  ', description: 'Details', comment: 'Internal note', priority: 'urgent',
+      title: '  Complete title  ', description: 'Details', priority: 'urgent',
       dueDate: '2026-08-30', labels: ['TestFlight', 'Regression'], categoryName: ' iOS ',
       todos: [{ text: 'Check on device', completed: true }]
     })
     expect(update).toEqual({
-      title: 'Complete title', description: 'Details', comment: 'Internal note', priority: 'urgent',
+      title: 'Complete title', description: 'Details', priority: 'urgent',
       dueDate: '2026-08-30', labels: ['TestFlight', 'Regression'], categoryName: 'iOS',
       todos: [{ text: 'Check on device', completed: true }]
     })

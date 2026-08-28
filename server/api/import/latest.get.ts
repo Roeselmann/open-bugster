@@ -1,7 +1,8 @@
-import { findBoard, latestSyncRun } from '~~/server/utils/db'
+import { latestSyncRun } from '~~/server/utils/db'
+import { requireBoardAccess } from '~~/server/utils/access'
 
 export default defineEventHandler((event) => {
   const boardId = String(getQuery(event).boardId || '')
-  if (!findBoard(boardId)) throw createError({ statusCode: 404, statusMessage: 'Board not found.' })
+  requireBoardAccess(event, boardId)
   return { run: latestSyncRun(boardId) }
 })

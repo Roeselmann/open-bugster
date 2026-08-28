@@ -1,8 +1,11 @@
 import { z } from 'zod'
-import { categoryColors } from '../../shared/types/domain'
+import { boardRoles, categoryColors, userRoles, userStatuses } from '../../shared/types/domain'
+
+/** Email is the identity key, so it is normalised the same way everywhere it is accepted. */
+const emailSchema = z.email('A valid email address is required.').trim().toLowerCase().max(160)
+const passwordSchema = z.string().min(12, 'Use at least 12 characters.').max(512)
 
 const labelSchema = z.string().trim().min(1).max(30)
-const commentSchema = z.string().max(10000)
 const todoSchema = z.object({
   text: z.string().trim().min(1).max(500),
   completed: z.boolean()
@@ -11,8 +14,8 @@ const todoSchema = z.object({
 const ticketShape = {
   title: z.string().trim().min(1, 'Title is required.').max(160),
   description: z.string().max(10000),
-  comment: commentSchema,
   priority: z.enum(['low', 'medium', 'high', 'urgent']),
+  assigneeEmail: emailSchema.nullable(),
   dueDate: z.iso.date().nullable(),
   buildNumber: z.string().trim().max(100).nullable(),
   labels: z.array(labelSchema).max(12),
@@ -27,8 +30,8 @@ export const ticketCreateSchema = z.object({
   boardId: idSchema,
   laneId: idSchema.optional(),
   description: ticketShape.description.default(''),
-  comment: ticketShape.comment.default(''),
   priority: ticketShape.priority.default('medium'),
+  assigneeEmail: ticketShape.assigneeEmail.optional(),
   dueDate: ticketShape.dueDate.optional(),
   buildNumber: ticketShape.buildNumber.optional(),
   labels: ticketShape.labels.default([]),
@@ -89,8 +92,46 @@ export const importRequestSchema = z.object({
 })
 
 export const loginSchema = z.object({
-  username: z.string().trim().min(1).max(100),
+  email: emailSchema,
   password: z.string().min(1).max(512)
+})
+
+const nameSchema = z.string().trim().min(1, 'A name is required.').max(60)
+
+export const userCreateSchema = z.object({
+  email: emailSchema,
+  firstName: nameSchema,
+  lastName: z.string().trim().max(60).default(''),
+  role: z.enum(userRoles).exclude(['owner']).default('member')
+})
+
+export const userUpdateSchema = z.object({
+  firstName: nameSchema,
+  lastName: z.string().trim().max(60),
+  role: z.enum(userRoles).exclude(['owner']),
+  status: z.enum(userStatuses).exclude(['invited'])
+}).partial()
+
+export const profileUpdateSchema = z.object({
+  firstName: nameSchema,
+  lastName: z.string().trim().max(60)
+}).partial()
+
+export const passwordChangeSchema = z.object({
+  currentPassword: z.string().min(1).max(512),
+  newPassword: passwordSchema
+})
+
+export const inviteAcceptSchema = z.object({
+  password: passwordSchema
+})
+
+export const boardMemberSchema = z.object({
+  role: z.enum(boardRoles)
+})
+
+export const commentSaveSchema = z.object({
+  body: z.string().trim().min(1, 'A comment cannot be empty.').max(10000)
 })
 
 export function validationError(error: z.ZodError) {

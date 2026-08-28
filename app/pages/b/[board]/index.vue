@@ -53,13 +53,20 @@ const saving = ref(false)
 const syncing = ref(false)
 const confirmation = ref<PendingConfirmation | null>(null)
 const confirmationPending = ref(false)
-const notice = ref<{ id: number; type: 'success' | 'error'; text: string } | null>(null)
-let noticeId = 0
+const { notice, notify, closeNotice } = useNotify()
+const { user } = useAuth()
+const ownEmail = computed(() => (user.value?.email || '').toLocaleLowerCase('en'))
+
+// Viewers read and comment; changing the board itself needs at least `editor`.
+const canEdit = computed(() => board.value?.role !== 'viewer')
+const canModerate = computed(() => board.value?.role === 'admin')
+const assigneeFilter = ref('all')
 
 watch(boardId, () => {
   query.value = ''
   categoryFilter.value = 'all'
   labelFilter.value = []
+  assigneeFilter.value = 'all'
   editorOpen.value = false
   selected.value = null
 })
@@ -70,6 +77,20 @@ watch(labels, (value) => {
   const known = new Set(value.map(label => label.id))
   const kept = labelFilter.value.filter(id => known.has(id))
   if (kept.length !== labelFilter.value.length) labelFilter.value = kept
+})
+
+const assigneeFilterOptions = computed(() => [
+  { value: 'all', label: 'All assignees' },
+  { value: 'mine', label: 'Assigned to me' },
+  { value: 'unassigned', label: 'Unassigned' },
+  ...(board.value?.members || [])
+    .filter(member => member.email.toLocaleLowerCase('en') !== ownEmail.value)
+    .map(member => ({ value: member.email, label: displayName(member) })),
+])
+
+// Losing a member would otherwise leave a filter selected that matches nothing.
+watch(assigneeFilterOptions, (options) => {
+  if (!options.some(option => option.value === assigneeFilter.value)) assigneeFilter.value = 'all'
 })
 
 const categoryFilterOptions = computed(() => [
@@ -103,41 +124,29 @@ const filteredTickets = computed(() => {
     // A ticket qualifies when it carries any of the picked labels.
     const matchesLabels = !labelFilter.value.length
       || ticket.labels.some(label => labelFilter.value.includes(label.id))
+    const assignee = ticket.assignee?.email.toLocaleLowerCase('en') || null
+    const matchesAssignee = assigneeFilter.value === 'all'
+      || (assigneeFilter.value === 'unassigned' && !assignee)
+      || (assigneeFilter.value === 'mine' ? assignee === ownEmail.value : assignee === assigneeFilter.value.toLocaleLowerCase('en'))
     const matchesText = !term || [
       ticket.title,
       ticket.description,
-      ticket.comment,
       ticket.feedback?.comment || '',
       String(ticket.ticketNumber),
       `#${ticket.ticketNumber}`,
       ticket.author?.firstName || '',
       ticket.author?.lastName || '',
       ticket.author?.email || '',
+      ticket.assignee?.firstName || '',
+      ticket.assignee?.lastName || '',
+      ticket.assignee?.email || '',
       ticket.buildNumber || '',
       ...ticket.todos.map(todo => todo.text),
       ...ticket.labels.map(label => label.name),
     ].some(value => value.toLocaleLowerCase('en').includes(term))
-    return matchesCategory && matchesLabels && matchesText
+    return matchesCategory && matchesLabels && matchesAssignee && matchesText
   })
 })
-
-function notify(type: 'success' | 'error', text: string) {
-  notice.value = { id: ++noticeId, type, text }
-}
-
-function closeNotice(id: number) {
-  if (notice.value?.id === id) notice.value = null
-}
-
-function errorText(error: any) {
-  return error?.data?.statusMessage || error?.statusMessage || 'Something went wrong.'
-}
-
-async function logout() {
-  await $fetch('/api/auth/logout', { method: 'POST' })
-  await useUserSession().fetch()
-  await navigateTo('/login')
-}
 
 // The lane the "Add ticket" button was pressed in; the server falls back to the first lane.
 const newTicketLaneId = ref<string | null>(null)
@@ -154,7 +163,7 @@ function openTicket(ticket: Ticket) {
   editorOpen.value = true
 }
 
-async function saveTicket(payload: { title?: string; description?: string; comment: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; labels?: string[]; categoryName?: string | null; todos: TicketTodoInput[]; attachments: File[] }) {
+async function saveTicket(payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeEmail?: string | null; labels?: string[]; categoryName?: string | null; todos: TicketTodoInput[]; attachments: File[] }) {
   saving.value = true
   const wasEdit = Boolean(selected.value)
   try {
@@ -280,7 +289,7 @@ async function sync() {
 
 <template>
   <div v-if="board" class="min-h-screen">
-    <AppHeader :board-id="board.id" :syncing="syncing" :latest-run="syncData?.run || null" @sync="sync" @logout="logout" />
+    <AppHeader :board-id="board.id" :syncing="syncing" :latest-run="syncData?.run || null" :can-sync="canEdit" @sync="sync" />
 
     <main class="mx-auto max-w-[1800px] px-4 py-6 sm:px-6">
       <div class="mb-6 flex flex-col gap-4 md:flex-row md:items-end">
@@ -303,6 +312,9 @@ async function sync() {
           <div class="min-w-44">
             <UiSelect v-model="categoryFilter" :options="categoryFilterOptions" aria-label="Filter by category" />
           </div>
+          <div class="min-w-48">
+            <UiSelect v-model="assigneeFilter" :options="assigneeFilterOptions" aria-label="Filter by assignee" />
+          </div>
         </div>
       </div>
 
@@ -313,10 +325,10 @@ async function sync() {
         <h2 class="font-bold">Could not load the board</h2><p class="muted mt-2 text-sm">{{ errorText(error) }}</p>
         <button class="mt-5 inline-flex items-center gap-2 rounded-xl bg-[var(--ink)] px-4 py-2 text-sm font-semibold text-[var(--canvas)]" @click="refresh()"><RefreshCcw :size="15" /> Try again</button>
       </div>
-      <div v-else class="scrollbar-thin overflow-x-auto"><KanbanBoard :board-id="board.id" :lanes="lanes" :tickets="filteredTickets" @open="openTicket" @move="moveTicket" @create="newTicket" /></div>
+      <div v-else class="scrollbar-thin overflow-x-auto"><KanbanBoard :board-id="board.id" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" @open="openTicket" @move="moveTicket" @create="newTicket" /></div>
     </main>
 
-    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :categories="categories" :labels="labels" :saving="saving" :deleting-attachment-id="deletingAttachmentId" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" />
+    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :saving="saving" :deleting-attachment-id="deletingAttachmentId" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @commented="refresh()" @notify="notify" />
 
     <UiConfirmDialog
       v-if="confirmation"

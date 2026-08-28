@@ -22,6 +22,7 @@ const props = defineProps<{ board: BoardSummary; boards: BoardSummary[] }>()
 const emit = defineEmits<{ created: [] }>()
 
 const { refresh: refreshBoards } = useBoards()
+const { instanceAdmin } = useAuth()
 const lastBoardId = useLastBoardId()
 
 const createOpen = ref(false)
@@ -89,8 +90,9 @@ async function createBoard() {
             <span class="min-w-0 flex-1 truncate font-medium">{{ item.name }}</span>
             <span class="muted shrink-0 text-[11px] font-semibold tabular-nums">{{ item.ticketCount }}</span>
           </DropdownMenuItem>
-          <DropdownMenuSeparator class="my-1 h-px bg-[var(--line)]" />
+          <DropdownMenuSeparator v-if="instanceAdmin" class="my-1 h-px bg-[var(--line)]" />
           <DropdownMenuItem
+            v-if="instanceAdmin"
             class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-semibold outline-none data-[highlighted]:bg-[var(--accent-soft)]"
             @select="openCreate"
           >
@@ -110,7 +112,7 @@ async function createBoard() {
     </NuxtLink>
 
     <button
-      v-if="!hasChoice"
+      v-if="!hasChoice && instanceAdmin"
       class="focus-ring surface grid size-9 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]"
       aria-label="New board"
       title="New board"

@@ -2,6 +2,7 @@ import { mkdir, unlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { addAttachment, deleteAttachment, findTicket } from '~~/server/utils/db'
+import { requireTicketAccess } from '~~/server/utils/access'
 import {
   AttachmentPolicyError,
   MAX_ATTACHMENT_BATCH_SIZE,
@@ -12,8 +13,7 @@ import { getServerConfig } from '~~/server/utils/config'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id') || ''
-  const ticket = findTicket(id)
-  if (!ticket) throw createError({ statusCode: 404, statusMessage: 'Ticket not found.' })
+  const { ticket } = requireTicketAccess(event, id, 'editor')
   if (ticket.source !== 'manual') throw createError({ statusCode: 403, statusMessage: 'Attachments can only be added to manual tickets.' })
   if (ticket.archivedAt) throw createError({ statusCode: 409, statusMessage: 'Attachments cannot be added to archived tickets.' })
 

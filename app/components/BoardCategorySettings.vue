@@ -21,10 +21,6 @@ const nameInput = ref<HTMLInputElement | null>(null)
 const doomed = ref<CategorySummary | null>(null)
 const deleting = ref(false)
 
-function errorText(error: any) {
-  return error?.data?.statusMessage || error?.statusMessage || 'Something went wrong.'
-}
-
 function startEdit(category: CategorySummary) {
   editingId.value = category.id
   draftName.value = category.name

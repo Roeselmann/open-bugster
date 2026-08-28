@@ -1,8 +1,10 @@
 import { reorderLanes } from '~~/server/utils/db'
+import { requireBoardAccess } from '~~/server/utils/access'
 import { laneOrderSchema, validationError } from '~~/server/utils/validation'
 
 export default defineEventHandler(async (event) => {
   const boardId = getRouterParam(event, 'id') || ''
+  requireBoardAccess(event, boardId, 'admin')
   const parsed = laneOrderSchema.safeParse(await readBody(event))
   if (!parsed.success) throw validationError(parsed.error)
   const lanes = reorderLanes(boardId, parsed.data.laneIds)

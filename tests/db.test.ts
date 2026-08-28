@@ -33,18 +33,17 @@ describe('ticket persistence', () => {
   it('creates, moves, archives and restores a ticket', () => {
     const ticket = db.createTicket(
       boardId,
-      { title: 'Persistent ticket', comment: 'First note', priority: 'high', buildNumber: '42', labels: ['API'] },
-      { firstName: 'Ada', lastName: 'Lovelace', email: 'ada@example.com' }
+      { title: 'Persistent ticket', priority: 'high', buildNumber: '42', labels: ['API'] },
+      { firstName: 'Ada', lastName: 'Lovelace', email: 'ada@example.com', userId: null, status: null }
     )!
     expect(ticket.ticketNumber).toBe(1)
     expect(ticket.boardId).toBe(boardId)
     expect(ticket.laneId).toBe(laneIdByName.Backlog)
-    expect(ticket.comment).toBe('First note')
     expect(ticket.buildNumber).toBe('42')
-    expect(ticket.author).toEqual({ firstName: 'Ada', lastName: 'Lovelace', email: 'ada@example.com' })
+    expect(ticket.author).toEqual({ firstName: 'Ada', lastName: 'Lovelace', email: 'ada@example.com', userId: null, status: null })
     expect(ticket.labels.map(label => label.name)).toEqual(['API'])
 
-    expect(db.updateTicket(ticket.id, { comment: 'Updated note', buildNumber: '43' })).toMatchObject({ comment: 'Updated note', buildNumber: '43' })
+    expect(db.updateTicket(ticket.id, { buildNumber: '43' })).toMatchObject({ buildNumber: '43' })
 
     expect(db.moveTicket(ticket.id, laneIdByName['In Progress']!, 0)?.laneId).toBe(laneIdByName['In Progress'])
     expect(db.archiveTicket(ticket.id)?.archivedAt).toBeTruthy()
@@ -96,12 +95,12 @@ describe('ticket persistence', () => {
     expect(screenshot.feedback?.comment).toBe('Wrong color')
     expect(screenshot.buildNumber).toBe('42')
     const updatedScreenshot = db.updateTicket(screenshot.id, {
-      title: 'Revised title', description: 'Old duplicate description', comment: 'Internal note',
+      title: 'Revised title', description: 'Old duplicate description',
       priority: 'urgent', dueDate: '2026-08-30', labels: ['Regression'], categoryName: 'iOS',
       todos: [{ text: 'Check regression', completed: false }]
     })
     expect(updatedScreenshot).toMatchObject({
-      title: 'Revised title', description: 'Old duplicate description', comment: 'Internal note',
+      title: 'Revised title', description: 'Old duplicate description',
       priority: 'urgent', dueDate: '2026-08-30', category: { name: 'iOS' }
     })
     expect(updatedScreenshot?.todos.map(todo => todo.text)).toEqual(['Check regression'])

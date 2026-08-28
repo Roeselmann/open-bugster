@@ -1,7 +1,10 @@
 import { restoreTicket } from '~~/server/utils/db'
+import { requireTicketAccess } from '~~/server/utils/access'
 
 export default defineEventHandler((event) => {
-  const ticket = restoreTicket(getRouterParam(event, 'id') || '')
+  const id = getRouterParam(event, 'id') || ''
+  const { account } = requireTicketAccess(event, id, 'editor')
+  const ticket = restoreTicket(id, account.email)
   if (!ticket) throw createError({ statusCode: 404, statusMessage: 'Ticket not found.' })
   return { ticket }
 })

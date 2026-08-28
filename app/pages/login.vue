@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ArrowRight, Bug, LockKeyhole } from '@lucide/vue'
 
-const form = reactive({ username: '', password: '' })
+const form = reactive({ email: '', password: '' })
 const loading = ref(false)
 const errorMessage = ref('')
 
@@ -12,8 +12,8 @@ async function login() {
     await $fetch('/api/auth/login', { method: 'POST', body: form })
     await useUserSession().fetch()
     await navigateTo('/')
-  } catch (error: any) {
-    errorMessage.value = error?.data?.statusMessage || 'Sign-in failed.'
+  } catch (error) {
+    errorMessage.value = errorText(error)
   } finally {
     loading.value = false
   }
@@ -39,7 +39,7 @@ async function login() {
         </div>
 
         <form class="space-y-4" @submit.prevent="login">
-          <label class="block"><span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Username</span><input v-model="form.username" required autocomplete="username" class="focus-ring h-12 w-full rounded-xl border border-[var(--line)] bg-[var(--panel)] px-3.5 outline-none" placeholder="admin"></label>
+          <label class="block"><span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Email</span><input v-model="form.email" required type="email" autocomplete="username" class="focus-ring h-12 w-full rounded-xl border border-[var(--line)] bg-[var(--panel)] px-3.5 outline-none" placeholder="you@example.com"></label>
           <label class="block"><span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Password</span><input v-model="form.password" required type="password" autocomplete="current-password" class="focus-ring h-12 w-full rounded-xl border border-[var(--line)] bg-[var(--panel)] px-3.5 outline-none" placeholder="••••••••••••"></label>
           <p v-if="errorMessage" role="alert" class="rounded-xl bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-600">{{ errorMessage }}</p>
           <button :disabled="loading" class="focus-ring flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[var(--ink)] font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50">

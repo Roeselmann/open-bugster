@@ -1,8 +1,10 @@
 import { createLane, listLanes } from '~~/server/utils/db'
+import { requireBoardAccess } from '~~/server/utils/access'
 import { laneCreateSchema, validationError } from '~~/server/utils/validation'
 
 export default defineEventHandler(async (event) => {
   const boardId = getRouterParam(event, 'id') || ''
+  requireBoardAccess(event, boardId, 'admin')
   const parsed = laneCreateSchema.safeParse(await readBody(event))
   if (!parsed.success) throw validationError(parsed.error)
   const lane = createLane(boardId, parsed.data.name)

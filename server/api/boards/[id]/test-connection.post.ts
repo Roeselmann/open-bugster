@@ -1,11 +1,12 @@
 import { AppleApiError, verifyTestFlightAccess } from '~~/server/utils/app-store-connect'
-import { boardSyncCredentials, findBoard } from '~~/server/utils/db'
+import { boardSyncCredentials } from '~~/server/utils/db'
+import { requireBoardAccess } from '~~/server/utils/access'
 import { SecretBoxError } from '~~/server/utils/secret-box'
 import { connectionTestSchema, validationError } from '~~/server/utils/validation'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id') || ''
-  if (!findBoard(id)) throw createError({ statusCode: 404, statusMessage: 'Board not found.' })
+  requireBoardAccess(event, id, 'admin')
 
   const parsed = connectionTestSchema.safeParse(await readBody(event).catch(() => ({})) || {})
   if (!parsed.success) throw validationError(parsed.error)

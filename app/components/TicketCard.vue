@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CalendarClock, Check, Image, ListTodo, Tag, TestTubeDiagonal, TriangleAlert, UserRound } from '@lucide/vue'
+import { CalendarClock, Check, Image, ListTodo, MessageSquare, Tag, TestTubeDiagonal, TriangleAlert, UserRound } from '@lucide/vue'
 import type { Lane, Ticket } from '~~/shared/types/domain'
 import { CATEGORY_TONE_CLASSES } from '~~/shared/utils/constants'
 
@@ -26,9 +26,10 @@ const cardDateText = computed(() => {
 const imageAttachment = computed(() => props.showScreenshot
   ? props.ticket.attachments.find(attachment => attachment.mimeType.startsWith('image/')) || null
   : null)
-const authorText = computed(() => props.ticket.author
-  ? `${props.ticket.author.firstName} ${props.ticket.author.lastName}`
-  : props.ticket.feedback?.testerEmail || null)
+const authorText = computed(() => {
+  const author = props.ticket.author || props.ticket.feedback?.tester
+  return author ? displayName(author) : props.ticket.feedback?.testerEmail || null
+})
 const authorTitle = computed(() => props.ticket.author?.email || props.ticket.feedback?.testerEmail || '')
 const completedTodoCount = computed(() => props.ticket.todos.filter(todo => todo.completed).length)
 const laneOptions = computed(() => props.lanes.map(lane => ({ value: lane.id, label: lane.name })))
@@ -52,6 +53,7 @@ const laneOptions = computed(() => props.lanes.map(lane => ({ value: lane.id, la
             {{ ticket.source === 'testflight_crash' ? 'Crash' : 'Feedback' }}
           </span>
         </div>
+        <UiAvatar v-if="ticket.assignee" :person="ticket.assignee" size="sm" :muted="ticket.assignee.status !== 'active'" />
       </div>
 
       <h3 class="text-[15px] font-semibold leading-snug tracking-[-.01em]">{{ ticket.title }}</h3>
@@ -100,6 +102,7 @@ const laneOptions = computed(() => props.lanes.map(lane => ({ value: lane.id, la
         </div>
         <div class="flex items-center gap-3" :class="authorText || cardDateText ? 'mt-2' : ''">
           <span v-if="ticket.buildNumber" class="flex min-w-0 items-center gap-1"><TestTubeDiagonal :size="13" class="shrink-0" /> <span class="truncate">Build {{ ticket.buildNumber }}</span></span>
+          <span v-if="ticket.commentCount" class="flex shrink-0 items-center gap-1" :title="`${ticket.commentCount} comments`"><MessageSquare :size="13" /> {{ ticket.commentCount }}</span>
           <span class="ml-auto shrink-0 font-semibold tabular-nums">#{{ ticket.ticketNumber }}</span>
         </div>
       </div>
