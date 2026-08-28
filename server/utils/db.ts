@@ -14,7 +14,7 @@ import { getServerConfig } from './config'
 let database: Database.Database | null = null
 
 /** Whether a `users` row is somebody who can sign in, or merely somebody we know of. */
-type UserKind = 'account' | 'contact'
+type UserKind = 'account' | 'contact' | 'service'
 
 /** The denormalised author columns on `tickets`, without the read-time resolution. */
 export interface AuthorSnapshot {
@@ -263,6 +263,9 @@ export function getDb() {
   // From here on, person ids only.
   ensureActorContext(database)
   ensureAuditLog(database)
+  // Before `personIndexes` below, which puts `idx_users_kind` back after the table rebuild.
+  ensureServiceIdentities(database)
+  ensureApiTokens(database)
   database.exec(boardIndexes)
   database.exec(personIndexes)
   clearImportedDescriptions(database)
@@ -335,6 +338,7 @@ function personDirectory(): Map<string, Person> {
     firstName: row.first_name,
     lastName: row.last_name,
     isAccount: row.kind === 'account',
+    isService: row.kind === 'service',
     status: row.status,
     anonymizedAt: row.anonymized_at,
   }]))
@@ -1348,6 +1352,87 @@ export function ensureAuditLog(db: Database.Database) {
   return !existed
 }
 
+/**
+ * Widens `users.kind` to admit a third kind of person: a machine.
+ *
+ * A service identity is a first-class principal — it holds board memberships and roles like
+ * anyone, shows up in the history as itself rather than as somebody it borrowed, and can be
+ * disabled the same way. What it does not have is a password or a session; it acts only
+ * through a token.
+ *
+ * SQLite cannot widen a CHECK constraint, so the table is rebuilt. `idx_users_kind` goes with
+ * the old table and comes back when `personIndexes` runs a few lines later in `getDb`.
+ */
+export function ensureServiceIdentities(db: Database.Database) {
+  const current = (db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'users'").get() as { sql: string } | undefined)?.sql || ''
+  if (current.includes("'service'")) return false
+
+  db.pragma('foreign_keys = OFF')
+  try {
+    db.exec(`
+      BEGIN IMMEDIATE;
+      CREATE TABLE users_service_migration (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE COLLATE NOCASE,
+        first_name TEXT NOT NULL DEFAULT '',
+        last_name TEXT NOT NULL DEFAULT '',
+        password_hash TEXT,
+        kind TEXT NOT NULL DEFAULT 'account' CHECK (kind IN ('account', 'contact', 'service')),
+        role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'admin', 'member')),
+        status TEXT CHECK (status IS NULL OR status IN ('invited', 'active', 'disabled')),
+        session_version INTEGER NOT NULL DEFAULT 1,
+        invite_token_hash TEXT,
+        invite_expires_at TEXT,
+        anonymized_at TEXT,
+        created_at TEXT NOT NULL,
+        last_login_at TEXT
+      );
+      INSERT INTO users_service_migration
+        SELECT id, email, first_name, last_name, password_hash, kind, role, status, session_version,
+               invite_token_hash, invite_expires_at, anonymized_at, created_at, last_login_at
+        FROM users;
+      DROP TABLE users;
+      ALTER TABLE users_service_migration RENAME TO users;
+      COMMIT;
+    `)
+  } catch (error) {
+    if (db.inTransaction) db.exec('ROLLBACK')
+    throw error
+  } finally {
+    db.pragma('foreign_keys = ON')
+  }
+  return true
+}
+
+/**
+ * The credentials a non-browser caller presents.
+ *
+ * Only a hash is stored, so a copy of the database hands out no working tokens. `scopes` and
+ * `board_id` are a ceiling on what the credential may do, never a grant: what a token can
+ * reach is always the intersection of its scopes with what its principal could already do.
+ */
+export function ensureApiTokens(db: Database.Database) {
+  const existed = Boolean(db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'api_tokens'").get())
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS api_tokens (
+      id TEXT PRIMARY KEY,
+      principal_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      agent_label TEXT,
+      token_hash TEXT NOT NULL UNIQUE,
+      scopes TEXT NOT NULL DEFAULT '["read"]',
+      board_id TEXT REFERENCES boards(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      created_by TEXT,
+      expires_at TEXT,
+      last_used_at TEXT,
+      revoked_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_tokens_principal ON api_tokens(principal_id, revoked_at);
+  `)
+  return !existed
+}
+
 type BoardRow = {
   id: string; name: string; description: string; position: number
   asc_issuer_id: string; asc_key_id: string; asc_app_id: string
@@ -2155,9 +2240,33 @@ export function countUsers(): number {
   return (getDb().prepare("SELECT COUNT(*) AS value FROM users WHERE kind = 'account'").get() as { value: number }).value
 }
 
+/**
+ * An account: somebody who can sign in. Deliberately blind to service identities, so that
+ * everything built on it — sessions, the invite flow, the user admin screens — cannot reach
+ * a machine principal by id and treat it as a person.
+ */
 export function findUser(id: string): UserRecord | null {
   const row = getDb().prepare("SELECT * FROM users WHERE id = ? AND kind = 'account'").get(id) as UserRow | undefined
   return row ? toUser(row) : null
+}
+
+/**
+ * Anybody who can *act*: an account or a service identity, never a contact.
+ *
+ * This is what a token resolves against. Keeping it separate from `findUser` is what stops a
+ * service identity from being invited, given a password, or listed as a colleague.
+ */
+export function findPrincipal(id: string): UserRecord | null {
+  const row = getDb().prepare("SELECT * FROM users WHERE id = ? AND kind IN ('account', 'service')").get(id) as UserRow | undefined
+  return row ? toUser(row) : null
+}
+
+/** Sets the status of a principal `updateUser` will not touch, which is a service identity. */
+export function setPrincipalStatus(id: string, status: UserStatus): UserRecord | null {
+  const changed = getDb().prepare("UPDATE users SET status = ?, session_version = session_version + 1 WHERE id = ? AND kind = 'service'").run(status, id).changes
+  if (!changed) return null
+  invalidateUserDirectory()
+  return findPrincipal(id)
 }
 
 /** Accounts only: a contact has no password, and must never be a login candidate. */
@@ -2192,6 +2301,37 @@ export interface UserCreateInput {
  * row rather than opening a second one, so every ticket, comment and activity entry that
  * already points at them belongs to the new account from the moment it is created.
  */
+/**
+ * Opens a machine account.
+ *
+ * No address and no password: a service identity cannot sign in and exists only to be acted
+ * through by a token. It is otherwise an ordinary principal — it takes board memberships and
+ * roles like anyone, appears in the history under its own name, and `status` disables it and
+ * every token that names it in one move.
+ *
+ * `role` is fixed at `member`: an instance administrator that nobody can log in as, whose
+ * whole reach is a token, is not a thing this should be able to create by accident.
+ */
+export function createServiceIdentity(name: string): UserRecord {
+  const id = randomUUID()
+  getDb().prepare(`
+    INSERT INTO users (id, email, first_name, last_name, kind, role, status, created_at)
+    VALUES (?, NULL, ?, '', 'service', 'member', 'active', ?)
+  `).run(id, name.trim(), new Date().toISOString())
+  invalidateUserDirectory()
+  return findPrincipal(id)!
+}
+
+export function listServiceIdentities(): UserRecord[] {
+  const rows = getDb().prepare("SELECT id FROM users WHERE kind = 'service' ORDER BY created_at DESC").all() as Array<{ id: string }>
+  return rows.map(row => findPrincipal(row.id)!).filter(Boolean)
+}
+
+export function isServiceIdentity(account: UserRecord): boolean {
+  const row = getDb().prepare('SELECT kind FROM users WHERE id = ?').get(account.id) as { kind: string } | undefined
+  return row?.kind === 'service'
+}
+
 export function createUser(input: UserCreateInput): UserRecord {
   const db = getDb()
   const email = input.email.trim().toLowerCase()
@@ -2368,8 +2508,9 @@ export function touchLastLogin(id: string) {
   getDb().prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(new Date().toISOString(), id)
 }
 
+/** Takes any principal: a service identity holds a board role exactly as a person does. */
 export function setBoardMember(boardId: string, userId: string, role: BoardRole): BoardMember | null {
-  if (!findBoard(boardId) || !findUser(userId)) return null
+  if (!findBoard(boardId) || !findPrincipal(userId)) return null
   getDb().prepare(`
     INSERT INTO board_members (board_id, user_id, role, added_at) VALUES (?, ?, ?, ?)
     ON CONFLICT (board_id, user_id) DO UPDATE SET role = excluded.role

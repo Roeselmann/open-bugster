@@ -24,8 +24,10 @@ export interface Person {
   email: string | null
   firstName: string
   lastName: string
-  /** Whether this person can sign in and hold board membership. */
+  /** Whether this person can sign in. False for a contact and for a service identity alike. */
   isAccount: boolean
+  /** A machine principal: it holds roles and appears in the history, but never signs in. */
+  isService: boolean
   /** null for contacts, which have no account lifecycle. */
   status: UserStatus | null
   anonymizedAt: string | null
@@ -57,7 +59,8 @@ export interface UserBoardMembership {
 
 export interface BoardMember {
   userId: string
-  email: string
+  /** null for a service identity, which holds a role without having an address. */
+  email: string | null
   firstName: string
   lastName: string
   status: UserStatus

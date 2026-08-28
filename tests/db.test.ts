@@ -41,7 +41,7 @@ describe('ticket persistence', () => {
     expect(ticket.boardId).toBe(boardId)
     expect(ticket.laneId).toBe(laneIdByName.Backlog)
     expect(ticket.buildNumber).toBe('42')
-    expect(ticket.author).toEqual({ id: adaId, firstName: 'Ada', lastName: 'Lovelace', email: 'ada@example.com', isAccount: false, status: null, anonymizedAt: null })
+    expect(ticket.author).toEqual({ id: adaId, firstName: 'Ada', lastName: 'Lovelace', email: 'ada@example.com', isAccount: false, isService: false, status: null, anonymizedAt: null })
     expect(ticket.labels.map(label => label.name)).toEqual(['API'])
 
     expect(db.updateTicket(ticket.id, { buildNumber: '43' })).toMatchObject({ buildNumber: '43' })
