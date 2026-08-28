@@ -266,6 +266,7 @@ export function getDb() {
   // Before `personIndexes` below, which puts `idx_users_kind` back after the table rebuild.
   ensureServiceIdentities(database)
   ensureApiTokens(database)
+  ensureIdempotencyKeys(database)
   database.exec(boardIndexes)
   database.exec(personIndexes)
   clearImportedDescriptions(database)
@@ -1433,6 +1434,59 @@ export function ensureApiTokens(db: Database.Database) {
   return !existed
 }
 
+/**
+ * Replayed responses for `Idempotency-Key`.
+ *
+ * n8n and every other workflow tool retries. Without this, a retried `POST /tickets` after a
+ * timeout files the ticket twice — and the caller cannot tell, because the response it never
+ * received is the only place the first id appeared.
+ *
+ * The request fingerprint is stored alongside, so reusing one key for a different request is
+ * a 409 rather than a silently wrong replay.
+ */
+export function ensureIdempotencyKeys(db: Database.Database) {
+  const existed = Boolean(db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'idempotency_keys'").get())
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS idempotency_keys (
+      key TEXT NOT NULL,
+      principal_id TEXT NOT NULL,
+      fingerprint TEXT NOT NULL,
+      status INTEGER NOT NULL,
+      body TEXT,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (key, principal_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_idempotency_created ON idempotency_keys(created_at);
+  `)
+  return !existed
+}
+
+export interface IdempotentRecord {
+  fingerprint: string
+  status: number
+  body: string | null
+}
+
+export function findIdempotent(key: string, principalId: string): IdempotentRecord | null {
+  const row = getDb().prepare('SELECT fingerprint, status, body FROM idempotency_keys WHERE key = ? AND principal_id = ?')
+    .get(key, principalId) as IdempotentRecord | undefined
+  return row ?? null
+}
+
+export function saveIdempotent(key: string, principalId: string, record: IdempotentRecord) {
+  getDb().prepare(`
+    INSERT INTO idempotency_keys (key, principal_id, fingerprint, status, body, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT (key, principal_id) DO NOTHING
+  `).run(key, principalId, record.fingerprint, record.status, record.body, new Date().toISOString())
+}
+
+/** Keys are only useful for as long as a client might still retry. */
+export function pruneIdempotent(hours = 24): number {
+  const cutoff = new Date(Date.now() - hours * 3_600_000).toISOString()
+  return getDb().prepare('DELETE FROM idempotency_keys WHERE created_at < ?').run(cutoff).changes
+}
+
 type BoardRow = {
   id: string; name: string; description: string; position: number
   asc_issuer_id: string; asc_key_id: string; asc_app_id: string
@@ -1795,6 +1849,33 @@ export function listTickets(boardId: string, archived = false): Ticket[] {
     ORDER BY l.position, t.position, t.created_at
   `).all(boardId) as TicketRow[]
   return rows.map(hydrateTicket)
+}
+
+/**
+ * The same tickets, one page at a time.
+ *
+ * Ordered by ticket number rather than by lane and position, which is what the board view
+ * uses: a cursor has to be stable, and lane order is exactly the thing a caller paging
+ * through a board is likely to be changing underneath itself. The number never moves.
+ *
+ * The cursor is the last number seen, so a page boundary is `ticket_number > cursor`.
+ */
+export function listTicketsPage(boardId: string, options: { archived?: boolean; limit: number; cursor?: number | null }): { tickets: Ticket[]; nextCursor: number | null } {
+  const rows = getDb().prepare(`
+    SELECT t.* FROM tickets t
+    WHERE t.board_id = ? AND t.archived_at IS ${options.archived ? 'NOT ' : ''}NULL
+      AND t.ticket_number > ?
+    ORDER BY t.ticket_number
+    LIMIT ?
+  `).all(boardId, options.cursor ?? 0, options.limit + 1) as TicketRow[]
+
+  // One row past the page is how the presence of a next page is known without a second count.
+  const hasMore = rows.length > options.limit
+  const page = hasMore ? rows.slice(0, options.limit) : rows
+  return {
+    tickets: page.map(hydrateTicket),
+    nextCursor: hasMore ? page.at(-1)!.ticket_number : null
+  }
 }
 
 export function findTicket(id: string): Ticket | null {

@@ -2,7 +2,7 @@ import { createError } from 'h3'
 import { z } from 'zod'
 import { boardMemberIds } from '../utils/access'
 import {
-  archiveTicket, createTicket, listActivity, listTickets, moveTicket,
+  archiveTicket, createTicket, listActivity, listTickets, listTicketsPage, moveTicket,
   personById, restoreTicket, updateTicket
 } from '../utils/db'
 import { importedTicketUpdateSchema, ticketCreateSchema, ticketMoveSchema, ticketUpdateSchema } from '../utils/validation'
@@ -16,12 +16,19 @@ export const ticketList = defineOperation({
   summary: 'List the tickets on a board',
   input: z.object({
     boardId: z.string().trim().min(1).max(64),
-    archived: z.boolean().default(false)
+    archived: z.boolean().default(false),
+    /** Omitted returns the whole board, which is what the board view wants. */
+    limit: z.number().int().min(1).max(500).optional(),
+    cursor: z.number().int().min(0).optional()
   }),
   // Reading a board is one thing; reading what has been taken off it is an administrator's.
   requires: { scope: 'board', role: 'viewer', boardId: input => input.boardId },
   audit: false,
-  run: (_ctx, input) => ({ tickets: listTickets(input.boardId, input.archived) })
+  run: (_ctx, input) => {
+    if (input.limit === undefined) return { tickets: listTickets(input.boardId, input.archived) }
+    const page = listTicketsPage(input.boardId, { archived: input.archived, limit: input.limit, cursor: input.cursor })
+    return { tickets: page.tickets, nextCursor: page.nextCursor }
+  }
 })
 
 /**

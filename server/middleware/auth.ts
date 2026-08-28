@@ -16,6 +16,15 @@ function acceptsBearer(path: string): boolean {
   return path.startsWith('/api/v1/') || path === '/mcp' || path.startsWith('/mcp/')
 }
 
+/**
+ * The two documentation endpoints, which take either credential.
+ *
+ * A browser reading the reference has a session cookie and no token; a generator fetching the
+ * spec has a token and no cookie. Both are signed-in callers either way — the document is not
+ * public, because the endpoint list is a map of the instance.
+ */
+const eitherCredential = ['/api/v1/openapi.json', '/api/v1/docs']
+
 export default defineEventHandler(async (event) => {
   const path = getRequestURL(event).pathname
   const bearerSurface = acceptsBearer(path)
@@ -24,6 +33,15 @@ export default defineEventHandler(async (event) => {
 
   if (bearerSurface) {
     const header = getRequestHeader(event, 'authorization') || ''
+    if (eitherCredential.includes(path) && !header) {
+      // Fall through to the session check below rather than demanding a token.
+      const session = await requireUserSession(event)
+      const account = findUser(session.user.id)
+      if (!account || account.status !== 'active') throw createError({ statusCode: 401, statusMessage: 'This session is no longer valid.' })
+      event.context.account = account
+      event.context.actor = actorFor(account, { channel: 'web' })
+      return
+    }
     const presented = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : ''
     const actor = resolveToken(presented, path.startsWith('/mcp') ? 'mcp' : 'api')
     if (!actor) {
