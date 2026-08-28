@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronRight, KeyRound, LayoutGrid, UserRound } from '@lucide/vue'
+import { ChevronRight, KeyRound, LayoutGrid, Terminal, UserRound } from '@lucide/vue'
 import type { BoardRole, BoardSummary } from '~~/shared/types/domain'
 
 const { user, instanceAdmin } = useAuth()
@@ -141,6 +141,19 @@ async function savePassword() {
         <p v-else class="muted px-5 py-6 text-sm">
           You are not on any board yet — a board administrator has to add you.
         </p>
+      </section>
+
+      <section class="surface rounded-2xl">
+        <header class="border-b border-[var(--line)] px-5 py-4">
+          <p class="muted text-[10px] font-bold uppercase tracking-[.14em]">Integrations</p>
+          <h2 class="mt-0.5 flex items-center gap-2 text-lg font-bold"><Terminal :size="18" aria-hidden="true" /> API tokens</h2>
+          <p class="muted mt-1 text-sm">
+            For the API, for a workflow tool, or for connecting an agent. Everything a token does is
+            recorded against you, with its label beside it.
+            <NuxtLink to="/api/v1/docs" target="_blank" class="focus-ring rounded font-semibold underline underline-offset-2">API reference</NuxtLink>
+          </p>
+        </header>
+        <ApiTokenManager :boards="boards" />
       </section>
 
       <section class="surface rounded-2xl">

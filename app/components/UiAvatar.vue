@@ -3,13 +3,22 @@ import { CATEGORY_TONE_CLASSES } from '~~/shared/utils/constants'
 import { categoryColors } from '~~/shared/types/domain'
 
 const props = withDefaults(defineProps<{
-  person: { firstName?: string | null; lastName?: string | null; email?: string | null; anonymizedAt?: string | null } | null
+  person: {
+    firstName?: string | null; lastName?: string | null; email?: string | null
+    anonymizedAt?: string | null
+    /** A machine principal. Drawn differently, so a bot never passes for a colleague. */
+    isService?: boolean
+  } | null
   size?: 'sm' | 'md' | 'lg'
   /** Dims the avatar for an account that has not accepted its invitation yet. */
   muted?: boolean
 }>(), { size: 'md', muted: false })
 
-const label = computed(() => (props.person ? displayName(props.person) : 'Unassigned'))
+const isService = computed(() => Boolean(props.person?.isService))
+const label = computed(() => {
+  if (!props.person) return 'Unassigned'
+  return isService.value ? `${displayName(props.person)} · automated` : displayName(props.person)
+})
 
 /**
  * A stable colour per address. An erased account has none left, so it falls to the first
@@ -32,9 +41,19 @@ const sizing = computed(() => ({
 </script>
 
 <template>
+  <!--
+    A service identity gets a square rather than a circle and a monospace mark. Colour alone
+    would not do it: half the point is that somebody scanning a board can tell at a glance
+    that a bot filed something, and that has to survive being colour-blind.
+  -->
   <span
-    class="grid shrink-0 place-items-center rounded-full font-bold uppercase tracking-tight"
-    :class="[sizing, person ? tone : 'border border-dashed border-[var(--line)] text-[var(--muted)]', muted ? 'opacity-60' : '']"
+    class="grid shrink-0 place-items-center font-bold uppercase tracking-tight"
+    :class="[
+      sizing,
+      isService ? 'rounded-md font-mono' : 'rounded-full',
+      person ? tone : 'border border-dashed border-[var(--line)] text-[var(--muted)]',
+      muted ? 'opacity-60' : '',
+    ]"
     :title="label"
     :aria-label="label"
   >{{ person ? initials(person) : '—' }}</span>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Plug, SlidersHorizontal, Users } from '@lucide/vue'
+import { ArrowLeft, Plug, ScrollText, SlidersHorizontal, Users, Webhook } from '@lucide/vue'
 
 definePageMeta({ middleware: 'board' })
 
@@ -16,6 +16,8 @@ const sections = computed(() => {
     { to: `/b/${id}/settings/board`, label: 'Board', icon: SlidersHorizontal },
     users,
     { to: `/b/${id}/settings/integration`, label: 'Integration', icon: Plug },
+    { to: `/b/${id}/settings/automation`, label: 'Automation', icon: Webhook },
+    { to: `/b/${id}/settings/audit`, label: 'Audit', icon: ScrollText },
   ]
 })
 </script>
@@ -32,12 +34,12 @@ const sections = computed(() => {
         <h1 class="mt-2 text-3xl font-bold tracking-[-.045em]">Board settings</h1>
       </div>
 
-      <nav class="surface flex gap-1 rounded-2xl p-1" aria-label="Board settings sections">
+      <nav class="surface flex flex-wrap gap-1 rounded-2xl p-1" aria-label="Board settings sections">
         <NuxtLink
           v-for="section in sections"
           :key="section.to"
           :to="section.to"
-          class="focus-ring flex h-10 flex-1 items-center justify-center gap-2 rounded-xl text-sm font-semibold transition hover:bg-[var(--accent-soft)]"
+          class="focus-ring flex h-10 flex-1 basis-28 items-center justify-center gap-2 rounded-xl text-sm font-semibold transition hover:bg-[var(--accent-soft)]"
           exact-active-class="bg-[var(--ink)] text-[var(--canvas)] hover:bg-[var(--ink)]"
         >
           <component :is="section.icon" :size="16" aria-hidden="true" />

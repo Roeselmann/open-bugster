@@ -6,11 +6,12 @@ import { AppleApiError, syncTestFlight, verifyTestFlightAccess } from '../utils/
 import { getServerConfig } from '../utils/config'
 import { SecretBoxError } from '../utils/secret-box'
 import { boardViewer } from '../utils/access'
+import { listAudit } from '../utils/audit'
 import {
   CategoryNameTakenError, LaneDeleteError, boardMembers, boardRoleFor, countBoardAdmins, countBoards,
   createBoard, createComment, createLane, deleteBoard, deleteCategory, deleteComment, deleteLane, findBoardSummary,
   boardSyncCredentials, clearBoardPrivateKey, findCategory, findLane, importLaneFor, latestSyncRun, listBoards, listCategories, listComments, listLabels, listLanes,
-  listUsers, removeBoardMember, reorderLanes, setBoardMember, setBoardPrivateKey, updateBoard, updateCategory, updateComment, updateLane
+  listUsers, personById, removeBoardMember, reorderLanes, setBoardMember, setBoardPrivateKey, updateBoard, updateCategory, updateComment, updateLane
 } from '../utils/db'
 import {
   boardCreateSchema, boardMemberSchema, boardUpdateSchema, categoryUpdateSchema, commentSaveSchema, connectionTestSchema,
@@ -408,6 +409,43 @@ export const importStatus = defineOperation({
   requires: { scope: 'board', role: 'viewer', boardId: boardOf },
   audit: false,
   run: (_ctx, input) => ({ run: latestSyncRun(input.boardId) })
+})
+
+/* ── the audit trail ────────────────────────────────────────────────────── */
+
+/**
+ * A board's own slice of the audit log.
+ *
+ * Board admins only, and scoped to their board: the instance-level entries — accounts,
+ * tokens, service identities — are not theirs to read, and a board admin is not necessarily
+ * an instance administrator.
+ */
+export const auditList = defineOperation({
+  name: 'audit.list',
+  summary: 'Read what has been done on this board',
+  input: z.object({
+    boardId: id,
+    operation: z.string().trim().max(64).optional(),
+    principalId: id.optional(),
+    limit: z.number().int().min(1).max(500).optional(),
+    offset: z.number().int().min(0).optional()
+  }),
+  requires: { scope: 'board', role: 'admin', boardId: boardOf },
+  audit: false,
+  run: (_ctx, input) => {
+    const entries = listAudit({
+      boardId: input.boardId,
+      operation: input.operation,
+      principalId: input.principalId,
+      limit: input.limit ?? 100,
+      offset: input.offset
+    })
+    // The reader wants people, not ids; an id whose row is gone resolves to null rather than
+    // showing a raw uuid, exactly as the ticket history does.
+    return {
+      entries: entries.map(entry => ({ ...entry, principal: personById(entry.principalId) }))
+    }
+  }
 })
 
 /* ── helpers ────────────────────────────────────────────────────────────── */

@@ -49,6 +49,18 @@ function sentence(entry: TicketActivityEntry) {
 function actor(entry: TicketActivityEntry) {
   return entry.actor ? displayName(entry.actor) : 'TestFlight'
 }
+
+/**
+ * What performed the change, when that was not a person at a keyboard.
+ *
+ * The person still answers for it — an agent's reach is exactly its principal's — so this
+ * reads as a quiet aside rather than as a second actor. Everything written before agents
+ * existed has no label and shows nothing.
+ */
+function via(entry: TicketActivityEntry): string | null {
+  if (!entry.agentId) return null
+  return entry.agentId
+}
 </script>
 
 <template>
@@ -67,7 +79,11 @@ function actor(entry: TicketActivityEntry) {
     <ol v-if="open" class="mt-3 space-y-2">
       <li v-for="entry in entries" :key="entry.id" class="muted flex items-baseline gap-2 text-xs leading-relaxed">
         <span class="shrink-0 tabular-nums">{{ timeFormat.format(new Date(entry.createdAt)) }}</span>
-        <span><strong class="font-semibold text-[var(--ink)]">{{ actor(entry) }}</strong> {{ sentence(entry) }}</span>
+        <span>
+          <strong class="font-semibold text-[var(--ink)]">{{ actor(entry) }}</strong>
+          <span v-if="via(entry)" class="muted" :title="`Performed by ${via(entry)} on their behalf`"> via {{ via(entry) }}</span>
+          {{ sentence(entry) }}
+        </span>
       </li>
     </ol>
   </section>

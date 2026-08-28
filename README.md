@@ -270,6 +270,85 @@ In Docker, run it inside the container so it sees the same volume:
 docker compose exec bugster npm run owner:reset -- you@example.com "a-new-long-password"
 ```
 
+## The API, agents and webhooks
+
+Open-Bugster can be driven by something other than a person. There is a REST API, an MCP endpoint
+for AI agents, and outgoing webhooks — all of them speaking the same permissions as the board does.
+
+### Tokens
+
+Everything non-browser authenticates with a token. Mint one under **Your profile → API tokens**;
+it is shown once and only a hash is kept.
+
+```bash
+curl -H "Authorization: Bearer bgs_…" https://bugs.example.com/api/v1/boards
+```
+
+A token is a **ceiling on what you can already do, never a grant**. A `write` token held by
+somebody who is a viewer on a board is still a viewer there. A token can be pinned to one board,
+given an expiry, and revoked at any time — and disabling an account stops all of its tokens at
+once.
+
+Give a token an **agent label** — "Claude Desktop", "n8n prod" — and it appears in every ticket's
+history as *via that label*, beside the person who answers for it.
+
+### Service identities
+
+For something that is not a person — a CI pipeline, a scheduled job — open a **service identity**
+under **Administration → Users**. It holds board roles like anyone, appears in the history under
+its own name rather than borrowing somebody's, and cannot sign in: it acts only through a token.
+
+### REST API
+
+Versioned at `/api/v1`, with the specification generated from the same definitions that validate
+each request:
+
+- `/api/v1/docs` — the reference, readable in a browser
+- `/api/v1/openapi.json` — OpenAPI 3.1, for a client generator or a self-hosted Swagger UI
+
+Lists are paged with a cursor, errors are `application/problem+json` with a stable `type`, and any
+write accepts an `Idempotency-Key` so a retry replays the first response instead of acting twice.
+
+### MCP, for AI agents
+
+`/mcp` speaks the Model Context Protocol over Streamable HTTP, with about a dozen tools shaped
+around what somebody actually asks for — searching a board, filing a ticket, commenting on one.
+
+```json
+{
+  "mcpServers": {
+    "open-bugster": {
+      "url": "https://bugs.example.com/mcp",
+      "headers": { "Authorization": "Bearer bgs_…" }
+    }
+  }
+}
+```
+
+An agent's reach is exactly its token's reach, and everything it does is recorded against the
+person or service the token belongs to.
+
+### Webhooks
+
+Under **Board settings → Automation**, a board can push its events somewhere rather than being
+polled — which is what makes it useful to n8n and anything like it. Events cover tickets being
+created, updated, moved, archived and restored, comments, and completed TestFlight imports.
+
+Each delivery carries `X-Bugster-Signature: t=<unix>,v1=<hmac-sha256>` over `<timestamp>.<body>`,
+so a receiver can be certain the event came from this board and is not a replay. Failed deliveries
+are retried five times on a widening backoff, and every attempt is visible in the settings.
+
+Deliveries go to private addresses by default, since an n8n is usually on the same Docker network;
+set `WEBHOOK_ALLOW_PRIVATE=false` for public destinations only. The cloud metadata range is
+refused either way.
+
+### The audit trail
+
+**Board settings → Audit** shows every change made on a board and every attempt that was refused,
+with the person, the agent and the channel it came through. It holds ids rather than names, so
+anonymizing somebody empties it of anything identifying without losing the history. Retention is
+`AUDIT_RETENTION_DAYS`, a year by default.
+
 ## App Store Connect
 
 Importing TestFlight feedback requires an App Store Connect API key. Credentials are configured **in the app, per board**, so every board tracks its own app.
