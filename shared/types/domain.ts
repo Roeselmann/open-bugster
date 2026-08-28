@@ -79,10 +79,18 @@ export interface TicketComment {
 export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'due_date', 'archived', 'restored', 'commented'] as const
 export type ActivityKind = typeof activityKinds[number]
 
+/** How a change reached the server. Everything written before agents existed reads `web`. */
+export const activityChannels = ['web', 'api', 'mcp'] as const
+export type ActivityChannel = typeof activityChannels[number]
+
 export interface TicketActivityEntry {
   id: string
   ticketId: string
+  /** Who answers for the change. */
   actor: Person | null
+  /** What performed it — "Claude Desktop", "n8n prod" — or null when a person did it directly. */
+  agentId: string | null
+  channel: ActivityChannel
   kind: ActivityKind
   /** Person-valued keys hold user ids, not names — resolve them through `payloadPeople`. */
   payload: Record<string, string | null>

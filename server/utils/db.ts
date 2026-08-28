@@ -7,7 +7,7 @@ import type {
   CategorySummary, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
   TicketPriority, TicketSource, TicketTodo, TicketTodoInput, UserAccount, UserBoardMembership, UserRole, UserStatus
 } from '../../shared/types/domain'
-import type { Actor } from './actor'
+import type { Actor, ActorChannel } from './actor'
 import { decryptSecret, encryptSecret, secretKeyAvailable } from './secret-box'
 import { getServerConfig } from './config'
 
@@ -258,8 +258,11 @@ export function getDb() {
   ensureActivityLog(database)
   ensureBoardAutoAuthor(database)
   ensureBoardDescription(database)
-  // Last: every migration above it still speaks in email columns.
+  // Last of the email-era migrations: every one above still speaks in email columns.
   ensurePersonIdentity(database)
+  // From here on, person ids only.
+  ensureActorContext(database)
+  ensureAuditLog(database)
   database.exec(boardIndexes)
   database.exec(personIndexes)
   clearImportedDescriptions(database)
@@ -1281,6 +1284,70 @@ export function restoreImportedTitles(db: Database.Database) {
   return changes
 }
 
+/*
+ * Everything below runs *after* `ensurePersonIdentity` and speaks in person ids from the
+ * start. Nothing here may reintroduce an email column: the whole point of that migration is
+ * that a person can be renamed, re-addressed or anonymized without rewriting history.
+ */
+
+/**
+ * Records how a change arrived, not just who is behind it.
+ *
+ * `actor_id` already answers who is responsible. These two answer what performed the change
+ * and over which surface, so a ticket's history can say "moved by Markus via Claude" instead
+ * of quietly attributing an agent's work to a person who was not at the keyboard.
+ *
+ * Existing rows default to `web`, which is true of every entry written before agents existed.
+ */
+export function ensureActorContext(db: Database.Database) {
+  const columns = tableColumns(db, 'ticket_activity')
+  if (columns.has('channel')) return false
+  db.exec(`
+    ALTER TABLE ticket_activity ADD COLUMN agent_id TEXT;
+    ALTER TABLE ticket_activity ADD COLUMN channel TEXT NOT NULL DEFAULT 'web';
+  `)
+  return true
+}
+
+/**
+ * The audit trail, which is a different thing from a ticket's timeline and deliberately not
+ * the same table.
+ *
+ * `ticket_activity` is written for people to read on a ticket, and dies with that ticket —
+ * its cascade is correct there and disqualifying here. This one is append-only, survives the
+ * deletion of whatever it describes, and covers what a ticket-scoped table structurally
+ * cannot: a board removed, a role changed, a key uploaded, a token minted, a sign-in refused.
+ *
+ * `board_id` carries no foreign key on purpose, so an entry outlives the board it names.
+ * Everything else that identifies a person is an id, never a name or an address, which is
+ * what lets `anonymizeUser` empty this log of identifying data without touching a row.
+ */
+export function ensureAuditLog(db: Database.Database) {
+  const existed = Boolean(db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'audit_log'").get())
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id TEXT PRIMARY KEY,
+      at TEXT NOT NULL,
+      board_id TEXT,
+      principal_id TEXT,
+      agent_id TEXT,
+      token_id TEXT,
+      channel TEXT NOT NULL DEFAULT 'web',
+      operation TEXT NOT NULL,
+      target_type TEXT NOT NULL,
+      target_id TEXT,
+      changes TEXT NOT NULL DEFAULT '{}',
+      result TEXT NOT NULL DEFAULT 'ok',
+      ip TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log(at DESC);
+    CREATE INDEX IF NOT EXISTS idx_audit_board ON audit_log(board_id, at DESC);
+    CREATE INDEX IF NOT EXISTS idx_audit_principal ON audit_log(principal_id, at DESC);
+    CREATE INDEX IF NOT EXISTS idx_audit_operation ON audit_log(operation, at DESC);
+  `)
+  return !existed
+}
+
 type BoardRow = {
   id: string; name: string; description: string; position: number
   asc_issuer_id: string; asc_key_id: string; asc_app_id: string
@@ -1790,8 +1857,8 @@ function nextPosition(laneId: string): number {
  * out an email would keep naming somebody the moment their account is anonymized.
  */
 function recordActivity(ticketId: string, actor: Actor | null, kind: ActivityKind, payload: Record<string, string | null> = {}) {
-  getDb().prepare('INSERT INTO ticket_activity (id, ticket_id, actor_id, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(randomUUID(), ticketId, actor?.principalId ?? null, kind, JSON.stringify(payload), new Date().toISOString())
+  getDb().prepare('INSERT INTO ticket_activity (id, ticket_id, actor_id, agent_id, channel, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(randomUUID(), ticketId, actor?.principalId ?? null, actor?.agentId ?? null, actor?.channel ?? 'web', kind, JSON.stringify(payload), new Date().toISOString())
 }
 
 export function createTicket(boardId: string, input: TicketInput, author: Person | null = null, actor: Actor | null = null): Ticket | null {
@@ -2371,7 +2438,7 @@ export function deleteComment(id: string): boolean {
 
 export function listActivity(ticketId: string, limit = 100): TicketActivityEntry[] {
   const rows = getDb().prepare('SELECT * FROM ticket_activity WHERE ticket_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?')
-    .all(ticketId, limit) as Array<{ id: string; ticket_id: string; actor_id: string | null; kind: ActivityKind; payload: string; created_at: string }>
+    .all(ticketId, limit) as Array<{ id: string; ticket_id: string; actor_id: string | null; agent_id: string | null; channel: ActorChannel; kind: ActivityKind; payload: string; created_at: string }>
   return rows.map(row => {
     const payload = safeJson(row.payload)
     // Person-valued keys are ids on disk; the reader wants people, and an id whose row is
@@ -2382,6 +2449,9 @@ export function listActivity(ticketId: string, limit = 100): TicketActivityEntry
       id: row.id,
       ticketId: row.ticket_id,
       actor: personById(row.actor_id),
+      // Provenance, not attribution: the actor still answers for the change.
+      agentId: row.agent_id,
+      channel: row.channel,
       kind: row.kind,
       payload,
       payloadPeople,
