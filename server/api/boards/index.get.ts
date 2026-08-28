@@ -1,4 +1,5 @@
 import { listBoards } from '~~/server/utils/db'
-import { boardViewer, requireAuthUser } from '~~/server/utils/access'
+import { boardViewer } from '~~/server/utils/access'
+import { sessionActor } from '~~/server/utils/actor'
 
-export default defineEventHandler(event => ({ boards: listBoards(boardViewer(requireAuthUser(event))) }))
+export default defineEventHandler(event => ({ boards: listBoards(boardViewer(sessionActor(event).principal)) }))

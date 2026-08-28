@@ -3,10 +3,11 @@ import { boardSyncCredentials } from '~~/server/utils/db'
 import { requireBoardAccess } from '~~/server/utils/access'
 import { SecretBoxError } from '~~/server/utils/secret-box'
 import { connectionTestSchema, validationError } from '~~/server/utils/validation'
+import { sessionActor } from '~~/server/utils/actor'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id') || ''
-  requireBoardAccess(event, id, 'admin')
+  requireBoardAccess(sessionActor(event), id, 'admin')
 
   const parsed = connectionTestSchema.safeParse(await readBody(event).catch(() => ({})) || {})
   if (!parsed.success) throw validationError(parsed.error)

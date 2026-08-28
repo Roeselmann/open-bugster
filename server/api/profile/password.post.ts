@@ -1,10 +1,11 @@
 import { setUserPassword } from '~~/server/utils/db'
-import { requireAuthUser } from '~~/server/utils/access'
+
 import { hashStoredPassword, verifyStoredPassword } from '~~/server/utils/password'
 import { passwordChangeSchema, validationError } from '~~/server/utils/validation'
+import { sessionActor } from '~~/server/utils/actor'
 
 export default defineEventHandler(async (event) => {
-  const account = requireAuthUser(event)
+  const account = sessionActor(event).principal
   const parsed = passwordChangeSchema.safeParse(await readBody(event))
   if (!parsed.success) throw validationError(parsed.error)
   if (!account.passwordHash || !verifyStoredPassword(parsed.data.currentPassword, account.passwordHash)) {

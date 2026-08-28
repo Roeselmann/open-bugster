@@ -1,8 +1,9 @@
 import { anonymizeUser, findUser } from '~~/server/utils/db'
 import { requireInstanceAdmin } from '~~/server/utils/access'
+import { sessionActor } from '~~/server/utils/actor'
 
 export default defineEventHandler((event) => {
-  const account = requireInstanceAdmin(event)
+  const account = requireInstanceAdmin(sessionActor(event))
   const id = getRouterParam(event, 'id') || ''
   const target = findUser(id)
   if (!target) throw createError({ statusCode: 404, statusMessage: 'Account not found.' })

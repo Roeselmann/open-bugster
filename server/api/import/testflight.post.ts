@@ -4,6 +4,7 @@ import { requireBoardAccess } from '~~/server/utils/access'
 import { getServerConfig } from '~~/server/utils/config'
 import { SecretBoxError } from '~~/server/utils/secret-box'
 import { importRequestSchema, validationError } from '~~/server/utils/validation'
+import { sessionActor } from '~~/server/utils/actor'
 
 export default defineEventHandler(async (event) => {
   const parsed = importRequestSchema.safeParse(await readBody(event))
@@ -11,7 +12,7 @@ export default defineEventHandler(async (event) => {
   const { boardId } = parsed.data
   // A sync spends the board's App Store Connect key and writes tickets into the import lane
   // under the board's own name, so it belongs to whoever owns those credentials.
-  requireBoardAccess(event, boardId, 'admin')
+  requireBoardAccess(sessionActor(event), boardId, 'admin')
 
   const importLane = importLaneFor(boardId)
   if (!importLane) throw createError({ statusCode: 409, statusMessage: 'This board has no import lane.' })

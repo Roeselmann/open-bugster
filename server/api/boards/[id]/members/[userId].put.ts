@@ -1,11 +1,12 @@
 import { findBoardSummary, setBoardMember } from '~~/server/utils/db'
 import { boardViewer, requireBoardAccess } from '~~/server/utils/access'
 import { boardMemberSchema, validationError } from '~~/server/utils/validation'
+import { sessionActor } from '~~/server/utils/actor'
 
 export default defineEventHandler(async (event) => {
   const boardId = getRouterParam(event, 'id') || ''
   const userId = getRouterParam(event, 'userId') || ''
-  const { account } = requireBoardAccess(event, boardId, 'admin')
+  const { account } = requireBoardAccess(sessionActor(event), boardId, 'admin')
   const parsed = boardMemberSchema.safeParse(await readBody(event))
   if (!parsed.success) throw validationError(parsed.error)
   const member = setBoardMember(boardId, userId, parsed.data.role)

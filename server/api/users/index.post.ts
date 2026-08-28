@@ -2,9 +2,10 @@ import { createUser, EmailTakenError, setInviteToken } from '~~/server/utils/db'
 import { requireInstanceAdmin } from '~~/server/utils/access'
 import { createInviteToken, inviteUrl } from '~~/server/utils/invite'
 import { userCreateSchema, validationError } from '~~/server/utils/validation'
+import { sessionActor } from '~~/server/utils/actor'
 
 export default defineEventHandler(async (event) => {
-  requireInstanceAdmin(event)
+  requireInstanceAdmin(sessionActor(event))
   const parsed = userCreateSchema.safeParse(await readBody(event))
   if (!parsed.success) throw validationError(parsed.error)
 

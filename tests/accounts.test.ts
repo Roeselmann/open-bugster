@@ -4,11 +4,14 @@ import { randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
+import { actorFor } from '../server/utils/actor'
 
 describe('accounts and membership', () => {
   let db: typeof import('../server/utils/db')
   let boardId = ''
   let ownerId = ''
+  /** The owner as the actor behind a change, rather than as the person a ticket names. */
+  const ownerActor = () => actorFor(db.findUser(ownerId)!)
   let laneIdByName: Record<string, string> = {}
 
   beforeAll(async () => {
@@ -173,14 +176,14 @@ describe('accounts and membership', () => {
     const ticket = db.createTicket(boardId, { title: 'Needs an owner', laneId: laneIdByName.Backlog }, null)!
     expect(ticket.assignee).toBeNull()
 
-    const assigned = db.updateTicket(ticket.id, { assigneeId: ownerId }, ownerId)!
+    const assigned = db.updateTicket(ticket.id, { assigneeId: ownerId }, ownerActor())!
     expect(assigned.assignee).toMatchObject({ id: ownerId, email: 'owner@example.com' })
     const entry = db.listActivity(ticket.id).find(item => item.kind === 'assigned')!
     // The payload holds the id, and the reader gets the person back resolved from it.
     expect(entry.payload.to).toBe(ownerId)
     expect(entry.payloadPeople.to).toMatchObject({ id: ownerId, email: 'owner@example.com' })
 
-    const cleared = db.updateTicket(ticket.id, { assigneeId: null }, ownerId)!
+    const cleared = db.updateTicket(ticket.id, { assigneeId: null }, ownerActor())!
     expect(cleared.assignee).toBeNull()
     expect(db.listActivity(ticket.id).map(entry => entry.kind)).toContain('unassigned')
     db.archiveTicket(ticket.id)
@@ -221,7 +224,7 @@ describe('accounts and membership', () => {
     db.setBoardMember(boardId, leaver.id, 'editor')
     const ticket = db.createTicket(boardId, { title: 'Filed then erased', laneId: laneIdByName.Backlog }, db.personById(leaver.id))!
     db.createComment(ticket.id, leaver.id, 'A note from the leaver')
-    db.updateTicket(ticket.id, { assigneeId: leaver.id }, ownerId)
+    db.updateTicket(ticket.id, { assigneeId: leaver.id }, ownerActor())
 
     db.anonymizeUser(leaver.id)
 
@@ -303,13 +306,13 @@ describe('accounts and membership', () => {
     })
     expect(ticket.author).toBeNull()
 
-    const attributed = db.updateTicket(ticket.id, { authorId: ownerId }, ownerId)!
+    const attributed = db.updateTicket(ticket.id, { authorId: ownerId }, ownerActor())!
     expect(attributed.author).toMatchObject({ id: ownerId })
     const entry = db.listActivity(ticket.id).find(item => item.kind === 'author')!
     expect(entry.payload).toMatchObject({ from: null, to: ownerId })
     expect(entry.payloadPeople.to).toMatchObject({ id: ownerId })
 
-    expect(db.updateTicket(ticket.id, { authorId: null }, ownerId)?.author).toBeNull()
+    expect(db.updateTicket(ticket.id, { authorId: null }, ownerActor())?.author).toBeNull()
   })
 })
 

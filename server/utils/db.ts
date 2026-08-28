@@ -7,6 +7,7 @@ import type {
   CategorySummary, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
   TicketPriority, TicketSource, TicketTodo, TicketTodoInput, UserAccount, UserBoardMembership, UserRole, UserStatus
 } from '../../shared/types/domain'
+import type { Actor } from './actor'
 import { decryptSecret, encryptSecret, secretKeyAvailable } from './secret-box'
 import { getServerConfig } from './config'
 
@@ -1788,12 +1789,12 @@ function nextPosition(laneId: string): number {
  * transaction. Person-valued payload keys hold ids, never addresses — an entry that spelled
  * out an email would keep naming somebody the moment their account is anonymized.
  */
-function recordActivity(ticketId: string, actorId: string | null, kind: ActivityKind, payload: Record<string, string | null> = {}) {
+function recordActivity(ticketId: string, actor: Actor | null, kind: ActivityKind, payload: Record<string, string | null> = {}) {
   getDb().prepare('INSERT INTO ticket_activity (id, ticket_id, actor_id, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(randomUUID(), ticketId, actorId, kind, JSON.stringify(payload), new Date().toISOString())
+    .run(randomUUID(), ticketId, actor?.principalId ?? null, kind, JSON.stringify(payload), new Date().toISOString())
 }
 
-export function createTicket(boardId: string, input: TicketInput, author: Person | null = null): Ticket | null {
+export function createTicket(boardId: string, input: TicketInput, author: Person | null = null, actor: Actor | null = null): Ticket | null {
   const db = getDb()
   // A lane may be named by the caller — the board's own lane, or nothing.
   const requested = input.laneId ? findLane(input.laneId) : null
@@ -1812,13 +1813,13 @@ export function createTicket(boardId: string, input: TicketInput, author: Person
     )
     setTicketLabels(id, boardId, input.labels || [])
     setTicketTodos(id, input.todos || [])
-    recordActivity(id, author?.id || null, 'created', { lane: lane.name })
-    if (input.assigneeId) recordActivity(id, author?.id || null, 'assigned', { to: input.assigneeId })
+    recordActivity(id, actor, 'created', { lane: lane.name })
+    if (input.assigneeId) recordActivity(id, actor, 'assigned', { to: input.assigneeId })
   })()
   return findTicket(id)!
 }
 
-export function updateTicket(id: string, input: Partial<TicketInput>, actorId: string | null = null): Ticket | null {
+export function updateTicket(id: string, input: Partial<TicketInput>, actor: Actor | null = null): Ticket | null {
   const existing = findTicket(id)
   if (!existing) return null
   const now = new Date().toISOString()
@@ -1842,13 +1843,13 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actorId: s
     )
     if (input.labels) setTicketLabels(id, existing.boardId, input.labels)
     if (input.todos !== undefined) setTicketTodos(id, input.todos)
-    if (priority !== existing.priority) recordActivity(id, actorId, 'priority', { from: existing.priority, to: priority })
-    if (dueDate !== existing.dueDate) recordActivity(id, actorId, 'due_date', { from: existing.dueDate, to: dueDate })
+    if (priority !== existing.priority) recordActivity(id, actor, 'priority', { from: existing.priority, to: priority })
+    if (dueDate !== existing.dueDate) recordActivity(id, actor, 'due_date', { from: existing.dueDate, to: dueDate })
     if (assigneeId !== (existing.assignee?.id || null)) {
-      recordActivity(id, actorId, assigneeId ? 'assigned' : 'unassigned', { from: existing.assignee?.id || null, to: assigneeId })
+      recordActivity(id, actor, assigneeId ? 'assigned' : 'unassigned', { from: existing.assignee?.id || null, to: assigneeId })
     }
     if (authorId !== (existing.author?.id || null)) {
-      recordActivity(id, actorId, 'author', { from: existing.author?.id || null, to: authorId })
+      recordActivity(id, actor, 'author', { from: existing.author?.id || null, to: authorId })
     }
   })()
   return findTicket(id)
@@ -1863,7 +1864,7 @@ function reindexLane(laneId: string, orderedIds?: string[]) {
   ids.forEach((id, index) => update.run(laneId, index, now, id))
 }
 
-export function moveTicket(id: string, targetLaneId: string, targetIndex: number, actorId: string | null = null): Ticket | null {
+export function moveTicket(id: string, targetLaneId: string, targetIndex: number, actor: Actor | null = null): Ticket | null {
   const current = findTicket(id)
   if (!current || current.archivedAt) return null
   const targetLane = findLane(targetLaneId)
@@ -1878,22 +1879,22 @@ export function moveTicket(id: string, targetLaneId: string, targetIndex: number
     targetIds.splice(index, 0, id)
     if (current.laneId !== targetLaneId) {
       reindexLane(current.laneId, sourceIds)
-      recordActivity(id, actorId, 'moved', { from: findLane(current.laneId)?.name || null, to: targetLane.name })
+      recordActivity(id, actor, 'moved', { from: findLane(current.laneId)?.name || null, to: targetLane.name })
     }
     reindexLane(targetLaneId, targetIds)
   })()
   return findTicket(id)
 }
 
-export function archiveTicket(id: string, actorId: string | null = null): Ticket | null {
+export function archiveTicket(id: string, actor: Actor | null = null): Ticket | null {
   const now = new Date().toISOString()
   const result = getDb().prepare('UPDATE tickets SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL').run(now, now, id)
   if (!result.changes) return null
-  recordActivity(id, actorId, 'archived')
+  recordActivity(id, actor, 'archived')
   return findTicket(id)
 }
 
-export function restoreTicket(id: string, actorId: string | null = null): Ticket | null {
+export function restoreTicket(id: string, actor: Actor | null = null): Ticket | null {
   const db = getDb()
   const ticket = findTicket(id)
   if (!ticket || !ticket.archivedAt) return null
@@ -1902,7 +1903,7 @@ export function restoreTicket(id: string, actorId: string | null = null): Ticket
   const now = new Date().toISOString()
   db.prepare('UPDATE tickets SET archived_at = NULL, lane_id = ?, position = ?, updated_at = ? WHERE id = ?')
     .run(lane.id, nextPosition(lane.id), now, id)
-  recordActivity(id, actorId, 'restored', { lane: lane.name })
+  recordActivity(id, actor, 'restored', { lane: lane.name })
   return findTicket(id)
 }
 
@@ -2341,7 +2342,12 @@ export function findComment(id: string): TicketComment | null {
   return row ? toComment(row) : null
 }
 
-export function createComment(ticketId: string, authorId: string, body: string): TicketComment | null {
+/**
+ * The author is a person, not necessarily an account: a TestFlight tester who has never
+ * signed in can hold a comment, so authorship stays a plain person id. The actor is who
+ * performed the write and may be null when nothing did — an import, a migration.
+ */
+export function createComment(ticketId: string, authorId: string, body: string, actor: Actor | null = null): TicketComment | null {
   const db = getDb()
   if (!db.prepare('SELECT 1 FROM tickets WHERE id = ?').get(ticketId)) return null
   const id = randomUUID()
@@ -2349,7 +2355,7 @@ export function createComment(ticketId: string, authorId: string, body: string):
   db.transaction(() => {
     db.prepare('INSERT INTO ticket_comments (id, ticket_id, author_id, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
       .run(id, ticketId, authorId, body, now, now)
-    recordActivity(ticketId, authorId, 'commented')
+    recordActivity(ticketId, actor, 'commented')
   })()
   return findComment(id)
 }

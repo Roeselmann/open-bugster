@@ -1,10 +1,11 @@
 import { updateTicket } from '~~/server/utils/db'
 import { boardMemberIds, requireTicketAccess } from '~~/server/utils/access'
 import { importedTicketUpdateSchema, ticketUpdateSchema, validationError } from '~~/server/utils/validation'
+import { sessionActor } from '~~/server/utils/actor'
 
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id') || ''
-  const { account, role, ticket } = requireTicketAccess(event, id, 'editor')
+  const { actor, role, ticket } = requireTicketAccess(sessionActor(event), id, 'editor')
   const body = await readBody(event)
   const parsed = (ticket.source === 'manual' ? ticketUpdateSchema : importedTicketUpdateSchema).safeParse(body)
   if (!parsed.success) throw validationError(parsed.error)
@@ -29,5 +30,5 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  return { ticket: updateTicket(id, input, account.id) }
+  return { ticket: updateTicket(id, input, actor) }
 })

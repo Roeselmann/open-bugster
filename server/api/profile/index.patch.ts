@@ -1,9 +1,10 @@
 import { AnonymizedAccountError, EmailTakenError, updateUser } from '~~/server/utils/db'
-import { requireAuthUser } from '~~/server/utils/access'
+
 import { profileUpdateSchema, validationError } from '~~/server/utils/validation'
+import { sessionActor } from '~~/server/utils/actor'
 
 export default defineEventHandler(async (event) => {
-  const account = requireAuthUser(event)
+  const account = sessionActor(event).principal
   const parsed = profileUpdateSchema.safeParse(await readBody(event))
   if (!parsed.success) throw validationError(parsed.error)
   let updated

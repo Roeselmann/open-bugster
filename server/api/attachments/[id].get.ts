@@ -5,12 +5,13 @@ import { findAttachment } from '~~/server/utils/db'
 import { requireTicketAccess } from '~~/server/utils/access'
 import { safeAttachmentName } from '~~/server/utils/app-store-connect'
 import { getServerConfig } from '~~/server/utils/config'
+import { sessionActor } from '~~/server/utils/actor'
 
 export default defineEventHandler(async (event) => {
   const attachment = findAttachment(getRouterParam(event, 'id') || '')
   if (!attachment) throw createError({ statusCode: 404, statusMessage: 'Attachment not found.' })
   // Reached by id alone, so the board it belongs to has to be checked explicitly.
-  requireTicketAccess(event, attachment.ticket_id)
+  requireTicketAccess(sessionActor(event), attachment.ticket_id)
   const config = getServerConfig()
   const root = await realpath(resolve(config.attachmentsPath)).catch(() => resolve(config.attachmentsPath))
   const candidate = resolve(root, attachment.relative_path)
