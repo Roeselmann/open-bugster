@@ -53,7 +53,7 @@ async function createBoard() {
     lastBoardId.value = response.board.id
     emit('created')
     createOpen.value = false
-    await navigateTo(`/b/${response.board.id}/settings`)
+    await navigateTo(`/b/${response.board.id}/settings/board`)
   } catch (error: any) {
     createError.value = error?.data?.statusMessage || error?.statusMessage || 'The board could not be created.'
   } finally {
@@ -103,10 +103,10 @@ async function createBoard() {
     </DropdownMenuRoot>
 
     <!-- Everything the page offers belongs to board administrators, so for anyone else the
-         icon would only lead to a read-only copy of settings they cannot touch. -->
+         icon would only lead to the member roster, the one section they may read. -->
     <NuxtLink
       v-if="board.role === 'admin'"
-      :to="`/b/${board.id}/settings`"
+      :to="`/b/${board.id}/settings/board`"
       class="focus-ring surface grid size-9 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]"
       aria-label="Board settings"
       title="Board settings"

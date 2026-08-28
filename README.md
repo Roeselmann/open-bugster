@@ -112,9 +112,9 @@ Open-Bugster is one container and one data volume. From nothing to a working boa
 
    From here on the database is the only source of truth: the variables in step 4 are never read again, and passwords are changed in the app. If you mistyped something and cannot get in, see [If nobody can sign in](#if-nobody-can-sign-in).
 
-7. **Set up the board.** Rename it, adjust its lanes, and—if you have an API key—enter the credentials under **Board settings → TestFlight**, press **Test connection**, then **TestFlight Sync** in the header.
+7. **Set up the board.** Rename it, adjust its lanes, and—if you have an API key—enter the credentials under **Board settings → Integration**, press **Test connection**, then **TestFlight Sync** in the header.
 
-8. **Invite your team.** **Users** in the account menu (top right) creates an account and shows a one-time link to pass on. Then add them to the board under **Board settings → Members**, as viewer, editor, or administrator.
+8. **Invite your team.** **Users** in the account menu (top right) creates an account and shows a one-time link to pass on. Then add them to the board under **Board settings → Users**, as viewer, editor, or administrator.
 
 ### After the first start
 
@@ -130,18 +130,20 @@ Updating is `git pull && docker compose up --build -d`; schema changes are appli
 
 Open-Bugster can run several boards side by side—typically one per app. The board name in the header becomes a dropdown as soon as a second board exists; the icon next to it opens the board settings and is shown to board administrators only, since the page is theirs to act on. A newly created board is selected right away and opens its settings so lanes and credentials can be set up.
 
+The settings themselves are split into three sections: **Board** for the name, lanes, categories, and deletion, **Users** for who has access, and **Integration** for the App Store Connect key.
+
 Each board owns its lanes, categories, labels, archive, and App Store Connect credentials. Deleting a board removes all of it, including attachments and the stored key.
 
 ### Lanes
 
-Lanes are the columns of the board and are configured under **Board settings → Lanes**. Drag a lane by its handle to reorder it, or focus the handle and use the arrow keys. Top to bottom in the settings is left to right on the board.
+Lanes are the columns of the board and are configured under **Board settings → Board**. Drag a lane by its handle to reorder it, or focus the handle and use the arrow keys. Top to bottom in the settings is left to right on the board.
 
 Every board has exactly one canonical **import lane**, which is where TestFlight feedback lands. It can be renamed and reordered, but not deleted. It only appears on the board once something has actually been imported into it.
 
 When a lane is deleted, its tickets are not lost: the dialog asks whether they should move to another lane or go to the archive.
 
 <p align="center">
-<img src="docs/images/screenshot-board-settings.png">
+<img src="docs/images/screenshot-settings-board.png">
 </p>
 
 Each lane header carries a switch that shows or hides screenshot previews on its cards. The choice is remembered per lane and browser.
@@ -158,7 +160,7 @@ Cards are moved by dragging them between lanes or within a lane. On narrow scree
 
 A ticket has at most one category. New categories are created from within a ticket by typing a name that does not exist yet.
 
-Under **Board settings → Categories** each category can be renamed in place with the pencil icon and given one of eight color presets. The color is what the category pill uses on the cards and in the archive, so categories stay recognizable at a glance.
+Under **Board settings → Board** each category can be renamed in place with the pencil icon and given one of eight color presets. The color is what the category pill uses on the cards and in the archive, so categories stay recognizable at a glance.
 
 ### Labels
 
@@ -212,9 +214,25 @@ A disabled account gets no link—enable it first, since setting a password sign
 
 **Delete** removes the account outright. Its tickets, comments, and history stay on the boards but lose the person behind them. Anonymize when the history should still read as somebody's; delete only when the row itself should not exist.
 
+### Erasure without losing the work
+
+Anonymizing exists because of Article 17 of the [GDPR](https://eur-lex.europa.eu/eli/reg/2016/679/oj), the right to erasure: a person can require that their personal data be erased "without undue delay", and the controller has to comply where the data is no longer necessary for the purpose it was collected for, or the consent it rested on is withdrawn. On a shared board that is normally a painful request to receive. Deleting the account takes the person's tickets, comments, assignments, and history with it or leaves them orphaned, and a team loses a year of context to one address.
+
+The regulation does not ask for that. Personal data is what identifies someone (Article 4(1))—here the name and the email address; the tickets are not. And Recital 26 puts data that can no longer be tied back to a person outside the scope entirely: the principles of data protection "should therefore not apply to anonymous information", with identifiability judged by "all the means reasonably likely to be used" to get back to the person.
+
+So Open-Bugster separates the two. **Anonymize** clears the email, the name, and the password hash from the account row, drops the person from every board, and invalidates every session it had open. The row itself stays, and everything written by it keeps pointing at it. Because the history stores people by reference rather than by address, an entry that read *Jane Doe moved this to Review* becomes *Deleted user moved this to Review* without a single row being rewritten. The work stays legible as one person's work; the person is gone. And because the app keeps no way back—an anonymized account cannot be renamed, re-enabled, or invited back—what remains is anonymous in the sense Recital 26 means, not merely pseudonymous under Article 4(5).
+
+That also settles retention. Article 5(1)(e) allows personal data to be kept in identifying form "for no longer than is necessary"; anonymous data falls outside that limit and can stay for as long as the board is useful.
+
+**What it does not cover.** Anonymizing touches accounts, not the text on the board. A name, an address, or a device detail typed into a ticket title, a description, or a comment—or carried in an imported TestFlight report or an attachment—stays exactly where it is, and has to be edited or deleted by hand. Open-Bugster is also self-hosted, which makes whoever runs the instance the controller under Article 4(7): the legal basis, the retention policy, and answering a request inside the month Article 12(3) allows are theirs. The app gives you the means to honour an erasure request without gutting the board; it does not decide when you owe one, and it is not legal advice.
+
 ### Members of a board
 
-**Board settings → Members** lists who has access and at what role, and board administrators add and remove people and change their role there. The settings icon in the header is offered to them only; the page itself stays readable for anyone who has its address, and shows the roster without any of the controls. A board always keeps at least one administrator.
+**Board settings → Users** lists who has access and at what role, and board administrators add and remove people and change their role there. The settings icon in the header is offered to them only; anyone else who has the address lands on that one section and sees the roster without any of the controls. A board always keeps at least one administrator.
+
+<p align="center">
+<img src="docs/images/screenshot-settings-users.png">
+</p>
 
 ### Assignment and discussion
 
@@ -269,7 +287,11 @@ The key needs at least the Developer, App Manager, or Admin role for the app.
 
 ### Entering them
 
-Open **Board settings → TestFlight**, enter issuer ID, key ID, and app ID, upload the `.p8` exactly as downloaded, and save. The key is verified on upload and stored AES-256-GCM encrypted in the database; it is never written to disk and never sent back to the browser. It can be replaced or removed at any time, but never displayed again.
+Open **Board settings → Integration**, enter issuer ID, key ID, and app ID, upload the `.p8` exactly as downloaded, and save. The key is verified on upload and stored AES-256-GCM encrypted in the database; it is never written to disk and never sent back to the browser. It can be replaced or removed at any time, but never displayed again.
+
+<p align="center">
+<img src="docs/images/screenshot-settings-apple-testflight.png">
+</p>
 
 Set `BUGSTER_SECRET_KEY` in `.env` to a random 32-byte value **before** uploading a key:
 
@@ -299,7 +321,7 @@ It checks the values currently **in the form**, saved or not—so a corrected ke
 
 Installations that configured TestFlight through the `ASC_ISSUER_ID`, `ASC_KEY_ID`, `ASC_APP_ID`, and `ASC_PRIVATE_KEY_PATH` variables keep working. On the first start after the upgrade, all existing tickets become a board named **Workboard** whose lanes match the previous columns, and those four values—including the `.p8` read from `ASC_PRIVATE_KEY_PATH`—are imported into it.
 
-After that first start the variables are no longer read, and the `.p8` bind mount in `docker-compose.yml` can be removed. Verify the import under **Board settings → TestFlight** before deleting anything.
+After that first start the variables are no longer read, and the `.p8` bind mount in `docker-compose.yml` can be removed. Verify the import under **Board settings → Integration** before deleting anything.
 
 ## How Open-Bugster stores data
 
@@ -363,42 +385,3 @@ npm run build
 npm run password:hash -- "a-long-password"        # hash for APP_PASSWORD_HASH in .env
 npm run owner:reset -- you@example.com "a-password"  # restore access, see "If nobody can sign in"
 ```
-
-## API
-
-Authentication and accounts
-
-- `POST /api/auth/login`, `POST /api/auth/logout`
-- `GET /api/users`, `POST /api/users`, `PATCH /api/users/:id`, `DELETE /api/users/:id`
-- `POST /api/users/:id/invite`, `POST /api/users/:id/anonymize`
-- `GET /api/invite/:token`, `POST /api/invite/:token`
-- `PATCH /api/profile`, `POST /api/profile/password`
-
-Boards, lanes, and credentials
-
-- `GET /api/boards`, `POST /api/boards`
-- `PATCH /api/boards/:id`, `DELETE /api/boards/:id`
-- `POST /api/boards/:id/lanes`, `PATCH /api/boards/:id/lanes/:laneId`, `DELETE /api/boards/:id/lanes/:laneId`
-- `PATCH /api/boards/:id/lane-order`
-- `POST /api/boards/:id/key`, `DELETE /api/boards/:id/key`
-- `POST /api/boards/:id/test-connection`
-- `GET /api/boards/:id/members`, `GET /api/boards/:id/members/candidates`
-- `PUT /api/boards/:id/members/:userId`, `DELETE /api/boards/:id/members/:userId`
-
-Tickets
-
-- `GET /api/tickets`, `POST /api/tickets`
-- `GET /api/tickets/:id`, `PATCH /api/tickets/:id`
-- `PATCH /api/tickets/:id/position`
-- `POST /api/tickets/:id/archive`, `POST /api/tickets/:id/restore`
-- `POST /api/tickets/:id/attachments`
-- `GET /api/attachments/:id`, `DELETE /api/attachments/:id`
-
-Categories and labels
-
-- `GET /api/categories`, `PATCH /api/categories/:id`, `DELETE /api/categories/:id`
-- `GET /api/labels`
-
-TestFlight
-
-- `POST /api/import/testflight`, `GET /api/import/latest`

@@ -33,3 +33,18 @@ export function useLastBoardId() {
     default: () => null,
   })
 }
+
+/**
+ * The board named by the current `:board` route parameter. Route middleware has already
+ * loaded the list and guaranteed the parameter names a real board, so this only ever
+ * returns null while a page renders outside a board route.
+ */
+export function useCurrentBoard() {
+  const route = useRoute()
+  const boards = boardState()
+  const boardId = computed(() => String(route.params.board || ''))
+  return {
+    boardId,
+    board: computed(() => boards.value.find(item => item.id === boardId.value) || null),
+  }
+}
