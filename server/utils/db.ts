@@ -267,6 +267,7 @@ export function getDb() {
   ensureServiceIdentities(database)
   ensureApiTokens(database)
   ensureIdempotencyKeys(database)
+  ensureWebhooks(database)
   database.exec(boardIndexes)
   database.exec(personIndexes)
   clearImportedDescriptions(database)
@@ -1485,6 +1486,52 @@ export function saveIdempotent(key: string, principalId: string, record: Idempot
 export function pruneIdempotent(hours = 24): number {
   const cutoff = new Date(Date.now() - hours * 3_600_000).toISOString()
   return getDb().prepare('DELETE FROM idempotency_keys WHERE created_at < ?').run(cutoff).changes
+}
+
+/**
+ * Where a board sends its events, and what happened when it tried.
+ *
+ * Board-scoped rather than instance-wide: a webhook spends the trust of the board whose
+ * tickets it describes, and a board admin should be able to wire up their own without being
+ * handed every other board's activity.
+ *
+ * The secret is stored in the clear on purpose — unlike a password or a token, the server has
+ * to reproduce it to sign each delivery, so there is nothing a hash could be checked against.
+ * It is generated here rather than supplied, so it is always long enough to matter.
+ */
+export function ensureWebhooks(db: Database.Database) {
+  const existed = Boolean(db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'webhooks'").get())
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS webhooks (
+      id TEXT PRIMARY KEY,
+      board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      secret TEXT NOT NULL,
+      events TEXT NOT NULL DEFAULT '[]',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      description TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      created_by TEXT,
+      /* Set when deliveries have failed for long enough that nobody is listening. */
+      disabled_at TEXT,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
+      last_delivery_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_webhooks_board ON webhooks(board_id, enabled);
+
+    CREATE TABLE IF NOT EXISTS webhook_deliveries (
+      id TEXT PRIMARY KEY,
+      webhook_id TEXT NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+      event TEXT NOT NULL,
+      at TEXT NOT NULL,
+      attempt INTEGER NOT NULL DEFAULT 1,
+      status INTEGER,
+      error TEXT,
+      duration_ms INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries ON webhook_deliveries(webhook_id, at DESC);
+  `)
+  return !existed
 }
 
 type BoardRow = {

@@ -181,8 +181,9 @@ describe('the operation registry', () => {
       const unaudited = [...ops.operations.values()]
         .filter(operation => operation.audit === false)
         .map(operation => operation.name)
-      // Everything left is a read; the naming convention is what makes that checkable.
-      expect(unaudited.every(name => /\.(list|get|activity|status|candidates)$/.test(name))).toBe(true)
+      // Everything left is a read; the naming convention is what makes that checkable. A write
+      // that does not end in one of these words fails here, which is the point.
+      expect(unaudited.every(name => /\.(list|get|activity|status|candidates|deliveries)$/.test(name)), unaudited.join(', ')).toBe(true)
     })
   })
 

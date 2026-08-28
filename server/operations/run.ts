@@ -2,6 +2,7 @@ import { createError } from 'h3'
 import { requireBoardAccess, requireCommentAccess, requireInstanceAdmin, requireTicketAccess } from '../utils/access'
 import type { Actor } from '../utils/actor'
 import { writeAudit, type AuditResult } from '../utils/audit'
+import { dispatch, eventForOperation } from '../utils/webhook'
 import { validationError } from '../utils/validation'
 import type { AuditSpec, Operation, OperationContext } from './types'
 
@@ -38,6 +39,7 @@ export async function run<I, O>(operation: Operation<I, O>, actor: Actor, rawInp
   try {
     const result = await operation.run(context, input)
     record(operation, actor, input, result, 'ok', context.boardId, options)
+    announce(operation, actor, context.boardId, result)
     return result
   } catch (error) {
     const status = (error as { statusCode?: number }).statusCode
@@ -128,4 +130,28 @@ function selectChanges<I>(spec: AuditSpec<I>, input: I, result: unknown): Record
 export function orNotFound<T>(value: T | null | undefined, what: string): T {
   if (value === null || value === undefined) throw createError({ statusCode: 404, statusMessage: `${what} not found.` })
   return value
+}
+
+
+/**
+ * Tells the board's webhooks what just happened.
+ *
+ * Sits beside the audit write for the same reason: an operation cannot be added that quietly
+ * stops emitting, because neither is the operation's job to remember. Only successful writes
+ * are announced — a refusal belongs in the audit log, not in somebody's workflow.
+ *
+ * Wrapped and never awaited: a dead receiver must not be able to fail, or even slow, the
+ * request that produced the event.
+ */
+function announce<I, O>(operation: Operation<I, O>, actor: Actor, boardId: string | null, result: O) {
+  const event = eventForOperation[operation.name]
+  if (!event || !boardId) return
+  try {
+    dispatch(boardId, event, {
+      actor: { principalId: actor.principalId, agentId: actor.agentId, channel: actor.channel },
+      data: result
+    })
+  } catch (error) {
+    console.warn(`[open-bugster] could not dispatch ${event}:`, (error as Error).message)
+  }
 }
