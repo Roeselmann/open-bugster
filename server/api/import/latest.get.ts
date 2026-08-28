@@ -1,9 +1,5 @@
-import { latestSyncRun } from '~~/server/utils/db'
-import { requireBoardAccess } from '~~/server/utils/access'
+import { run, importStatus } from '~~/server/operations'
 import { sessionActor } from '~~/server/utils/actor'
 
-export default defineEventHandler((event) => {
-  const boardId = String(getQuery(event).boardId || '')
-  requireBoardAccess(sessionActor(event), boardId)
-  return { run: latestSyncRun(boardId) }
-})
+export default defineEventHandler(event =>
+  run(importStatus, sessionActor(event), { boardId: String(getQuery(event).boardId || '') }))

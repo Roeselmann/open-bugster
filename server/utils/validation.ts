@@ -1,3 +1,4 @@
+import { createError } from 'h3'
 import { z } from 'zod'
 import { boardRoles, categoryColors, userRoles, userStatuses } from '../../shared/types/domain'
 

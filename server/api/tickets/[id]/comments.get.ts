@@ -1,9 +1,5 @@
-import { listComments } from '~~/server/utils/db'
-import { requireTicketAccess } from '~~/server/utils/access'
+import { run, commentList } from '~~/server/operations'
 import { sessionActor } from '~~/server/utils/actor'
 
-export default defineEventHandler((event) => {
-  const id = getRouterParam(event, 'id') || ''
-  requireTicketAccess(sessionActor(event), id)
-  return { comments: listComments(id) }
-})
+export default defineEventHandler(event =>
+  run(commentList, sessionActor(event), { ticketId: getRouterParam(event, 'id') || '' }))

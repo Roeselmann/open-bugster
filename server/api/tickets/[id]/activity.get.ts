@@ -1,9 +1,5 @@
-import { listActivity } from '~~/server/utils/db'
-import { requireTicketAccess } from '~~/server/utils/access'
+import { run, ticketActivity } from '~~/server/operations'
 import { sessionActor } from '~~/server/utils/actor'
 
-export default defineEventHandler((event) => {
-  const id = getRouterParam(event, 'id') || ''
-  requireTicketAccess(sessionActor(event), id)
-  return { activity: listActivity(id) }
-})
+export default defineEventHandler(event =>
+  run(ticketActivity, sessionActor(event), { ticketId: getRouterParam(event, 'id') || '' }))

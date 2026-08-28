@@ -1,22 +1,9 @@
-import { deleteLane, findLane, LaneDeleteError } from '~~/server/utils/db'
-import { requireBoardAccess } from '~~/server/utils/access'
-import { laneDeleteSchema, validationError } from '~~/server/utils/validation'
+import { run, laneDelete } from '~~/server/operations'
 import { sessionActor } from '~~/server/utils/actor'
 
-export default defineEventHandler(async (event) => {
-  const boardId = getRouterParam(event, 'id') || ''
-  const laneId = getRouterParam(event, 'laneId') || ''
-  requireBoardAccess(sessionActor(event), boardId, 'admin')
-  const existing = findLane(laneId)
-  if (!existing || existing.boardId !== boardId) throw createError({ statusCode: 404, statusMessage: 'Lane not found.' })
-
-  const parsed = laneDeleteSchema.safeParse(await readBody(event))
-  if (!parsed.success) throw validationError(parsed.error)
-
-  try {
-    return { lanes: deleteLane(laneId, parsed.data.mode, parsed.data.mode === 'move' ? parsed.data.targetLaneId : undefined) }
-  } catch (error) {
-    if (error instanceof LaneDeleteError) throw createError({ statusCode: error.statusCode, statusMessage: error.message })
-    throw error
-  }
-})
+export default defineEventHandler(async (event) =>
+  run(laneDelete, sessionActor(event), {
+    ...await readBody(event),
+    boardId: getRouterParam(event, 'id') || '',
+    laneId: getRouterParam(event, 'laneId') || ''
+  }))

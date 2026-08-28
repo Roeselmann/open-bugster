@@ -1,12 +1,8 @@
-import { createBoard } from '~~/server/utils/db'
-import { requireInstanceAdmin } from '~~/server/utils/access'
-import { boardCreateSchema, validationError } from '~~/server/utils/validation'
+import { run, boardCreate } from '~~/server/operations'
 import { sessionActor } from '~~/server/utils/actor'
 
 export default defineEventHandler(async (event) => {
-  const account = requireInstanceAdmin(sessionActor(event))
-  const parsed = boardCreateSchema.safeParse(await readBody(event))
-  if (!parsed.success) throw validationError(parsed.error)
+  const result = await run(boardCreate, sessionActor(event), await readBody(event))
   setResponseStatus(event, 201)
-  return { board: createBoard(parsed.data.name, account.id) }
+  return result
 })

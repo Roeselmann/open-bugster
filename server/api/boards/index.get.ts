@@ -1,5 +1,4 @@
-import { listBoards } from '~~/server/utils/db'
-import { boardViewer } from '~~/server/utils/access'
+import { run, boardList } from '~~/server/operations'
 import { sessionActor } from '~~/server/utils/actor'
 
-export default defineEventHandler(event => ({ boards: listBoards(boardViewer(sessionActor(event).principal)) }))
+export default defineEventHandler(event => run(boardList, sessionActor(event), {}))

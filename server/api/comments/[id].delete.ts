@@ -1,11 +1,8 @@
-import { deleteComment } from '~~/server/utils/db'
-import { requireCommentAccess } from '~~/server/utils/access'
+import { run, commentRemove } from '~~/server/operations'
 import { sessionActor } from '~~/server/utils/actor'
 
-export default defineEventHandler((event) => {
-  const id = getRouterParam(event, 'id') || ''
-  requireCommentAccess(sessionActor(event), id)
-  if (!deleteComment(id)) throw createError({ statusCode: 404, statusMessage: 'Comment not found.' })
+export default defineEventHandler(async (event) => {
+  await run(commentRemove, sessionActor(event), { commentId: getRouterParam(event, 'id') || '' })
   setResponseStatus(event, 204)
   return null
 })

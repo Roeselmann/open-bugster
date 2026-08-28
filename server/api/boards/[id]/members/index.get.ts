@@ -1,9 +1,5 @@
-import { boardMembers } from '~~/server/utils/db'
-import { requireBoardAccess } from '~~/server/utils/access'
+import { run, memberList } from '~~/server/operations'
 import { sessionActor } from '~~/server/utils/actor'
 
-export default defineEventHandler((event) => {
-  const id = getRouterParam(event, 'id') || ''
-  requireBoardAccess(sessionActor(event), id)
-  return { members: boardMembers(id) }
-})
+export default defineEventHandler(event =>
+  run(memberList, sessionActor(event), { boardId: getRouterParam(event, 'id') || '' }))

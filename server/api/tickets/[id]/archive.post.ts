@@ -1,11 +1,5 @@
-import { archiveTicket } from '~~/server/utils/db'
-import { requireTicketAccess } from '~~/server/utils/access'
+import { run, ticketArchive } from '~~/server/operations'
 import { sessionActor } from '~~/server/utils/actor'
 
-export default defineEventHandler((event) => {
-  const id = getRouterParam(event, 'id') || ''
-  const { actor } = requireTicketAccess(sessionActor(event), id, 'editor')
-  const ticket = archiveTicket(id, actor)
-  if (!ticket) throw createError({ statusCode: 404, statusMessage: 'Ticket not found.' })
-  return { ticket }
-})
+export default defineEventHandler(event =>
+  run(ticketArchive, sessionActor(event), { ticketId: getRouterParam(event, 'id') || '' }))
