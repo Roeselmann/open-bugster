@@ -1,10 +1,34 @@
 <script setup lang="ts">
-import { ArrowRight, Bug, UserPlus } from '@lucide/vue'
+import { ArrowRight, Bug, KeyRound, UserPlus } from '@lucide/vue'
 
 const route = useRoute()
 const token = computed(() => String(route.params.token || ''))
 
-const { data, error } = await useFetch<{ invite: { email: string; firstName: string; lastName: string } }>(`/api/invite/${token.value}`)
+const { data, error } = await useFetch<{
+  invite: { email: string; firstName: string; lastName: string; purpose: 'invite' | 'reset' }
+}>(`/api/invite/${token.value}`)
+
+/** The same link serves a new account and a forgotten password; only the wording differs. */
+const copy = computed(() => {
+  const invited = data.value?.invite
+  return invited?.purpose === 'reset'
+    ? {
+        icon: KeyRound,
+        heading: 'Set a new password',
+        lead: 'Choose a new password for',
+        trailer: '. Signing in with the old one stops working right away.',
+        submit: 'Save password',
+        pending: 'Saving…',
+      }
+    : {
+        icon: UserPlus,
+        heading: invited?.firstName ? `Welcome, ${invited.firstName}` : 'Welcome',
+        lead: 'Choose a password for',
+        trailer: ' to finish setting up your account.',
+        submit: 'Create account',
+        pending: 'Setting up…',
+      }
+})
 
 const form = reactive({ password: '', repeat: '' })
 const loading = ref(false)
@@ -41,15 +65,15 @@ async function accept() {
       <div class="surface-strong rounded-[28px] p-6 shadow-2xl shadow-black/5 sm:p-8">
         <div v-if="error" class="text-center">
           <h2 class="text-2xl font-bold tracking-[-.04em]">This link no longer works</h2>
-          <p class="muted mt-2 text-sm leading-relaxed">Invitations expire after seven days and can only be used once. Ask an administrator for a fresh one.</p>
+          <p class="muted mt-2 text-sm leading-relaxed">These links expire after seven days and can only be used once. Ask an administrator for a fresh one.</p>
           <NuxtLink to="/login" class="focus-ring mt-6 inline-flex h-12 w-full items-center justify-center rounded-xl bg-[var(--ink)] font-semibold text-[var(--canvas)] transition hover:opacity-85">Back to sign-in</NuxtLink>
         </div>
 
         <template v-else>
           <div class="mb-7">
-            <span class="mb-4 grid size-10 place-items-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]"><UserPlus :size="19" /></span>
-            <h2 class="text-2xl font-bold tracking-[-.04em]">Welcome, {{ data?.invite.firstName }}</h2>
-            <p class="muted mt-2 text-sm leading-relaxed">Choose a password for <strong class="font-semibold text-[var(--ink)]">{{ data?.invite.email }}</strong> to finish setting up your account.</p>
+            <span class="mb-4 grid size-10 place-items-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]"><component :is="copy.icon" :size="19" /></span>
+            <h2 class="text-2xl font-bold tracking-[-.04em]">{{ copy.heading }}</h2>
+            <p class="muted mt-2 text-sm leading-relaxed">{{ copy.lead }} <strong class="font-semibold text-[var(--ink)]">{{ data?.invite.email }}</strong>{{ copy.trailer }}</p>
           </div>
 
           <form class="space-y-4" @submit.prevent="accept">
@@ -64,7 +88,7 @@ async function accept() {
             <p v-if="mismatch" class="text-sm font-medium text-rose-600">The two entries do not match.</p>
             <p v-if="errorMessage" role="alert" class="rounded-xl bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-600">{{ errorMessage }}</p>
             <button :disabled="loading || mismatch" class="focus-ring flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[var(--ink)] font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50">
-              {{ loading ? 'Setting up…' : 'Create account' }} <ArrowRight v-if="!loading" :size="17" />
+              {{ loading ? copy.pending : copy.submit }} <ArrowRight v-if="!loading" :size="17" />
             </button>
           </form>
         </template>

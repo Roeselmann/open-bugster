@@ -55,7 +55,7 @@ const confirmation = ref<PendingConfirmation | null>(null)
 const confirmationPending = ref(false)
 const { notice, notify, closeNotice } = useNotify()
 const { user } = useAuth()
-const ownEmail = computed(() => (user.value?.email || '').toLocaleLowerCase('en'))
+const ownId = computed(() => user.value?.id || '')
 
 // Viewers read and comment; changing the board itself needs at least `editor`.
 const canEdit = computed(() => board.value?.role !== 'viewer')
@@ -84,8 +84,8 @@ const assigneeFilterOptions = computed(() => [
   { value: 'mine', label: 'Assigned to me' },
   { value: 'unassigned', label: 'Unassigned' },
   ...(board.value?.members || [])
-    .filter(member => member.email.toLocaleLowerCase('en') !== ownEmail.value)
-    .map(member => ({ value: member.email, label: displayName(member) })),
+    .filter(member => member.userId !== ownId.value)
+    .map(member => ({ value: member.userId, label: displayName(member) })),
 ])
 
 // Losing a member would otherwise leave a filter selected that matches nothing.
@@ -111,7 +111,11 @@ const confirmationCopy = computed(() => {
   }
   return {
     title: 'Archive ticket?',
-    description: `“${action.ticket.title}” will be removed from the board.`,
+    // Archiving is no longer something an editor can walk back on their own, so the dialog
+    // says who can, rather than letting the ticket simply vanish.
+    description: canModerate.value
+      ? `“${action.ticket.title}” will be removed from the board. You can restore it from the archive.`
+      : `“${action.ticket.title}” will be removed from the board and moves into the archive, which a board administrator can restore it from.`,
     confirmLabel: 'Archive',
   }
 })
@@ -124,10 +128,10 @@ const filteredTickets = computed(() => {
     // A ticket qualifies when it carries any of the picked labels.
     const matchesLabels = !labelFilter.value.length
       || ticket.labels.some(label => labelFilter.value.includes(label.id))
-    const assignee = ticket.assignee?.email.toLocaleLowerCase('en') || null
+    const assignee = ticket.assignee?.id || null
     const matchesAssignee = assigneeFilter.value === 'all'
       || (assigneeFilter.value === 'unassigned' && !assignee)
-      || (assigneeFilter.value === 'mine' ? assignee === ownEmail.value : assignee === assigneeFilter.value.toLocaleLowerCase('en'))
+      || (assigneeFilter.value === 'mine' ? assignee === ownId.value : assignee === assigneeFilter.value)
     const matchesText = !term || [
       ticket.title,
       ticket.description,
@@ -163,7 +167,7 @@ function openTicket(ticket: Ticket) {
   editorOpen.value = true
 }
 
-async function saveTicket(payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeEmail?: string | null; labels?: string[]; categoryName?: string | null; todos: TicketTodoInput[]; attachments: File[] }) {
+async function saveTicket(payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; todos: TicketTodoInput[]; attachments: File[] }) {
   saving.value = true
   const wasEdit = Boolean(selected.value)
   try {
@@ -289,7 +293,7 @@ async function sync() {
 
 <template>
   <div v-if="board" class="min-h-screen">
-    <AppHeader :board-id="board.id" :syncing="syncing" :latest-run="syncData?.run || null" :can-sync="canEdit" @sync="sync" />
+    <AppHeader :board-id="board.id" :syncing="syncing" :latest-run="syncData?.run || null" :can-sync="canModerate" :can-view-archive="canModerate" @sync="sync" />
 
     <main class="mx-auto max-w-[1800px] px-4 py-6 sm:px-6">
       <div class="mb-6 flex flex-col gap-4 md:flex-row md:items-end">

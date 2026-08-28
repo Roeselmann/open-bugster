@@ -28,9 +28,9 @@ const imageAttachment = computed(() => props.showScreenshot
   : null)
 const authorText = computed(() => {
   const author = props.ticket.author || props.ticket.feedback?.tester
-  return author ? displayName(author) : props.ticket.feedback?.testerEmail || null
+  return author ? displayName(author) : null
 })
-const authorTitle = computed(() => props.ticket.author?.email || props.ticket.feedback?.testerEmail || '')
+const authorTitle = computed(() => props.ticket.author?.email || props.ticket.feedback?.tester?.email || '')
 const completedTodoCount = computed(() => props.ticket.todos.filter(todo => todo.completed).length)
 const laneOptions = computed(() => props.lanes.map(lane => ({ value: lane.id, label: lane.name })))
 </script>

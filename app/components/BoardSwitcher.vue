@@ -102,7 +102,10 @@ async function createBoard() {
       </DropdownMenuPortal>
     </DropdownMenuRoot>
 
+    <!-- Everything the page offers belongs to board administrators, so for anyone else the
+         icon would only lead to a read-only copy of settings they cannot touch. -->
     <NuxtLink
+      v-if="board.role === 'admin'"
       :to="`/b/${board.id}/settings`"
       class="focus-ring surface grid size-9 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]"
       aria-label="Board settings"

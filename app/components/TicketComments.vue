@@ -31,7 +31,7 @@ async function load() {
 watch(() => props.ticketId, load, { immediate: true })
 
 function mayEdit(comment: TicketComment) {
-  return props.canModerate || comment.authorEmail.toLowerCase() === (user.value?.email || '').toLowerCase()
+  return props.canModerate || (Boolean(comment.authorId) && comment.authorId === user.value?.id)
 }
 
 async function post() {
@@ -100,7 +100,7 @@ async function remove(comment: TicketComment) {
           <UiAvatar :person="comment.author" size="sm" />
           <div class="min-w-0 flex-1">
             <p class="truncate text-sm font-semibold">
-              {{ comment.author ? displayName(comment.author) : comment.authorEmail || 'Unknown' }}
+              {{ comment.author ? displayName(comment.author) : 'Unknown' }}
             </p>
             <p class="muted text-[11px]">
               {{ timeFormat.format(new Date(comment.createdAt)) }}
@@ -108,10 +108,10 @@ async function remove(comment: TicketComment) {
             </p>
           </div>
           <template v-if="mayEdit(comment) && editingId !== comment.id">
-            <button type="button" class="focus-ring grid size-7 place-items-center rounded-lg text-[var(--muted)] transition hover:bg-[var(--panel)] hover:text-[var(--ink)]" :aria-label="`Edit comment by ${comment.authorEmail}`" @click="startEdit(comment)">
+            <button type="button" class="focus-ring grid size-7 place-items-center rounded-lg text-[var(--muted)] transition hover:bg-[var(--panel)] hover:text-[var(--ink)]" :aria-label="`Edit comment by ${comment.author ? displayName(comment.author) : 'Unknown'}`" @click="startEdit(comment)">
               <Pencil :size="14" />
             </button>
-            <button type="button" class="focus-ring grid size-7 place-items-center rounded-lg text-rose-600 transition hover:bg-rose-500/10" :disabled="busyId === comment.id" :aria-label="`Delete comment by ${comment.authorEmail}`" @click="remove(comment)">
+            <button type="button" class="focus-ring grid size-7 place-items-center rounded-lg text-rose-600 transition hover:bg-rose-500/10" :disabled="busyId === comment.id" :aria-label="`Delete comment by ${comment.author ? displayName(comment.author) : 'Unknown'}`" @click="remove(comment)">
               <Trash2 :size="14" />
             </button>
           </template>

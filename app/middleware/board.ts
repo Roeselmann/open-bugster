@@ -6,6 +6,9 @@ import { loadBoards } from '~/composables/useBoards'
  */
 export default defineNuxtRouteMiddleware(async (to) => {
   const boards = await loadBoards()
-  if (boards.some(board => board.id === to.params.board)) return
-  return navigateTo(boards[0] ? `/b/${boards[0].id}` : '/', { replace: true })
+  const board = boards.find(item => item.id === to.params.board)
+  if (!board) return navigateTo(boards[0] ? `/b/${boards[0].id}` : '/', { replace: true })
+  // The archive is for the board's administrators, and so is the list it opens with — the
+  // page has to be turned away here rather than left to fail on its own first request.
+  if (to.path.endsWith('/archive') && board.role !== 'admin') return navigateTo(`/b/${board.id}`, { replace: true })
 })

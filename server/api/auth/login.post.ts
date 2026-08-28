@@ -15,7 +15,7 @@ export default defineEventHandler(async (event) => {
   touchLastLogin(account.id)
   const user = {
     id: account.id,
-    email: account.email,
+    email: account.email!,
     firstName: account.firstName,
     lastName: account.lastName,
     role: account.role,

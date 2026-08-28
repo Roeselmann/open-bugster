@@ -16,7 +16,7 @@ import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; saving?: boolean; deletingAttachmentId?: string | null }>(), { canEdit: true })
 const emit = defineEmits<{
   close: []
-  save: [payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeEmail?: string | null; labels?: string[]; categoryName?: string | null; todos: TicketTodoInput[]; attachments: File[] }]
+  save: [payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; todos: TicketTodoInput[]; attachments: File[] }]
   commented: []
   notify: [type: 'success' | 'error', text: string]
   move: [ticket: Ticket, laneId: string]
@@ -24,7 +24,7 @@ const emit = defineEmits<{
   removeAttachment: [attachment: Attachment]
 }>()
 
-const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', assigneeEmail: 'unassigned', labels: [] as string[], categoryName: '' })
+const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '' })
 interface EditableTodo extends TicketTodoInput { key: string }
 const todos = ref<EditableTodo[]>([])
 let todoSequence = 0
@@ -32,22 +32,27 @@ const isEdit = computed(() => Boolean(props.ticket))
 const isManual = computed(() => !props.ticket || props.ticket.source === 'manual')
 const titleInput = ref<HTMLTextAreaElement | null>(null)
 
-// Imported tickets carry no author — the person behind them is the TestFlight tester, who
-// shows up as a colleague as soon as an account carries the same address.
+// An import only gains an author when its tester already had an account, so most of them
+// show the tester instead — who becomes a colleague the moment somebody invites them.
 const person = computed(() => {
   const author = props.ticket?.author
-  if (author) return { name: displayName(author), email: author.email, role: 'Author' }
+  if (author) return { name: displayName(author), email: author.email || '', role: 'Author' }
   const tester = props.ticket?.feedback?.tester
-  return tester ? { name: displayName(tester), email: tester.email, role: 'TestFlight tester' } : null
+  return tester ? { name: displayName(tester), email: tester.email || '', role: 'TestFlight tester' } : null
 })
 
-// reka-ui refuses an empty `SelectItem` value, so "nobody" needs a sentinel. No email can
-// collide with it, since every address contains an "@".
+// reka-ui refuses an empty `SelectItem` value, so "nobody" needs a sentinel. No id can
+// collide with it, since every id is a uuid.
 const UNASSIGNED = 'unassigned'
-const assigneeOptions = computed(() => [
-  { value: UNASSIGNED, label: 'Unassigned' },
-  ...(props.members || []).map(member => ({ value: member.email, label: displayName(member) })),
-])
+const memberOptions = computed(() => (props.members || []).map(member => ({ value: member.userId, label: displayName(member) })))
+const assigneeOptions = computed(() => [{ value: UNASSIGNED, label: 'Unassigned' }, ...memberOptions.value])
+
+/**
+ * Attribution is a claim about who reported something, so correcting it stays with the
+ * board's admins. Only imports need it: a ticket filed here already knows who wrote it.
+ */
+const canAttribute = computed(() => Boolean(props.canModerate && props.ticket && !isManual.value))
+const authorOptions = computed(() => [{ value: UNASSIGNED, label: 'Nobody' }, ...memberOptions.value])
 const commentRefreshKey = ref(0)
 
 /**
@@ -86,7 +91,8 @@ watch(() => props.ticket, (ticket, previous) => {
   form.priority = ticket?.priority || 'medium'
   form.dueDate = ticket?.dueDate || ''
   form.buildNumber = ticket?.buildNumber || ''
-  form.assigneeEmail = ticket?.assignee?.email || UNASSIGNED
+  form.assigneeId = ticket?.assignee?.id || UNASSIGNED
+  form.authorId = ticket?.author?.id || UNASSIGNED
   commentsOpen.value = (ticket?.commentCount || 0) > 0
   form.labels = ticket?.labels.map(label => label.name) || []
   form.categoryName = ticket?.category?.name || ''
@@ -98,9 +104,11 @@ function submit() {
   const cleanTodos = todos.value
     .map(todo => ({ text: todo.text.trim(), completed: todo.completed }))
     .filter(todo => todo.text)
-  const shared = { todos: cleanTodos, attachments: [...pendingFiles.value], assigneeEmail: form.assigneeEmail === UNASSIGNED ? null : form.assigneeEmail }
+  const shared = { todos: cleanTodos, attachments: [...pendingFiles.value], assigneeId: form.assigneeId === UNASSIGNED ? null : form.assigneeId }
   const manualFields = isManual.value ? { buildNumber: form.buildNumber.trim() || null } : {}
-  emit('save', { ...shared, ...manualFields, title: form.title.trim(), description: form.description, priority: form.priority, dueDate: form.dueDate || null, labels: [...form.labels], categoryName: form.categoryName.trim() || null })
+  // Sent only by somebody allowed to set it — the API rejects it from anyone else.
+  const authorFields = canAttribute.value ? { authorId: form.authorId === UNASSIGNED ? null : form.authorId } : {}
+  emit('save', { ...shared, ...manualFields, ...authorFields, title: form.title.trim(), description: form.description, priority: form.priority, dueDate: form.dueDate || null, labels: [...form.labels], categoryName: form.categoryName.trim() || null })
 }
 
 function focusTodo(key: string) {
@@ -439,11 +447,22 @@ function focusTitle(event: Event) {
             <div class="block">
               <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><UserRound :size="14" /> Assignee</span>
               <UiSelect
-                :model-value="form.assigneeEmail"
+                :model-value="form.assigneeId"
                 :options="assigneeOptions"
                 aria-label="Assignee"
-                @update:model-value="form.assigneeEmail = $event"
+                @update:model-value="form.assigneeId = $event"
               />
+            </div>
+
+            <div v-if="canAttribute" class="block">
+              <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><UserRound :size="14" /> Author</span>
+              <UiSelect
+                :model-value="form.authorId"
+                :options="authorOptions"
+                aria-label="Author"
+                @update:model-value="form.authorId = $event"
+              />
+              <p class="muted mt-2 text-xs">Who really reported this. Imports name their tester automatically when that person already has an account.</p>
             </div>
 
             <div class="grid gap-4 sm:grid-cols-2">
@@ -556,7 +575,7 @@ function focusTitle(event: Event) {
                 <div><dt class="muted mb-1">Device</dt><dd class="font-semibold">{{ ticket.feedback.deviceModel || '–' }}</dd></div>
                 <div><dt class="muted mb-1">System</dt><dd class="font-semibold">{{ ticket.feedback.osVersion || '–' }}</dd></div>
                 <div><dt class="muted mb-1">Language</dt><dd class="font-semibold">{{ ticket.feedback.locale || '–' }}</dd></div>
-                <div><dt class="muted mb-1">Tester</dt><dd class="truncate font-semibold" :title="ticket.feedback.testerEmail || ''">{{ ticket.feedback.testerEmail || '–' }}</dd></div>
+                <div><dt class="muted mb-1">Tester</dt><dd class="truncate font-semibold" :title="ticket.feedback.tester?.email || ''">{{ ticket.feedback.tester ? displayName(ticket.feedback.tester) : '–' }}</dd></div>
               </dl>
               <div v-if="ticket.feedback.comment" class="mt-4 border-t border-[color-mix(in_srgb,var(--accent)_20%,transparent)] pt-4">
                 <p class="muted mb-1 text-[11px] font-semibold uppercase tracking-wider">Original message</p>

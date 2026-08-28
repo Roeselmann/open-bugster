@@ -41,16 +41,19 @@ describe('accounts and membership', () => {
     expect(db.countUsers()).toBe(1)
   })
 
-  it('associates a ticket with an account that is created later', () => {
-    const ticket = db.createTicket(boardId, { title: 'Written before the account existed' }, {
-      firstName: 'Jane', lastName: 'Doe', email: 'jane@example.com', userId: null, status: null
-    })!
-    expect(db.findTicket(ticket.id)?.author).toMatchObject({ email: 'jane@example.com', userId: null, status: null })
+  it('gives an address with no account a contact row, and hands the same row to the invitation', () => {
+    const contactId = db.upsertContactByEmail('jane@example.com', { firstName: 'Jane', lastName: 'Doe' })
+    const ticket = db.createTicket(boardId, { title: 'Written before the account existed' }, db.personById(contactId))!
+    expect(db.findTicket(ticket.id)?.author).toMatchObject({ id: contactId, email: 'jane@example.com', isAccount: false, status: null })
+    // A contact is not an account: it must not show up in the admin list or the login path.
+    expect(db.listUsers().some(user => user.id === contactId)).toBe(false)
+    expect(db.findUserByEmail('jane@example.com')).toBeNull()
 
     const jane = db.createUser({ email: 'JANE@example.com', firstName: 'Jane', lastName: 'Roe', role: 'member' })
-    const resolved = db.findTicket(ticket.id)!.author!
-    // Retroactive, and the account's own name wins over the snapshot taken at write time.
-    expect(resolved).toMatchObject({ userId: jane.id, lastName: 'Roe', status: 'invited' })
+    // The invitation claimed the contact rather than opening a second row, so the ticket is
+    // already hers — nothing pointing at her had to be rewritten.
+    expect(jane.id).toBe(contactId)
+    expect(db.findTicket(ticket.id)?.author).toMatchObject({ id: contactId, lastName: 'Roe', isAccount: true, status: 'invited' })
   })
 
   it('associates an imported TestFlight tester with an account that is created later', () => {
@@ -61,12 +64,33 @@ describe('accounts and membership', () => {
       deviceModel: null, osVersion: null, locale: null, buildId: null, buildVersion: null,
       buildBundleId: null, sourceCreatedAt: new Date().toISOString(), raw: {}
     })
-    expect(db.findTicket(ticket.id)?.feedback?.tester).toMatchObject({ email: 'tester@example.com', userId: null })
+    const tester = db.findTicket(ticket.id)!.feedback!.tester!
+    expect(tester).toMatchObject({ email: 'tester@example.com', isAccount: false })
+    // Nobody had an account at import time, so there is no author to attribute it to.
+    expect(db.findTicket(ticket.id)?.author).toBeNull()
 
-    const tester = db.createUser({ email: 'tester@example.com', firstName: 'Tess', lastName: 'Ter', role: 'member' })
-    expect(db.findTicket(ticket.id)?.feedback?.tester).toMatchObject({ userId: tester.id, firstName: 'Tess' })
-    // The raw address is still reported next to it, unchanged.
-    expect(db.findTicket(ticket.id)?.feedback?.testerEmail).toBe('tester@example.com')
+    const account = db.createUser({ email: 'tester@example.com', firstName: 'Tess', lastName: 'Ter', role: 'member' })
+    expect(account.id).toBe(tester.id)
+    expect(db.findTicket(ticket.id)?.feedback?.tester).toMatchObject({ id: tester.id, firstName: 'Tess', isAccount: true })
+  })
+
+  it('attributes an import to the tester when they already have an account, unless the board says otherwise', () => {
+    const importLane = db.importLaneFor(boardId)!
+    const known = db.createUser({ email: 'known@example.com', firstName: 'Nova', lastName: 'Known', role: 'member' })
+    const base = {
+      boardId, laneId: importLane.id, type: 'screenshot' as const, title: 'From a colleague',
+      comment: 'Broken', testerEmail: 'known@example.com', deviceModel: null, osVersion: null,
+      locale: null, buildId: null, buildVersion: null, buildBundleId: null,
+      sourceCreatedAt: new Date().toISOString(), raw: {}
+    }
+
+    const attributed = db.insertImportedTicket({ ...base, externalId: 'apple-auto-author-on' })
+    expect(db.findTicket(attributed.id)?.author).toMatchObject({ id: known.id, isAccount: true })
+
+    const anonymous = db.insertImportedTicket({ ...base, externalId: 'apple-auto-author-off', autoAuthor: false })
+    // The tester is still recorded on the feedback; only the attribution is withheld.
+    expect(db.findTicket(anonymous.id)?.author).toBeNull()
+    expect(db.findTicket(anonymous.id)?.feedback?.tester).toMatchObject({ id: known.id })
   })
 
   it('retires an invitation without touching the account', () => {
@@ -81,6 +105,28 @@ describe('accounts and membership', () => {
     // The account survives, it simply has no way in until a new link is issued.
     expect(db.findUser(invited.id)).not.toBeNull()
     db.deleteUser(invited.id)
+  })
+
+  it('lets a forgotten password be replaced through a fresh link, and drops the old sessions', () => {
+    const forgetful = db.createUser({ email: 'forgetful@example.com', firstName: 'Fred', lastName: 'Getful', role: 'member' })
+    const active = db.setUserPassword(forgetful.id, 'scrypt$first$hash')!
+    expect(active).toMatchObject({ status: 'active', inviteTokenHash: null })
+
+    // The same mechanism the invitation uses, on an account that already has a password.
+    db.setInviteToken(forgetful.id, 'reset-token-hash', new Date(Date.now() + 60_000).toISOString())
+    const pending = db.findUserByInviteToken('reset-token-hash')!
+    expect(pending).toMatchObject({ id: forgetful.id, status: 'active' })
+    // The old password keeps working until the link is used, so a link left uncollected
+    // does not lock anybody out.
+    expect(pending.passwordHash).toBe('scrypt$first$hash')
+
+    const reset = db.setUserPassword(forgetful.id, 'scrypt$second$hash')!
+    expect(reset).toMatchObject({ status: 'active', passwordHash: 'scrypt$second$hash', inviteTokenHash: null, inviteExpiresAt: null })
+    // Every session signed in with the forgotten password is invalidated, and the link
+    // itself is single-use.
+    expect(reset.sessionVersion).toBe(active.sessionVersion + 1)
+    expect(db.findUserByInviteToken('reset-token-hash')).toBeNull()
+    db.deleteUser(forgetful.id)
   })
 
   it('shows a user only the boards they are a member of', () => {
@@ -127,11 +173,14 @@ describe('accounts and membership', () => {
     const ticket = db.createTicket(boardId, { title: 'Needs an owner', laneId: laneIdByName.Backlog }, null)!
     expect(ticket.assignee).toBeNull()
 
-    const assigned = db.updateTicket(ticket.id, { assigneeEmail: 'owner@example.com' }, 'owner@example.com')!
-    expect(assigned.assignee).toMatchObject({ userId: ownerId, email: 'owner@example.com' })
-    expect(db.listActivity(ticket.id).map(entry => entry.kind)).toContain('assigned')
+    const assigned = db.updateTicket(ticket.id, { assigneeId: ownerId }, ownerId)!
+    expect(assigned.assignee).toMatchObject({ id: ownerId, email: 'owner@example.com' })
+    const entry = db.listActivity(ticket.id).find(item => item.kind === 'assigned')!
+    // The payload holds the id, and the reader gets the person back resolved from it.
+    expect(entry.payload.to).toBe(ownerId)
+    expect(entry.payloadPeople.to).toMatchObject({ id: ownerId, email: 'owner@example.com' })
 
-    const cleared = db.updateTicket(ticket.id, { assigneeEmail: null }, 'owner@example.com')!
+    const cleared = db.updateTicket(ticket.id, { assigneeId: null }, ownerId)!
     expect(cleared.assignee).toBeNull()
     expect(db.listActivity(ticket.id).map(entry => entry.kind)).toContain('unassigned')
     db.archiveTicket(ticket.id)
@@ -141,9 +190,10 @@ describe('accounts and membership', () => {
     const ticket = db.createTicket(boardId, { title: 'Discussed ticket', laneId: laneIdByName.Backlog }, null)!
     expect(ticket.commentCount).toBe(0)
 
-    const comment = db.createComment(ticket.id, 'owner@example.com', 'First note')!
-    expect(comment.author).toMatchObject({ userId: ownerId })
-    expect(db.createComment(ticket.id, 'nobody@example.com', 'Second note')?.author).toMatchObject({ userId: null })
+    const comment = db.createComment(ticket.id, ownerId, 'First note')!
+    expect(comment.author).toMatchObject({ id: ownerId })
+    const stranger = db.upsertContactByEmail('nobody@example.com')
+    expect(db.createComment(ticket.id, stranger, 'Second note')?.author).toMatchObject({ id: stranger, isAccount: false })
     expect(db.findTicket(ticket.id)?.commentCount).toBe(2)
     expect(db.listComments(ticket.id).map(entry => entry.body)).toEqual(['First note', 'Second note'])
     expect(db.listActivity(ticket.id).filter(entry => entry.kind === 'commented')).toHaveLength(2)
@@ -154,17 +204,112 @@ describe('accounts and membership', () => {
     db.archiveTicket(ticket.id)
   })
 
-  it('stops resolving a person once the account is gone, without losing the history', () => {
+  it('keeps the ticket when the account behind it is deleted outright', () => {
     const ghost = db.createUser({ email: 'ghost@example.com', firstName: 'Gil', lastName: 'Ost', role: 'member' })
-    const ticket = db.createTicket(boardId, { title: 'Written by a leaver', laneId: laneIdByName.Backlog }, {
-      firstName: 'Gil', lastName: 'Ost', email: 'ghost@example.com', userId: ghost.id, status: 'invited'
-    })!
-    expect(db.findTicket(ticket.id)?.author).toMatchObject({ userId: ghost.id })
+    const ticket = db.createTicket(boardId, { title: 'Written by a leaver', laneId: laneIdByName.Backlog }, db.personById(ghost.id))!
+    expect(db.findTicket(ticket.id)?.author).toMatchObject({ id: ghost.id })
 
     db.deleteUser(ghost.id)
-    const orphaned = db.findTicket(ticket.id)!.author!
-    expect(orphaned).toMatchObject({ email: 'ghost@example.com', userId: null, firstName: 'Gil' })
+    // The row is gone, so there is nobody left to name — but the ticket itself survives.
+    expect(db.findTicket(ticket.id)?.author).toBeNull()
+    expect(db.findTicket(ticket.id)?.title).toBe('Written by a leaver')
     db.archiveTicket(ticket.id)
+  })
+
+  it('anonymizes an account while every trace of what they did stays attached', () => {
+    const leaver = db.createUser({ email: 'leaver@example.com', firstName: 'Lee', lastName: 'Ver', role: 'member' })
+    db.setBoardMember(boardId, leaver.id, 'editor')
+    const ticket = db.createTicket(boardId, { title: 'Filed then erased', laneId: laneIdByName.Backlog }, db.personById(leaver.id))!
+    db.createComment(ticket.id, leaver.id, 'A note from the leaver')
+    db.updateTicket(ticket.id, { assigneeId: leaver.id }, ownerId)
+
+    db.anonymizeUser(leaver.id)
+
+    const erased = db.findTicket(ticket.id)!
+    // Still one identifiable person's worth of history, with nothing identifying left in it.
+    expect(erased.author).toMatchObject({ id: leaver.id, email: null, firstName: '', anonymizedAt: expect.any(String) })
+    expect(erased.assignee?.id).toBe(leaver.id)
+    expect(db.listComments(ticket.id).map(entry => entry.body)).toContain('A note from the leaver')
+    expect(db.listComments(ticket.id)[0]?.author?.email).toBeNull()
+
+    const assignment = db.listActivity(ticket.id).find(item => item.kind === 'assigned')!
+    expect(assignment.payloadPeople.to?.email).toBeNull()
+    expect(JSON.stringify(assignment.payload)).not.toContain('leaver@example.com')
+
+    // No way back in, and no longer offerable on any board.
+    expect(db.findUserByEmail('leaver@example.com')).toBeNull()
+    expect(db.findUser(leaver.id)).toMatchObject({ status: 'disabled', passwordHash: null })
+    expect(db.boardRoleFor(boardId, leaver.id)).toBeNull()
+    db.archiveTicket(ticket.id)
+  })
+
+  it('changes an address without disturbing anything that points at the person', () => {
+    const mover = db.createUser({ email: 'old@example.com', firstName: 'Mo', lastName: 'Ver', role: 'member' })
+    const ticket = db.createTicket(boardId, { title: 'Survives a rename', laneId: laneIdByName.Backlog }, db.personById(mover.id))!
+
+    db.updateUser(mover.id, { email: 'New@Example.com' })
+
+    expect(db.findUser(mover.id)?.email).toBe('new@example.com')
+    expect(db.findUserByEmail('new@example.com')?.id).toBe(mover.id)
+    expect(db.findTicket(ticket.id)?.author).toMatchObject({ id: mover.id, email: 'new@example.com' })
+    // The address somebody else already holds is still refused.
+    expect(() => db.updateUser(mover.id, { email: 'owner@example.com' })).toThrow(db.EmailTakenError)
+    db.archiveTicket(ticket.id)
+  })
+
+  it('folds a contact into the account that takes its address', () => {
+    // The tester who turns out to be a colleague: the same address, so the same person.
+    const contactId = db.upsertContactByEmail('both@example.com')
+    const theirs = db.createTicket(boardId, { title: 'Filed as a stranger', laneId: laneIdByName.Backlog }, db.personById(contactId))!
+    db.createComment(theirs.id, contactId, 'Written before they had an account')
+    const account = db.createUser({ email: 'work@example.com', firstName: 'Same', lastName: 'Person', role: 'member' })
+    db.setBoardMember(boardId, account.id, 'editor')
+    const assigned = db.createTicket(boardId, { title: 'Assigned to them', laneId: laneIdByName.Backlog, assigneeId: account.id }, null)!
+
+    const merged = db.updateUser(account.id, { email: 'both@example.com' })!
+
+    // One row survives, and everything either of them was named on now belongs to it.
+    expect(merged.id).toBe(account.id)
+    expect(db.personById(contactId)).toBeNull()
+    expect(db.findTicket(theirs.id)?.author).toMatchObject({ id: account.id, isAccount: true })
+    expect(db.listComments(theirs.id)[0]?.author?.id).toBe(account.id)
+    // Including inside the history, which would otherwise point at a row that is gone.
+    expect(db.listActivity(assigned.id).find(entry => entry.kind === 'assigned')?.payloadPeople.to?.id).toBe(account.id)
+    db.archiveTicket(theirs.id)
+    db.archiveTicket(assigned.id)
+  })
+
+  it('refuses to bring an anonymized account back', () => {
+    const erased = db.createUser({ email: 'erased@example.com', firstName: 'E', lastName: 'Rased', role: 'member' })
+    const ticket = db.createTicket(boardId, { title: 'Left behind', laneId: laneIdByName.Backlog }, db.personById(erased.id))!
+    db.anonymizeUser(erased.id)
+
+    // Renaming or re-inviting the row would hand their history to whoever came next.
+    expect(() => db.updateUser(erased.id, { email: 'new@example.com', status: 'active' })).toThrow(db.AnonymizedAccountError)
+    expect(() => db.setInviteToken(erased.id, 'hash', new Date(Date.now() + 60_000).toISOString())).toThrow(db.AnonymizedAccountError)
+    expect(db.findUser(erased.id)).toMatchObject({ email: null, firstName: '', status: 'disabled' })
+    // The ticket stays attached to the tombstone, which is the point of anonymizing.
+    expect(db.findTicket(ticket.id)?.author?.id).toBe(erased.id)
+    db.archiveTicket(ticket.id)
+  })
+
+  it('lets an imported ticket be attributed to somebody afterwards', () => {
+    const importLane = db.importLaneFor(boardId)!
+    const ticket = db.insertImportedTicket({
+      boardId, laneId: importLane.id, externalId: 'apple-late-attribution', type: 'crash',
+      title: 'Crashed for somebody', comment: null, testerEmail: null,
+      deviceModel: null, osVersion: null, locale: null, buildId: null, buildVersion: null,
+      buildBundleId: null, sourceCreatedAt: new Date().toISOString(), raw: {}
+    })
+    expect(ticket.author).toBeNull()
+
+    const attributed = db.updateTicket(ticket.id, { authorId: ownerId }, ownerId)!
+    expect(attributed.author).toMatchObject({ id: ownerId })
+    const entry = db.listActivity(ticket.id).find(item => item.kind === 'author')!
+    expect(entry.payload).toMatchObject({ from: null, to: ownerId })
+    expect(entry.payloadPeople.to).toMatchObject({ id: ownerId })
+
+    expect(db.updateTicket(ticket.id, { authorId: null }, ownerId)?.author).toBeNull()
   })
 })
 

@@ -11,11 +11,13 @@ const todoSchema = z.object({
   completed: z.boolean()
 })
 
+const idSchema = z.string().trim().min(1).max(64)
+
 const ticketShape = {
   title: z.string().trim().min(1, 'Title is required.').max(160),
   description: z.string().max(10000),
   priority: z.enum(['low', 'medium', 'high', 'urgent']),
-  assigneeEmail: emailSchema.nullable(),
+  assigneeId: idSchema.nullable(),
   dueDate: z.iso.date().nullable(),
   buildNumber: z.string().trim().max(100).nullable(),
   labels: z.array(labelSchema).max(12),
@@ -23,15 +25,13 @@ const ticketShape = {
   todos: z.array(todoSchema).max(100)
 }
 
-const idSchema = z.string().trim().min(1).max(64)
-
 export const ticketCreateSchema = z.object({
   ...ticketShape,
   boardId: idSchema,
   laneId: idSchema.optional(),
   description: ticketShape.description.default(''),
   priority: ticketShape.priority.default('medium'),
-  assigneeEmail: ticketShape.assigneeEmail.optional(),
+  assigneeId: ticketShape.assigneeId.optional(),
   dueDate: ticketShape.dueDate.optional(),
   buildNumber: ticketShape.buildNumber.optional(),
   labels: ticketShape.labels.default([]),
@@ -42,7 +42,10 @@ export const ticketCreateSchema = z.object({
 export const ticketUpdateSchema = z.object(ticketShape).partial()
 
 export const importedTicketUpdateSchema = ticketUpdateSchema.omit({ buildNumber: true }).extend({
-  title: z.string().trim().min(1, 'Title is required.').max(10000).optional()
+  title: z.string().trim().min(1, 'Title is required.').max(10000).optional(),
+  // Board admins only, enforced by the handler: an imported ticket arrives unattributed, and
+  // whoever really filed it can be named afterwards.
+  authorId: idSchema.nullable().optional()
 })
 
 export const ticketMoveSchema = z.object({
@@ -59,7 +62,8 @@ export const boardUpdateSchema = z.object({
   issuerId: z.string().trim().max(120),
   keyId: z.string().trim().max(120),
   appId: z.string().trim().max(120),
-  syncLimit: z.number().int().min(1, 'Sync at least one submission.').max(2000, 'At most 2000 submissions per sync.')
+  syncLimit: z.number().int().min(1, 'Sync at least one submission.').max(2000, 'At most 2000 submissions per sync.'),
+  autoAuthor: z.boolean()
 }).partial()
 
 /** The connection test checks the credentials the user has on screen, so they travel in the request. */
@@ -106,6 +110,7 @@ export const userCreateSchema = z.object({
 })
 
 export const userUpdateSchema = z.object({
+  email: emailSchema,
   firstName: nameSchema,
   lastName: z.string().trim().max(60),
   role: z.enum(userRoles).exclude(['owner']),
@@ -113,6 +118,7 @@ export const userUpdateSchema = z.object({
 }).partial()
 
 export const profileUpdateSchema = z.object({
+  email: emailSchema,
   firstName: nameSchema,
   lastName: z.string().trim().max(60)
 }).partial()

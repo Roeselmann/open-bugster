@@ -31,7 +31,7 @@ Open-Bugster is a lightweight, self-hosted Kanban board for small teams—with a
 - **Manage to-do lists**  
   Record the next steps within each ticket, reorder them, and work through them systematically.
 - **Archive instead of delete**  
-  Archived tickets stay restorable and are never re-imported from TestFlight.
+  Archived tickets stay restorable by a board administrator and are never re-imported from TestFlight.
 - **Light and dark**  
   A theme toggle in the header, remembered per browser.
 
@@ -128,7 +128,7 @@ Updating is `git pull && docker compose up --build -d`; schema changes are appli
 
 ### Boards
 
-Open-Bugster can run several boards side by side—typically one per app. The board name in the header becomes a dropdown as soon as a second board exists; the icon next to it opens the board settings. A newly created board is selected right away and opens its settings so lanes and credentials can be set up.
+Open-Bugster can run several boards side by side—typically one per app. The board name in the header becomes a dropdown as soon as a second board exists; the icon next to it opens the board settings and is shown to board administrators only, since the page is theirs to act on. A newly created board is selected right away and opens its settings so lanes and credentials can be set up.
 
 Each board owns its lanes, categories, labels, archive, and App Store Connect credentials. Deleting a board removes all of it, including attachments and the stored key.
 
@@ -152,7 +152,7 @@ New tickets are created with **Add ticket** at the bottom of a lane, and land in
 
 Cards are moved by dragging them between lanes or within a lane. On narrow screens each card offers a lane dropdown instead.
 
-**Archive** removes a ticket from the board without losing it. Archived tickets stay restorable through the archive view in the header, and an archived TestFlight ticket is never imported again by a later sync.
+**Archive** removes a ticket from the board without losing it, and an archived TestFlight ticket is never imported again by a later sync. Editors archive; the archive itself belongs to the board's administrators. Only they see its icon in the header, reach the archive view, and restore from it—for everyone else an archived ticket is simply gone, including through its own address. The dialog says as much before an editor archives anything.
 
 ### Categories
 
@@ -187,8 +187,8 @@ Two levels, kept deliberately small.
 | Board role | What it allows |
 | --- | --- |
 | **Viewer** | Read the board and write comments. |
-| **Editor** | Everything a viewer can do, plus creating, editing, moving, and archiving tickets, and running a TestFlight sync. |
-| **Administrator** | Everything an editor can do, plus lanes, categories, members, the App Store Connect key, and deleting the board. |
+| **Editor** | Everything a viewer can do, plus creating, editing, moving, and archiving tickets. |
+| **Administrator** | Everything an editor can do, plus the archive, running a TestFlight sync, lanes, categories, members, the App Store Connect key, and deleting the board. |
 
 Instance administrators always reach every board, so nobody can lock themselves out of their own server.
 
@@ -196,15 +196,25 @@ Instance administrators always reach every board, so nobody can lock themselves 
 
 Open-Bugster sends no mail, so an invitation is a link you pass on yourself. Under **Users**, enter the person's email and name; the app creates the account and shows a one-time link, valid for seven days, directly beneath their row. They open it, choose a password, and are signed in.
 
-Each row reports what its invitation is actually doing—*expires in 5 days*, *expired*, or *no invitation link*—so a stale invite is not mistaken for a live one. Only the hash of a link is stored, so it is shown exactly once: **Hide** closes the panel without revoking anything, and the link cannot be displayed again. **New link** issues a fresh one, which immediately invalidates the previous link. **Revoke** stops the current link from working and leaves the account in place, for when an invitation went to the wrong address. An unused link simply lapses after its seven days.
+Each row reports what its link is actually doing—*expires in 5 days*, *expired*, or *no invitation link*—so a stale invite is not mistaken for a live one. Only the hash of a link is stored, so it is shown exactly once: **Hide** closes the panel without revoking anything, and the link cannot be displayed again. **New link** issues a fresh one, which immediately invalidates the previous link. **Revoke** stops the current link from working and leaves the account in place, for when an invitation went to the wrong address. An unused link simply lapses after its seven days.
 
-The account exists from the moment you create it, before the link is ever opened—so it can already be added to boards and assigned tickets, and any feedback that address left behind is already attributed to it.
+The account exists from the moment you create it, before the link is ever opened—so it can already be added to boards and assigned tickets. Inviting an address that Open-Bugster already knows, because a TestFlight tester used it or an old ticket names it, claims that same person rather than opening a second one: everything already attached to the address belongs to the new account immediately.
 
-**Disable** blocks sign-in and ends any session that account still has open, while keeping everything it wrote. **Delete** removes the account; its tickets, comments, and history stay on the boards, attributed to the email address they were written with.
+### A forgotten password
+
+**Reset password** on the person's row under **Users** issues the same kind of one-time link, valid for seven days, and shows it beneath the row to pass on. They open it, choose a new password, and are signed in. Nothing changes until they do: the old password keeps working while the link is outstanding, so one left uncollected locks nobody out. The moment it is used, the old password stops working and every session that account still had open is signed out. **Revoke** withdraws an outstanding link the same way it does an invitation.
+
+A disabled account gets no link—enable it first, since setting a password signs the holder in. The owner account is reset with `npm run owner:reset` on the server instead, so that holding an administrator account is not a way to take it over; see [If nobody can sign in](#if-nobody-can-sign-in).
+
+**Disable** blocks sign-in and ends any session that account still has open, while keeping everything it wrote.
+
+**Anonymize** erases the person and keeps their work. Their name and email address are removed everywhere—including inside each ticket's history, which stores people by reference rather than by address—while every ticket, comment, and assignment stays where it is and stays recognisable as one person's. They are dropped from every board and can no longer sign in. This cannot be undone: an anonymized account cannot be renamed, re-enabled, or invited back, because doing so would hand the erased person's history to whoever the row was pointed at next. Only deleting it outright is still possible.
+
+**Delete** removes the account outright. Its tickets, comments, and history stay on the boards but lose the person behind them. Anonymize when the history should still read as somebody's; delete only when the row itself should not exist.
 
 ### Members of a board
 
-**Board settings → Members** lists who has access and at what role. Board administrators add and remove people and change their role; everyone else sees the list read-only. A board always keeps at least one administrator.
+**Board settings → Members** lists who has access and at what role, and board administrators add and remove people and change their role there. The settings icon in the header is offered to them only; the page itself stays readable for anyone who has its address, and shows the roster without any of the controls. A board always keeps at least one administrator.
 
 ### Assignment and discussion
 
@@ -214,7 +224,7 @@ Each ticket carries a comment thread—viewers included—and a history that rec
 
 ### Your profile
 
-Name and password live under **Your profile** in the account menu. Changing your password signs out every other device.
+Name, email address, and password live under **Your profile** in the account menu. Changing your address moves everything you have filed, written, or been assigned along with you—nothing is left behind at the old one, and the old address becomes free again. If the new address is one Open-Bugster already knew—because you left TestFlight feedback from it before you had an account—that history is folded into your account rather than refused. An address another account holds is refused. Changing your password signs out every other device.
 
 ### If nobody can sign in
 
@@ -279,9 +289,11 @@ It checks the values currently **in the form**, saved or not—so a corrected ke
 
 ### Sync
 
-**TestFlight Sync** in the header imports everything that is not on the board yet. New tickets land in the import lane and carry a `TestFlight` label plus `Screenshot` or `Crash`; screenshots are attached as files.
+**TestFlight Sync** in the header imports everything that is not on the board yet. It runs on the board's own Apple credentials, so the button—and the line reporting the last run beside it—belongs to board administrators; everyone else sees the imported tickets, not the control. New tickets land in the import lane and carry a `TestFlight` label plus `Screenshot` or `Crash`; screenshots are attached as files.
 
 **Submissions per sync** controls how far back a sync looks. Apple returns feedback newest first; each sync checks this many of the newest submissions per feedback type—screenshots and crashes counted separately. The default is 100. Raise it for a deeper first backfill, lower it to keep routine syncs cheap.
+
+**Attribute imports to their tester** decides whether an imported submission names its tester as the ticket's author. It is on by default and only takes effect when that tester already has an account here; everyone else is still recorded on the ticket as its TestFlight tester, and becomes its author retroactively if they are invited later. Turn it off for a board whose imports should stay unattributed. Either way a board administrator can set the author by hand under **Author** in the ticket, which is also how an import that arrived before anyone had an account gets one afterwards.
 
 ### Upgrading from a single board
 
@@ -358,7 +370,7 @@ Authentication and accounts
 
 - `POST /api/auth/login`, `POST /api/auth/logout`
 - `GET /api/users`, `POST /api/users`, `PATCH /api/users/:id`, `DELETE /api/users/:id`
-- `POST /api/users/:id/invite`
+- `POST /api/users/:id/invite`, `POST /api/users/:id/anonymize`
 - `GET /api/invite/:token`, `POST /api/invite/:token`
 - `PATCH /api/profile`, `POST /api/profile/password`
 

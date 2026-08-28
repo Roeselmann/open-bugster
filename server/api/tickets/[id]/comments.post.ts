@@ -8,7 +8,7 @@ export default defineEventHandler(async (event) => {
   const { account } = requireTicketAccess(event, id)
   const parsed = commentSaveSchema.safeParse(await readBody(event))
   if (!parsed.success) throw validationError(parsed.error)
-  const comment = createComment(id, account.email, parsed.data.body)
+  const comment = createComment(id, account.id, parsed.data.body)
   if (!comment) throw createError({ statusCode: 404, statusMessage: 'Ticket not found.' })
   setResponseStatus(event, 201)
   return { comment }

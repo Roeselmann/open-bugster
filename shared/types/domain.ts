@@ -13,33 +13,46 @@ export type UserStatus = typeof userStatuses[number]
 export type BoardRole = typeof boardRoles[number]
 
 /**
- * Someone referenced by a ticket, comment, or activity entry. The email is the identity
- * key and the only thing actually stored; `userId` is filled in at read time when an
- * account with that address exists, which is what makes an imported TestFlight tester
- * turn into a team member the moment somebody adds them.
+ * Someone referenced by a ticket, comment, or activity entry. Everybody gets a row in
+ * `users`, so a person is always addressed by id: an imported TestFlight tester exists as a
+ * `contact` and turns into a team member the moment somebody invites that address, without
+ * anything that points at them having to change.
  */
 export interface Person {
-  email: string
+  id: string
+  /** null once the person has been anonymized. */
+  email: string | null
   firstName: string
   lastName: string
-  /** null while no account carries this address. */
-  userId: string | null
+  /** Whether this person can sign in and hold board membership. */
+  isAccount: boolean
+  /** null for contacts, which have no account lifecycle. */
   status: UserStatus | null
+  anonymizedAt: string | null
 }
 
 export interface UserAccount {
   id: string
-  email: string
+  /** null once the account has been anonymized. */
+  email: string | null
   firstName: string
   lastName: string
   role: UserRole
   status: UserStatus
   createdAt: string
   lastLoginAt: string | null
+  anonymizedAt: string | null
   /** When the outstanding invitation lapses; null once it is used, revoked, or never issued. */
   inviteExpiresAt: string | null
-  /** How many boards the account is an explicit member of. */
-  boardCount: number
+  /** Every board the account is an explicit member of, with the role it holds there. */
+  boards: UserBoardMembership[]
+}
+
+/** One board an account belongs to, as listed on the account itself. */
+export interface UserBoardMembership {
+  boardId: string
+  boardName: string
+  role: BoardRole
 }
 
 export interface BoardMember {
@@ -56,13 +69,14 @@ export interface TicketComment {
   id: string
   ticketId: string
   author: Person | null
-  authorEmail: string
+  /** null once the author's account was hard-deleted. */
+  authorId: string | null
   body: string
   createdAt: string
   updatedAt: string
 }
 
-export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'priority', 'due_date', 'archived', 'restored', 'commented'] as const
+export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'due_date', 'archived', 'restored', 'commented'] as const
 export type ActivityKind = typeof activityKinds[number]
 
 export interface TicketActivityEntry {
@@ -70,7 +84,10 @@ export interface TicketActivityEntry {
   ticketId: string
   actor: Person | null
   kind: ActivityKind
+  /** Person-valued keys hold user ids, not names — resolve them through `payloadPeople`. */
   payload: Record<string, string | null>
+  /** The people named by this entry's payload, by payload key. */
+  payloadPeople: Record<string, Person | null>
   createdAt: string
 }
 
@@ -102,6 +119,8 @@ export interface Board {
   position: number
   /** How many of the newest TestFlight submissions each sync looks at, per feedback type. */
   syncLimit: number
+  /** Whether an import whose tester has an account records that account as the author. */
+  autoAuthor: boolean
   createdAt: string
 }
 
@@ -160,8 +179,7 @@ export interface TicketTodo extends TicketTodoInput {
 export interface AppleFeedback {
   feedbackType: 'screenshot' | 'crash'
   comment: string | null
-  testerEmail: string | null
-  /** The account behind `testerEmail`, once one exists. */
+  /** The tester Apple reported, as a contact or — once invited — a full account. */
   tester: Person | null
   deviceModel: string | null
   osVersion: string | null

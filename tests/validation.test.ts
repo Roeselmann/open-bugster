@@ -54,6 +54,20 @@ describe('ticket validation', () => {
     expect(importedTicketUpdateSchema.safeParse({ title: 'a'.repeat(10001) }).success).toBe(false)
   })
 
+  it('names people by id, and offers attribution only on imported tickets', () => {
+    expect(ticketUpdateSchema.parse({ assigneeId: 'user-1' })).toEqual({ assigneeId: 'user-1' })
+    // Clearing is a null, which is not the same as leaving the field out.
+    expect(ticketUpdateSchema.parse({ assigneeId: null })).toEqual({ assigneeId: null })
+    expect(ticketUpdateSchema.safeParse({ assigneeId: '' }).success).toBe(false)
+    // An address is no longer a way to name somebody: an anonymized person has none.
+    expect(ticketCreateSchema.parse({ boardId: 'board-1', title: 'Ticket', assigneeId: 'user-1' }).assigneeId).toBe('user-1')
+
+    expect(importedTicketUpdateSchema.parse({ authorId: 'user-1' })).toEqual({ authorId: 'user-1' })
+    expect(importedTicketUpdateSchema.parse({ authorId: null })).toEqual({ authorId: null })
+    // A ticket filed here already knows its author, so the manual schema drops the field.
+    expect(ticketUpdateSchema.parse({ authorId: 'user-1' } as never)).toEqual({})
+  })
+
   it('bounds the submission limit of a board', () => {
     expect(boardUpdateSchema.parse({ syncLimit: 25 })).toEqual({ syncLimit: 25 })
     expect(boardUpdateSchema.safeParse({ syncLimit: 0 }).success).toBe(false)
@@ -61,6 +75,11 @@ describe('ticket validation', () => {
     expect(boardUpdateSchema.safeParse({ syncLimit: 12.5 }).success).toBe(false)
     // Every field stays optional, so saving only the name is still valid.
     expect(boardUpdateSchema.parse({ name: 'Radio app' })).toEqual({ name: 'Radio app' })
+  })
+
+  it('carries the per-board auto-author switch', () => {
+    expect(boardUpdateSchema.parse({ autoAuthor: false })).toEqual({ autoAuthor: false })
+    expect(boardUpdateSchema.safeParse({ autoAuthor: 'yes' }).success).toBe(false)
   })
 
   it('takes the credentials of a connection test from the request', () => {

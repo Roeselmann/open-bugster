@@ -9,7 +9,9 @@ export default defineEventHandler(async (event) => {
   const parsed = importRequestSchema.safeParse(await readBody(event))
   if (!parsed.success) throw validationError(parsed.error)
   const { boardId } = parsed.data
-  requireBoardAccess(event, boardId, 'editor')
+  // A sync spends the board's App Store Connect key and writes tickets into the import lane
+  // under the board's own name, so it belongs to whoever owns those credentials.
+  requireBoardAccess(event, boardId, 'admin')
 
   const importLane = importLaneFor(boardId)
   if (!importLane) throw createError({ statusCode: 409, statusMessage: 'This board has no import lane.' })
@@ -24,6 +26,7 @@ export default defineEventHandler(async (event) => {
       appId: credentials.appId,
       privateKeyPem: credentials.privateKeyPem,
       syncLimit: credentials.syncLimit,
+      autoAuthor: credentials.autoAuthor,
       attachmentsPath: getServerConfig().attachmentsPath
     })
     return { run }

@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type { H3Event } from 'h3'
+import { findUserByInviteToken, type UserRecord } from './db'
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -29,4 +30,23 @@ export function inviteExpired(expiresAt: string | null): boolean {
  */
 export function inviteUrl(event: H3Event, token: string): string {
   return new URL(`/invite/${token}`, getRequestURL(event).origin).toString()
+}
+
+/**
+ * The account behind a link, for both purposes it serves: finishing a new account and
+ * resetting a forgotten password. A disabled account reads as an invalid link rather than
+ * as a disabled one — the holder of a link is not necessarily the person it was meant for,
+ * and letting a password be set here would silently hand the account back.
+ */
+export function accountForInviteToken(token: string): UserRecord {
+  const account = findUserByInviteToken(hashInviteToken(token))
+  if (!account || account.status === 'disabled' || inviteExpired(account.inviteExpiresAt)) {
+    throw createError({ statusCode: 404, statusMessage: 'This link is no longer valid. Ask an administrator for a new one.' })
+  }
+  return account
+}
+
+/** A link for an account that never signed in reads as a welcome; every other one as a reset. */
+export function invitePurpose(account: UserRecord): 'invite' | 'reset' {
+  return account.status === 'invited' ? 'invite' : 'reset'
 }

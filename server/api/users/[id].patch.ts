@@ -1,4 +1,4 @@
-import { findUser, updateUser } from '~~/server/utils/db'
+import { AnonymizedAccountError, EmailTakenError, findUser, updateUser } from '~~/server/utils/db'
 import { requireInstanceAdmin } from '~~/server/utils/access'
 import { userUpdateSchema, validationError } from '~~/server/utils/validation'
 
@@ -18,5 +18,12 @@ export default defineEventHandler(async (event) => {
   if (target.id === account.id && changesAccess) {
     throw createError({ statusCode: 409, statusMessage: 'You cannot change your own role or status.' })
   }
-  return { user: { ...updateUser(id, parsed.data)!, passwordHash: undefined } }
+  try {
+    return { user: { ...updateUser(id, parsed.data)!, passwordHash: undefined } }
+  } catch (error) {
+    if (error instanceof EmailTakenError || error instanceof AnonymizedAccountError) {
+      throw createError({ statusCode: 409, statusMessage: error.message })
+    }
+    throw error
+  }
 })

@@ -8,7 +8,8 @@ export default defineEventHandler((event) => {
   const existing = new Set(boardMembers(id).map(member => member.userId))
   return {
     candidates: listUsers()
-      .filter(user => !existing.has(user.id))
+      // An anonymized account is a tombstone: it keeps its history and is offered to nobody.
+      .filter(user => !existing.has(user.id) && !user.anonymizedAt)
       .map(user => ({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, status: user.status }))
   }
 })

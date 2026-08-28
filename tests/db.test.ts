@@ -31,16 +31,17 @@ describe('ticket persistence', () => {
   })
 
   it('creates, moves, archives and restores a ticket', () => {
+    const adaId = db.upsertContactByEmail('ada@example.com', { firstName: 'Ada', lastName: 'Lovelace' })
     const ticket = db.createTicket(
       boardId,
       { title: 'Persistent ticket', priority: 'high', buildNumber: '42', labels: ['API'] },
-      { firstName: 'Ada', lastName: 'Lovelace', email: 'ada@example.com', userId: null, status: null }
+      db.personById(adaId)
     )!
     expect(ticket.ticketNumber).toBe(1)
     expect(ticket.boardId).toBe(boardId)
     expect(ticket.laneId).toBe(laneIdByName.Backlog)
     expect(ticket.buildNumber).toBe('42')
-    expect(ticket.author).toEqual({ firstName: 'Ada', lastName: 'Lovelace', email: 'ada@example.com', userId: null, status: null })
+    expect(ticket.author).toEqual({ id: adaId, firstName: 'Ada', lastName: 'Lovelace', email: 'ada@example.com', isAccount: false, status: null, anonymizedAt: null })
     expect(ticket.labels.map(label => label.name)).toEqual(['API'])
 
     expect(db.updateTicket(ticket.id, { buildNumber: '43' })).toMatchObject({ buildNumber: '43' })

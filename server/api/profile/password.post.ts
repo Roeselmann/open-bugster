@@ -15,7 +15,7 @@ export default defineEventHandler(async (event) => {
   await replaceUserSession(event, {
     user: {
       id: updated.id,
-      email: updated.email,
+      email: updated.email!,
       firstName: updated.firstName,
       lastName: updated.lastName,
       role: updated.role,

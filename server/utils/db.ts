@@ -5,12 +5,15 @@ import { randomUUID } from 'node:crypto'
 import type {
   ActivityKind, AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardRole, BoardSummary, Category, CategoryColor,
   CategorySummary, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
-  TicketPriority, TicketSource, TicketTodo, TicketTodoInput, UserAccount, UserRole, UserStatus
+  TicketPriority, TicketSource, TicketTodo, TicketTodoInput, UserAccount, UserBoardMembership, UserRole, UserStatus
 } from '../../shared/types/domain'
 import { decryptSecret, encryptSecret, secretKeyAvailable } from './secret-box'
 import { getServerConfig } from './config'
 
 let database: Database.Database | null = null
+
+/** Whether a `users` row is somebody who can sign in, or merely somebody we know of. */
+type UserKind = 'account' | 'contact'
 
 /** The denormalised author columns on `tickets`, without the read-time resolution. */
 export interface AuthorSnapshot {
@@ -31,6 +34,7 @@ CREATE TABLE IF NOT EXISTS boards (
   asc_key_filename TEXT,
   asc_key_uploaded_at TEXT,
   sync_limit INTEGER NOT NULL DEFAULT 100,
+  auto_author INTEGER NOT NULL DEFAULT 1 CHECK (auto_author IN (0, 1)),
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS lanes (
@@ -62,10 +66,8 @@ CREATE TABLE IF NOT EXISTS tickets (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   archived_at TEXT,
-  author_first_name TEXT,
-  author_last_name TEXT,
-  author_email TEXT,
-  assignee_email TEXT,
+  author_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  assignee_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   category_id TEXT REFERENCES categories(id) ON DELETE SET NULL
 );
 CREATE TABLE IF NOT EXISTS labels (
@@ -90,7 +92,7 @@ CREATE TABLE IF NOT EXISTS apple_feedback (
   ticket_id TEXT PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE,
   feedback_type TEXT NOT NULL CHECK (feedback_type IN ('screenshot', 'crash')),
   comment TEXT,
-  tester_email TEXT,
+  tester_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   device_model TEXT,
   os_version TEXT,
   locale TEXT,
@@ -112,15 +114,17 @@ CREATE TABLE IF NOT EXISTS attachments (
 );
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
-  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  email TEXT UNIQUE COLLATE NOCASE,
   first_name TEXT NOT NULL DEFAULT '',
   last_name TEXT NOT NULL DEFAULT '',
   password_hash TEXT,
+  kind TEXT NOT NULL DEFAULT 'account' CHECK (kind IN ('account', 'contact')),
   role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'admin', 'member')),
-  status TEXT NOT NULL DEFAULT 'invited' CHECK (status IN ('invited', 'active', 'disabled')),
+  status TEXT CHECK (status IS NULL OR status IN ('invited', 'active', 'disabled')),
   session_version INTEGER NOT NULL DEFAULT 1,
   invite_token_hash TEXT,
   invite_expires_at TEXT,
+  anonymized_at TEXT,
   created_at TEXT NOT NULL,
   last_login_at TEXT
 );
@@ -134,7 +138,7 @@ CREATE TABLE IF NOT EXISTS board_members (
 CREATE TABLE IF NOT EXISTS ticket_comments (
   id TEXT PRIMARY KEY,
   ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
-  author_email TEXT NOT NULL,
+  author_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   body TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -142,7 +146,7 @@ CREATE TABLE IF NOT EXISTS ticket_comments (
 CREATE TABLE IF NOT EXISTS ticket_activity (
   id TEXT PRIMARY KEY,
   ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
-  actor_email TEXT,
+  actor_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   kind TEXT NOT NULL,
   payload TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL
@@ -173,6 +177,14 @@ CREATE INDEX IF NOT EXISTS idx_tickets_category ON tickets(category_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tickets_ticket_number ON tickets(ticket_number);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tickets_external ON tickets(board_id, external_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_board_name ON categories(board_id, name COLLATE NOCASE);
+`
+
+// Kept out of `boardIndexes`, which `ensureBoards` execs while tickets still name people
+// by email — the columns these cover do not exist until `ensurePersonIdentity` has run.
+const personIndexes = `
+CREATE INDEX IF NOT EXISTS idx_users_kind ON users(kind);
+CREATE INDEX IF NOT EXISTS idx_tickets_assignee ON tickets(board_id, assignee_id);
+CREATE INDEX IF NOT EXISTS idx_tickets_author ON tickets(board_id, author_id);
 `
 
 // Kept out of `boardIndexes`, which `ensureBoards` execs before labels are board-scoped.
@@ -242,7 +254,11 @@ export function getDb() {
   ensureTicketAssignee(database)
   ensureTicketCommentThread(database)
   ensureActivityLog(database)
+  ensureBoardAutoAuthor(database)
+  // Last: every migration above it still speaks in email columns.
+  ensurePersonIdentity(database)
   database.exec(boardIndexes)
+  database.exec(personIndexes)
   clearImportedDescriptions(database)
   restoreImportedTitles(database)
   database.pragma('optimize')
@@ -274,34 +290,47 @@ function configuredOwnerSeed(): OwnerSeed | null {
 }
 
 /**
+ * How many rows can actually sign in. Contacts share the table with accounts, so a bare
+ * `COUNT(*)` would read an imported TestFlight tester as a provisioned instance and skip
+ * seeding the owner. Tolerates the pre-`kind` shape, since this runs mid-migration.
+ */
+function countAccountRows(db: Database.Database): number {
+  const scoped = tableColumns(db, 'users').has('kind') ? " WHERE kind = 'account'" : ''
+  return (db.prepare(`SELECT COUNT(*) AS value FROM users${scoped}`).get() as { value: number }).value
+}
+
+/**
  * A first start without APP_PASSWORD_HASH seeds no owner, and the login page then rejects
  * every attempt with the same deliberately vague message. Say so on the console rather
  * than leaving the operator to guess why their password does not work.
  */
 function warnWhenNobodyCanSignIn(db: Database.Database) {
-  const accounts = (db.prepare('SELECT COUNT(*) AS value FROM users').get() as { value: number }).value
-  if (accounts > 0) return
+  if (countAccountRows(db) > 0) return
   console.warn('[open-bugster] No account exists yet, so nobody can sign in: APP_PASSWORD_HASH is not set.')
   console.warn('[open-bugster] Generate one with:  npm run password:hash -- "a-long-password"')
   console.warn('[open-bugster] Put that APP_PASSWORD_HASH line and APP_ADMIN_EMAIL into .env, then restart.')
 }
 
-type UserRef = { id: string; email: string; firstName: string; lastName: string; status: UserStatus }
-
 /**
- * Accounts by lowercased email. `hydrateTicket` runs once per row, so looking an account
- * up per ticket would add an N+1 on top of the sub-queries it already makes; every write
- * to `users` drops the cache instead.
+ * Everybody in `users`, by id. `hydrateTicket` runs once per row, so reading a person per
+ * ticket would add an N+1 on top of the sub-queries it already makes; every write to
+ * `users` drops the cache instead.
  */
-let directoryCache: Map<string, UserRef> | null = null
+let directoryCache: Map<string, Person> | null = null
 
-function userDirectory(): Map<string, UserRef> {
+function personDirectory(): Map<string, Person> {
   if (directoryCache) return directoryCache
-  const rows = getDb().prepare('SELECT id, email, first_name, last_name, status FROM users').all() as Array<{
-    id: string; email: string; first_name: string; last_name: string; status: UserStatus
+  const rows = getDb().prepare('SELECT id, email, first_name, last_name, kind, status, anonymized_at FROM users').all() as Array<{
+    id: string; email: string | null; first_name: string; last_name: string; kind: UserKind; status: UserStatus | null; anonymized_at: string | null
   }>
-  directoryCache = new Map(rows.map(row => [row.email.trim().toLowerCase(), {
-    id: row.id, email: row.email, firstName: row.first_name, lastName: row.last_name, status: row.status
+  directoryCache = new Map(rows.map(row => [row.id, {
+    id: row.id,
+    email: row.email,
+    firstName: row.first_name,
+    lastName: row.last_name,
+    isAccount: row.kind === 'account',
+    status: row.status,
+    anonymizedAt: row.anonymized_at,
   }]))
   return directoryCache
 }
@@ -311,18 +340,32 @@ export function invalidateUserDirectory() {
 }
 
 /**
- * Turns a stored email into a person. When an account carries that address it wins, so a
- * rename shows up everywhere at once; otherwise the row's own snapshot is used and the
- * entry starts resolving by itself as soon as somebody creates that account.
+ * The person a stored id points at. Null only where the column itself is null — a ticket
+ * whose person was hard-deleted, or an entry that never had one.
  */
-export function resolvePerson(email: string | null | undefined, snapshot?: { firstName?: string | null; lastName?: string | null }): Person | null {
-  const trimmed = email?.trim()
-  if (!trimmed) return null
-  const account = userDirectory().get(trimmed.toLowerCase())
-  if (account) {
-    return { email: account.email, firstName: account.firstName, lastName: account.lastName, userId: account.id, status: account.status }
-  }
-  return { email: trimmed, firstName: snapshot?.firstName || '', lastName: snapshot?.lastName || '', userId: null, status: null }
+export function personById(id: string | null | undefined): Person | null {
+  return id ? personDirectory().get(id) || null : null
+}
+
+/** The id an address belongs to, creating a contact row when nobody holds it yet. */
+export function upsertContactByEmail(email: string, name?: { firstName?: string | null; lastName?: string | null }): string {
+  const normalised = email.trim().toLowerCase()
+  const existing = getDb().prepare('SELECT id FROM users WHERE email = ? COLLATE NOCASE').get(normalised) as { id: string } | undefined
+  if (existing) return existing.id
+  const id = randomUUID()
+  getDb().prepare(`
+    INSERT INTO users (id, email, first_name, last_name, kind, role, status, created_at)
+    VALUES (?, ?, ?, ?, 'contact', 'member', NULL, ?)
+  `).run(id, normalised, name?.firstName || '', name?.lastName || '', new Date().toISOString())
+  invalidateUserDirectory()
+  return id
+}
+
+/** The activity payload keys whose value is a person id rather than a plain value. */
+const personPayloadKeys: Partial<Record<ActivityKind, string[]>> = {
+  assigned: ['from', 'to'],
+  unassigned: ['from', 'to'],
+  author: ['from', 'to'],
 }
 
 /** Quotes a value as a SQL string literal for statements that cannot be parameterised. */
@@ -341,6 +384,15 @@ function tableColumns(db: Database.Database, table: string): Set<string> {
  */
 function alreadyOnLanes(db: Database.Database): boolean {
   return tableColumns(db, 'tickets').has('lane_id')
+}
+
+/**
+ * The same stop sign for the migrations that predate `ensurePersonIdentity`. Those add the
+ * very email columns it replaces with user ids, so on a converted database — including
+ * every fresh one, which `schema` already creates in the target shape — they must not run.
+ */
+function alreadyOnPersonIds(db: Database.Database): boolean {
+  return tableColumns(db, 'tickets').has('author_id')
 }
 
 export function ensureQuestionStatus(db: Database.Database) {
@@ -502,6 +554,7 @@ export function ensureTicketNumber(db: Database.Database) {
 }
 
 export function ensureTicketAuthor(db: Database.Database, author: AuthorSnapshot | null = null) {
+  if (alreadyOnPersonIds(db)) return false
   const columns = tableColumns(db, 'tickets')
   const authorColumns: Array<[string, string]> = [
     ['author_first_name', 'TEXT'],
@@ -828,7 +881,7 @@ export function ensureUsers(db: Database.Database, seed: OwnerSeed | null = null
     CREATE INDEX IF NOT EXISTS idx_board_members_user ON board_members(user_id);
   `)
 
-  const populated = (db.prepare('SELECT COUNT(*) AS value FROM users').get() as { value: number }).value > 0
+  const populated = countAccountRows(db) > 0
   if (populated || !seed) return false
 
   const id = randomUUID()
@@ -847,6 +900,7 @@ export function ensureUsers(db: Database.Database, seed: OwnerSeed | null = null
 }
 
 export function ensureTicketAssignee(db: Database.Database) {
+  if (alreadyOnPersonIds(db)) return false
   const hasAssignee = tableColumns(db, 'tickets').has('assignee_email')
   if (!hasAssignee) db.exec('ALTER TABLE tickets ADD COLUMN assignee_email TEXT')
   db.exec('CREATE INDEX IF NOT EXISTS idx_tickets_assignee ON tickets(board_id, assignee_email)')
@@ -909,6 +963,288 @@ export function ensureActivityLog(db: Database.Database) {
   return !existed
 }
 
+/**
+ * Adds the per-board switch that decides whether an import attributes its ticket to the
+ * tester's account. On by default: attributing is what people expect from a board whose
+ * testers are colleagues, and a board that would rather keep imports anonymous turns it off.
+ */
+export function ensureBoardAutoAuthor(db: Database.Database) {
+  if (tableColumns(db, 'boards').has('auto_author')) return false
+  db.exec('ALTER TABLE boards ADD COLUMN auto_author INTEGER NOT NULL DEFAULT 1')
+  return true
+}
+
+/** The email columns `ensurePersonIdentity` replaces, as `[table, column]`. */
+const legacyPersonColumns: Array<[string, string]> = [
+  ['tickets', 'author_email'],
+  ['tickets', 'assignee_email'],
+  ['ticket_comments', 'author_email'],
+  ['ticket_activity', 'actor_email'],
+  ['apple_feedback', 'tester_email'],
+]
+
+/**
+ * Rebuilds `users` so that everybody a ticket can point at has a row, not just the people
+ * who can sign in. Existing rows become `account`; `kind = 'contact'` is everyone else.
+ *
+ * `email` and `status` lose their NOT NULL along the way, which is what makes anonymizing
+ * possible at all — a scrubbed row keeps its id and its history, and gives up the address.
+ */
+function rebuildUsersWithKind(db: Database.Database) {
+  db.pragma('foreign_keys = OFF')
+  try {
+    db.exec(`
+      BEGIN IMMEDIATE;
+      CREATE TABLE users_migration (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE COLLATE NOCASE,
+        first_name TEXT NOT NULL DEFAULT '',
+        last_name TEXT NOT NULL DEFAULT '',
+        password_hash TEXT,
+        kind TEXT NOT NULL DEFAULT 'account' CHECK (kind IN ('account', 'contact')),
+        role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'admin', 'member')),
+        status TEXT CHECK (status IS NULL OR status IN ('invited', 'active', 'disabled')),
+        session_version INTEGER NOT NULL DEFAULT 1,
+        invite_token_hash TEXT,
+        invite_expires_at TEXT,
+        anonymized_at TEXT,
+        created_at TEXT NOT NULL,
+        last_login_at TEXT
+      );
+      INSERT INTO users_migration (id, email, first_name, last_name, password_hash, kind, role, status, session_version, invite_token_hash, invite_expires_at, created_at, last_login_at)
+      SELECT id, email, first_name, last_name, password_hash, 'account', role, status, session_version, invite_token_hash, invite_expires_at, created_at, last_login_at
+      FROM users;
+      DROP TABLE users;
+      ALTER TABLE users_migration RENAME TO users;
+      COMMIT;
+    `)
+  } catch (error) {
+    if (db.inTransaction) db.exec('ROLLBACK')
+    throw error
+  } finally {
+    db.pragma('foreign_keys = ON')
+  }
+}
+
+/**
+ * Gives every address that appears anywhere in the history a row of its own. The name
+ * snapshot the tickets carried is the only name these people have, so it moves with them —
+ * and then stops being a second copy that anonymizing would miss.
+ */
+function seedContactsFromEmails(db: Database.Database) {
+  // The author columns lead the union so that it names the result columns; `MAX` then skips
+  // the NULLs the other sources contribute and keeps whichever snapshot exists.
+  const sources = legacyPersonColumns
+    .map(([table, column]) => {
+      const names = column === 'author_email' && table === 'tickets'
+        ? 'author_first_name AS first_name, author_last_name AS last_name'
+        : 'NULL AS first_name, NULL AS last_name'
+      return `SELECT ${column} AS email, ${names} FROM ${table} WHERE TRIM(COALESCE(${column}, '')) <> ''`
+    })
+    .join(' UNION ALL ')
+
+  const rows = db.prepare(`
+    SELECT LOWER(TRIM(email)) AS email, MAX(first_name) AS first_name, MAX(last_name) AS last_name
+    FROM (${sources})
+    GROUP BY LOWER(TRIM(email))
+  `).all() as Array<{ email: string; first_name: string | null; last_name: string | null }>
+
+  const payloadEmails = activityPayloadEmails(db)
+  for (const email of payloadEmails) {
+    if (!rows.some(row => row.email === email)) rows.push({ email, first_name: null, last_name: null })
+  }
+
+  const now = new Date().toISOString()
+  const insert = db.prepare(`
+    INSERT INTO users (id, email, first_name, last_name, kind, role, status, created_at)
+    SELECT ?, ?, ?, ?, 'contact', 'member', NULL, ?
+    WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = ? COLLATE NOCASE)
+  `)
+  db.transaction(() => {
+    for (const row of rows) {
+      insert.run(randomUUID(), row.email, row.first_name || '', row.last_name || '', now, row.email)
+    }
+  })()
+}
+
+/** Every address buried in an activity payload, which the column scan above cannot see. */
+function activityPayloadEmails(db: Database.Database): string[] {
+  const rows = db.prepare('SELECT kind, payload FROM ticket_activity').all() as Array<{ kind: ActivityKind; payload: string }>
+  const found = new Set<string>()
+  for (const row of rows) {
+    for (const key of personPayloadKeys[row.kind] || []) {
+      const value = safeJson(row.payload)[key]
+      if (value && value.includes('@')) found.add(value.trim().toLowerCase())
+    }
+  }
+  return [...found]
+}
+
+/**
+ * An assignment entry recorded who it named as a raw address, so anonymizing an account
+ * would leave it named in its own history. Swap those for ids while the mapping is still
+ * a plain email lookup.
+ */
+function rewriteActivityPayloadToIds(db: Database.Database) {
+  const byEmail = new Map((db.prepare('SELECT id, email FROM users').all() as Array<{ id: string; email: string | null }>)
+    .filter(row => row.email)
+    .map(row => [row.email!.trim().toLowerCase(), row.id]))
+  const rows = db.prepare('SELECT id, kind, payload FROM ticket_activity').all() as Array<{ id: string; kind: ActivityKind; payload: string }>
+  const update = db.prepare('UPDATE ticket_activity SET payload = ? WHERE id = ?')
+  db.transaction(() => {
+    for (const row of rows) {
+      const keys = personPayloadKeys[row.kind]
+      if (!keys) continue
+      const payload = safeJson(row.payload)
+      let touched = false
+      for (const key of keys) {
+        const value = payload[key]
+        if (!value || !value.includes('@')) continue
+        payload[key] = byEmail.get(value.trim().toLowerCase()) || null
+        touched = true
+      }
+      if (touched) update.run(JSON.stringify(payload), row.id)
+    }
+  })()
+}
+
+/** Swaps the email column on every table that names a person for a real foreign key. */
+function rebuildPersonColumns(db: Database.Database) {
+  db.pragma('foreign_keys = OFF')
+  try {
+    db.exec(`
+      BEGIN IMMEDIATE;
+
+      CREATE TABLE tickets_migration (
+        id TEXT PRIMARY KEY,
+        ticket_number INTEGER NOT NULL UNIQUE,
+        board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+        lane_id TEXT NOT NULL REFERENCES lanes(id),
+        title TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        position INTEGER NOT NULL,
+        priority TEXT NOT NULL CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
+        due_date TEXT,
+        build_number TEXT,
+        source TEXT NOT NULL CHECK (source IN ('manual', 'testflight_screenshot', 'testflight_crash')),
+        external_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT,
+        author_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        assignee_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        category_id TEXT REFERENCES categories(id) ON DELETE SET NULL
+      );
+      INSERT INTO tickets_migration (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, source, external_id, created_at, updated_at, archived_at, author_id, assignee_id, category_id)
+      SELECT t.id, t.ticket_number, t.board_id, t.lane_id, t.title, t.description, t.position, t.priority, t.due_date, t.build_number,
+             t.source, t.external_id, t.created_at, t.updated_at, t.archived_at, author.id, assignee.id, t.category_id
+      FROM tickets t
+      LEFT JOIN users author ON author.email = TRIM(t.author_email)
+      LEFT JOIN users assignee ON assignee.email = TRIM(t.assignee_email);
+      DROP TABLE tickets;
+      ALTER TABLE tickets_migration RENAME TO tickets;
+
+      CREATE TABLE ticket_comments_migration (
+        id TEXT PRIMARY KEY,
+        ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+        author_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO ticket_comments_migration (id, ticket_id, author_id, body, created_at, updated_at)
+      SELECT c.id, c.ticket_id, author.id, c.body, c.created_at, c.updated_at
+      FROM ticket_comments c
+      LEFT JOIN users author ON author.email = TRIM(c.author_email);
+      DROP TABLE ticket_comments;
+      ALTER TABLE ticket_comments_migration RENAME TO ticket_comments;
+
+      CREATE TABLE ticket_activity_migration (
+        id TEXT PRIMARY KEY,
+        ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+        actor_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        kind TEXT NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO ticket_activity_migration (id, ticket_id, actor_id, kind, payload, created_at)
+      SELECT a.id, a.ticket_id, actor.id, a.kind, a.payload, a.created_at
+      FROM ticket_activity a
+      LEFT JOIN users actor ON actor.email = TRIM(a.actor_email);
+      DROP TABLE ticket_activity;
+      ALTER TABLE ticket_activity_migration RENAME TO ticket_activity;
+
+      CREATE TABLE apple_feedback_migration (
+        ticket_id TEXT PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE,
+        feedback_type TEXT NOT NULL CHECK (feedback_type IN ('screenshot', 'crash')),
+        comment TEXT,
+        tester_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        device_model TEXT,
+        os_version TEXT,
+        locale TEXT,
+        build_id TEXT,
+        build_version TEXT,
+        build_bundle_id TEXT,
+        source_created_at TEXT NOT NULL,
+        raw_json TEXT NOT NULL
+      );
+      INSERT INTO apple_feedback_migration (ticket_id, feedback_type, comment, tester_id, device_model, os_version, locale, build_id, build_version, build_bundle_id, source_created_at, raw_json)
+      SELECT f.ticket_id, f.feedback_type, f.comment, tester.id, f.device_model, f.os_version, f.locale, f.build_id, f.build_version, f.build_bundle_id, f.source_created_at, f.raw_json
+      FROM apple_feedback f
+      LEFT JOIN users tester ON tester.email = TRIM(f.tester_email);
+      DROP TABLE apple_feedback;
+      ALTER TABLE apple_feedback_migration RENAME TO apple_feedback;
+
+      COMMIT;
+    `)
+  } catch (error) {
+    if (db.inTransaction) db.exec('ROLLBACK')
+    throw error
+  } finally {
+    db.pragma('foreign_keys = ON')
+  }
+}
+
+/**
+ * Replaces every stored email address with a user id.
+ *
+ * Everybody a ticket, comment, activity entry or TestFlight import names gets a row in
+ * `users` — accounts as before, everyone else as a `contact`. Pointing at people by id is
+ * what finally makes a person editable: an address can change and an account can be
+ * anonymized without rewriting a single row of the history that refers to them.
+ *
+ * Has to run last. Every migration above it still speaks in email columns.
+ */
+export function ensurePersonIdentity(db: Database.Database) {
+  if (alreadyOnPersonIds(db)) return false
+
+  rebuildUsersWithKind(db)
+  seedContactsFromEmails(db)
+  rewriteActivityPayloadToIds(db)
+  rebuildPersonColumns(db)
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_ticket_comments_ticket ON ticket_comments(ticket_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_ticket_activity_ticket ON ticket_activity(ticket_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_feedback_created ON apple_feedback(source_created_at);
+  `)
+
+  // The import rule, applied to what was imported before it existed. Every board starts with
+  // the switch on, so a board that opts out afterwards keeps the authors it already gained.
+  db.prepare(`
+    UPDATE tickets SET author_id = (
+      SELECT f.tester_id FROM apple_feedback f
+      JOIN users u ON u.id = f.tester_id AND u.kind = 'account'
+      WHERE f.ticket_id = tickets.id
+    )
+    WHERE source IN ('testflight_screenshot', 'testflight_crash') AND author_id IS NULL
+  `).run()
+
+  const foreignKeyErrors = db.pragma('foreign_key_check') as unknown[]
+  if (foreignKeyErrors.length) throw new Error('The SQLite migration created invalid foreign keys.')
+  return true
+}
+
 export function clearImportedDescriptions(db: Database.Database) {
   return db.prepare("UPDATE tickets SET description = '' WHERE source IN ('testflight_screenshot', 'testflight_crash') AND description <> ''").run().changes
 }
@@ -936,7 +1272,7 @@ type BoardRow = {
   id: string; name: string; position: number
   asc_issuer_id: string; asc_key_id: string; asc_app_id: string
   asc_private_key: string | null; asc_key_filename: string | null; asc_key_uploaded_at: string | null
-  sync_limit: number; created_at: string
+  sync_limit: number; auto_author: number; created_at: string
 }
 
 type LaneRow = { id: string; board_id: string; name: string; position: number; is_import: number }
@@ -945,12 +1281,11 @@ type TicketRow = {
   id: string; ticket_number: number; board_id: string; lane_id: string; title: string; description: string
   position: number; priority: TicketPriority; due_date: string | null; build_number: string | null
   source: TicketSource; external_id: string | null; created_at: string; updated_at: string; archived_at: string | null
-  category_id: string | null; author_first_name: string | null; author_last_name: string | null; author_email: string | null
-  assignee_email: string | null
+  category_id: string | null; author_id: string | null; assignee_id: string | null
 }
 
 function toBoard(row: BoardRow): Board {
-  return { id: row.id, name: row.name, position: row.position, syncLimit: row.sync_limit, createdAt: row.created_at }
+  return { id: row.id, name: row.name, position: row.position, syncLimit: row.sync_limit, autoAuthor: Boolean(row.auto_author), createdAt: row.created_at }
 }
 
 function toCredentials(row: BoardRow): BoardCredentials {
@@ -1062,18 +1397,20 @@ export interface BoardUpdateInput {
   keyId?: string
   appId?: string
   syncLimit?: number
+  autoAuthor?: boolean
 }
 
 export function updateBoard(id: string, input: BoardUpdateInput, viewer?: BoardViewer | null): BoardSummary | null {
   const db = getDb()
   const row = db.prepare('SELECT * FROM boards WHERE id = ?').get(id) as BoardRow | undefined
   if (!row) return null
-  db.prepare('UPDATE boards SET name = ?, asc_issuer_id = ?, asc_key_id = ?, asc_app_id = ?, sync_limit = ? WHERE id = ?').run(
+  db.prepare('UPDATE boards SET name = ?, asc_issuer_id = ?, asc_key_id = ?, asc_app_id = ?, sync_limit = ?, auto_author = ? WHERE id = ?').run(
     input.name ?? row.name,
     input.issuerId ?? row.asc_issuer_id,
     input.keyId ?? row.asc_key_id,
     input.appId ?? row.asc_app_id,
     input.syncLimit ?? row.sync_limit,
+    input.autoAuthor === undefined ? row.auto_author : Number(input.autoAuthor),
     id
   )
   return findBoardSummary(id, viewer)
@@ -1104,7 +1441,7 @@ export function clearBoardPrivateKey(id: string, viewer?: BoardViewer | null): B
 }
 
 /** Server-only: decrypts the stored key. Never expose the result over the API. */
-export function boardSyncCredentials(id: string): { issuerId: string; keyId: string; appId: string; privateKeyPem: string | null; syncLimit: number } | null {
+export function boardSyncCredentials(id: string): { issuerId: string; keyId: string; appId: string; privateKeyPem: string | null; syncLimit: number; autoAuthor: boolean } | null {
   const row = getDb().prepare('SELECT * FROM boards WHERE id = ?').get(id) as BoardRow | undefined
   if (!row) return null
   return {
@@ -1112,7 +1449,8 @@ export function boardSyncCredentials(id: string): { issuerId: string; keyId: str
     keyId: row.asc_key_id,
     appId: row.asc_app_id,
     privateKeyPem: row.asc_private_key ? decryptSecret(row.asc_private_key) : null,
-    syncLimit: row.sync_limit
+    syncLimit: row.sync_limit,
+    autoAuthor: Boolean(row.auto_author)
   }
 }
 
@@ -1231,8 +1569,7 @@ function hydrateTicket(row: TicketRow): Ticket {
   const feedback: AppleFeedback | null = feedbackRow ? {
     feedbackType: feedbackRow.feedback_type as 'screenshot' | 'crash',
     comment: feedbackRow.comment ?? null,
-    testerEmail: feedbackRow.tester_email ?? null,
-    tester: resolvePerson(feedbackRow.tester_email),
+    tester: personById(feedbackRow.tester_id),
     deviceModel: feedbackRow.device_model ?? null,
     osVersion: feedbackRow.os_version ?? null,
     locale: feedbackRow.locale ?? null,
@@ -1249,7 +1586,7 @@ function hydrateTicket(row: TicketRow): Ticket {
     size: item.size,
     url: `/api/attachments/${item.id}`
   }))
-  const author: TicketAuthor | null = resolvePerson(row.author_email, { firstName: row.author_first_name, lastName: row.author_last_name })
+  const author: TicketAuthor | null = personById(row.author_id)
   const todos: TicketTodo[] = todoRows.map(todo => ({
     id: todo.id,
     text: todo.text,
@@ -1273,7 +1610,7 @@ function hydrateTicket(row: TicketRow): Ticket {
     updatedAt: row.updated_at,
     archivedAt: row.archived_at,
     author,
-    assignee: resolvePerson(row.assignee_email),
+    assignee: personById(row.assignee_id),
     commentCount,
     category: category || null,
     labels,
@@ -1423,20 +1760,26 @@ export interface TicketInput {
   laneId?: string
   categoryName?: string | null
   todos?: TicketTodoInput[]
-  assigneeEmail?: string | null
+  assigneeId?: string | null
+  /** Admin-only: who a ticket is attributed to, independent of who is editing it. */
+  authorId?: string | null
 }
 
 function nextPosition(laneId: string): number {
   return (getDb().prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM tickets WHERE lane_id = ? AND archived_at IS NULL').get(laneId) as { position: number }).position
 }
 
-/** Appends one entry to a ticket's history. Always called from inside the caller's transaction. */
-function recordActivity(ticketId: string, actorEmail: string | null, kind: ActivityKind, payload: Record<string, string | null> = {}) {
-  getDb().prepare('INSERT INTO ticket_activity (id, ticket_id, actor_email, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(randomUUID(), ticketId, actorEmail, kind, JSON.stringify(payload), new Date().toISOString())
+/**
+ * Appends one entry to a ticket's history. Always called from inside the caller's
+ * transaction. Person-valued payload keys hold ids, never addresses — an entry that spelled
+ * out an email would keep naming somebody the moment their account is anonymized.
+ */
+function recordActivity(ticketId: string, actorId: string | null, kind: ActivityKind, payload: Record<string, string | null> = {}) {
+  getDb().prepare('INSERT INTO ticket_activity (id, ticket_id, actor_id, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(randomUUID(), ticketId, actorId, kind, JSON.stringify(payload), new Date().toISOString())
 }
 
-export function createTicket(boardId: string, input: TicketInput, author: TicketAuthor | null = null): Ticket | null {
+export function createTicket(boardId: string, input: TicketInput, author: Person | null = null): Ticket | null {
   const db = getDb()
   // A lane may be named by the caller — the board's own lane, or nothing.
   const requested = input.laneId ? findLane(input.laneId) : null
@@ -1447,46 +1790,51 @@ export function createTicket(boardId: string, input: TicketInput, author: Ticket
   const position = nextPosition(lane.id)
   db.transaction(() => {
     const categoryId = resolveCategoryId(boardId, input.categoryName)
-    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, source, created_at, updated_at, author_first_name, author_last_name, author_email, assignee_email, category_id)
-      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?)`).run(
+    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, source, created_at, updated_at, author_id, assignee_id, category_id)
+      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?)`).run(
       id, boardId, lane.id, input.title, input.description || '', position, input.priority || 'medium',
       input.dueDate || null, input.buildNumber || null, now, now,
-      author?.firstName || null, author?.lastName || null, author?.email || null, input.assigneeEmail || null, categoryId
+      author?.id || null, input.assigneeId || null, categoryId
     )
     setTicketLabels(id, boardId, input.labels || [])
     setTicketTodos(id, input.todos || [])
-    recordActivity(id, author?.email || null, 'created', { lane: lane.name })
-    if (input.assigneeEmail) recordActivity(id, author?.email || null, 'assigned', { to: input.assigneeEmail })
+    recordActivity(id, author?.id || null, 'created', { lane: lane.name })
+    if (input.assigneeId) recordActivity(id, author?.id || null, 'assigned', { to: input.assigneeId })
   })()
   return findTicket(id)!
 }
 
-export function updateTicket(id: string, input: Partial<TicketInput>, actorEmail: string | null = null): Ticket | null {
+export function updateTicket(id: string, input: Partial<TicketInput>, actorId: string | null = null): Ticket | null {
   const existing = findTicket(id)
   if (!existing) return null
   const now = new Date().toISOString()
   const priority = input.priority ?? existing.priority
   const dueDate = input.dueDate === undefined ? existing.dueDate : input.dueDate || null
-  const assigneeEmail = input.assigneeEmail === undefined ? existing.assignee?.email || null : input.assigneeEmail || null
+  const assigneeId = input.assigneeId === undefined ? existing.assignee?.id || null : input.assigneeId || null
+  const authorId = input.authorId === undefined ? existing.author?.id || null : input.authorId || null
   getDb().transaction(() => {
     const categoryId = input.categoryName === undefined ? existing.category?.id || null : resolveCategoryId(existing.boardId, input.categoryName)
-    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, due_date = ?, build_number = ?, assignee_email = ?, category_id = ?, updated_at = ? WHERE id = ?`).run(
+    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, due_date = ?, build_number = ?, assignee_id = ?, author_id = ?, category_id = ?, updated_at = ? WHERE id = ?`).run(
       input.title ?? existing.title,
       input.description ?? existing.description,
       priority,
       dueDate,
       input.buildNumber === undefined ? (existing.source === 'manual' ? existing.buildNumber : null) : input.buildNumber || null,
-      assigneeEmail,
+      assigneeId,
+      authorId,
       categoryId,
       now,
       id
     )
     if (input.labels) setTicketLabels(id, existing.boardId, input.labels)
     if (input.todos !== undefined) setTicketTodos(id, input.todos)
-    if (priority !== existing.priority) recordActivity(id, actorEmail, 'priority', { from: existing.priority, to: priority })
-    if (dueDate !== existing.dueDate) recordActivity(id, actorEmail, 'due_date', { from: existing.dueDate, to: dueDate })
-    if (assigneeEmail !== (existing.assignee?.email || null)) {
-      recordActivity(id, actorEmail, assigneeEmail ? 'assigned' : 'unassigned', { from: existing.assignee?.email || null, to: assigneeEmail })
+    if (priority !== existing.priority) recordActivity(id, actorId, 'priority', { from: existing.priority, to: priority })
+    if (dueDate !== existing.dueDate) recordActivity(id, actorId, 'due_date', { from: existing.dueDate, to: dueDate })
+    if (assigneeId !== (existing.assignee?.id || null)) {
+      recordActivity(id, actorId, assigneeId ? 'assigned' : 'unassigned', { from: existing.assignee?.id || null, to: assigneeId })
+    }
+    if (authorId !== (existing.author?.id || null)) {
+      recordActivity(id, actorId, 'author', { from: existing.author?.id || null, to: authorId })
     }
   })()
   return findTicket(id)
@@ -1501,7 +1849,7 @@ function reindexLane(laneId: string, orderedIds?: string[]) {
   ids.forEach((id, index) => update.run(laneId, index, now, id))
 }
 
-export function moveTicket(id: string, targetLaneId: string, targetIndex: number, actorEmail: string | null = null): Ticket | null {
+export function moveTicket(id: string, targetLaneId: string, targetIndex: number, actorId: string | null = null): Ticket | null {
   const current = findTicket(id)
   if (!current || current.archivedAt) return null
   const targetLane = findLane(targetLaneId)
@@ -1516,22 +1864,22 @@ export function moveTicket(id: string, targetLaneId: string, targetIndex: number
     targetIds.splice(index, 0, id)
     if (current.laneId !== targetLaneId) {
       reindexLane(current.laneId, sourceIds)
-      recordActivity(id, actorEmail, 'moved', { from: findLane(current.laneId)?.name || null, to: targetLane.name })
+      recordActivity(id, actorId, 'moved', { from: findLane(current.laneId)?.name || null, to: targetLane.name })
     }
     reindexLane(targetLaneId, targetIds)
   })()
   return findTicket(id)
 }
 
-export function archiveTicket(id: string, actorEmail: string | null = null): Ticket | null {
+export function archiveTicket(id: string, actorId: string | null = null): Ticket | null {
   const now = new Date().toISOString()
   const result = getDb().prepare('UPDATE tickets SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL').run(now, now, id)
   if (!result.changes) return null
-  recordActivity(id, actorEmail, 'archived')
+  recordActivity(id, actorId, 'archived')
   return findTicket(id)
 }
 
-export function restoreTicket(id: string, actorEmail: string | null = null): Ticket | null {
+export function restoreTicket(id: string, actorId: string | null = null): Ticket | null {
   const db = getDb()
   const ticket = findTicket(id)
   if (!ticket || !ticket.archivedAt) return null
@@ -1540,7 +1888,7 @@ export function restoreTicket(id: string, actorEmail: string | null = null): Tic
   const now = new Date().toISOString()
   db.prepare('UPDATE tickets SET archived_at = NULL, lane_id = ?, position = ?, updated_at = ? WHERE id = ?')
     .run(lane.id, nextPosition(lane.id), now, id)
-  recordActivity(id, actorEmail, 'restored', { lane: lane.name })
+  recordActivity(id, actorId, 'restored', { lane: lane.name })
   return findTicket(id)
 }
 
@@ -1595,6 +1943,8 @@ export interface ImportedTicketInput {
   buildBundleId: string | null
   sourceCreatedAt: string
   raw: unknown
+  /** Whether a tester who already has an account is recorded as the ticket's author. */
+  autoAuthor?: boolean
 }
 
 export function insertImportedTicket(input: ImportedTicketInput): Ticket {
@@ -1602,15 +1952,20 @@ export function insertImportedTicket(input: ImportedTicketInput): Ticket {
   const id = randomUUID()
   const now = new Date().toISOString()
   const position = nextPosition(input.laneId)
+  // Apple gives us an address, so the tester always gets a row. Attributing the ticket to
+  // them is a separate question: only somebody who already has an account here can be its
+  // author, and only while the board asks for it.
+  const testerId = input.testerEmail ? upsertContactByEmail(input.testerEmail) : null
+  const authorId = input.autoAuthor !== false && personById(testerId)?.isAccount ? testerId : null
   db.transaction(() => {
-    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, source, external_id, created_at, updated_at)
-      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, '', ?, ?, ?, ?, ?, ?)`).run(
+    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, source, external_id, created_at, updated_at, author_id)
+      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)`).run(
       id, input.boardId, input.laneId, input.title, position, input.type === 'crash' ? 'high' : 'medium',
-      input.type === 'crash' ? 'testflight_crash' : 'testflight_screenshot', input.externalId, now, now
+      input.type === 'crash' ? 'testflight_crash' : 'testflight_screenshot', input.externalId, now, now, authorId
     )
-    db.prepare(`INSERT INTO apple_feedback (ticket_id, feedback_type, comment, tester_email, device_model, os_version, locale, build_id, build_version, build_bundle_id, source_created_at, raw_json)
+    db.prepare(`INSERT INTO apple_feedback (ticket_id, feedback_type, comment, tester_id, device_model, os_version, locale, build_id, build_version, build_bundle_id, source_created_at, raw_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      id, input.type, input.comment, input.testerEmail, input.deviceModel, input.osVersion, input.locale,
+      id, input.type, input.comment, testerId, input.deviceModel, input.osVersion, input.locale,
       input.buildId, input.buildVersion, input.buildBundleId, input.sourceCreatedAt, JSON.stringify(input.raw)
     )
     setTicketLabels(id, input.boardId, ['TestFlight', input.type === 'crash' ? 'Crash' : 'Screenshot'])
@@ -1638,14 +1993,15 @@ export function deleteAttachment(id: string) {
 /* -------------------------------------------------------------------------- *
  * Accounts, membership, comments, activity
  *
- * Everything person-shaped is keyed by email. Nothing here writes a user id into
- * a ticket, comment, or activity row, which is what lets an address that has no
- * account yet start resolving the moment somebody creates one.
+ * Everything person-shaped is keyed by user id. Somebody who has never signed in still
+ * gets a row — a `contact` — so a ticket can point at them; inviting that address later
+ * claims the same row, and everything already attached to it follows along.
  * -------------------------------------------------------------------------- */
 
 export interface UserRecord {
   id: string
-  email: string
+  /** null once anonymized. Such an account is disabled, so nothing can sign in as it. */
+  email: string | null
   firstName: string
   lastName: string
   passwordHash: string | null
@@ -1654,14 +2010,15 @@ export interface UserRecord {
   sessionVersion: number
   inviteTokenHash: string | null
   inviteExpiresAt: string | null
+  anonymizedAt: string | null
   createdAt: string
   lastLoginAt: string | null
 }
 
 type UserRow = {
-  id: string; email: string; first_name: string; last_name: string; password_hash: string | null
-  role: UserRole; status: UserStatus; session_version: number; invite_token_hash: string | null
-  invite_expires_at: string | null; created_at: string; last_login_at: string | null
+  id: string; email: string | null; first_name: string; last_name: string; password_hash: string | null
+  kind: UserKind; role: UserRole; status: UserStatus; session_version: number; invite_token_hash: string | null
+  invite_expires_at: string | null; anonymized_at: string | null; created_at: string; last_login_at: string | null
 }
 
 function toUser(row: UserRow): UserRecord {
@@ -1676,32 +2033,54 @@ function toUser(row: UserRow): UserRecord {
     sessionVersion: row.session_version,
     inviteTokenHash: row.invite_token_hash,
     inviteExpiresAt: row.invite_expires_at,
+    anonymizedAt: row.anonymized_at,
     createdAt: row.created_at,
     lastLoginAt: row.last_login_at,
   }
 }
 
 export function listUsers(): UserAccount[] {
-  return (getDb().prepare(`
+  const db = getDb()
+  const accounts = db.prepare(`
     SELECT u.id, u.email, u.first_name AS firstName, u.last_name AS lastName, u.role, u.status,
            u.created_at AS createdAt, u.last_login_at AS lastLoginAt, u.invite_expires_at AS inviteExpiresAt,
-           (SELECT COUNT(*) FROM board_members m WHERE m.user_id = u.id) AS boardCount
+           u.anonymized_at AS anonymizedAt
     FROM users u
+    WHERE u.kind = 'account'
     ORDER BY u.first_name COLLATE NOCASE, u.last_name COLLATE NOCASE, u.email COLLATE NOCASE
-  `).all()) as UserAccount[]
+  `).all() as Omit<UserAccount, 'boards'>[]
+
+  // One query for every membership rather than one per account, grouped in the order the
+  // boards themselves are shown so a row reads the same as the board switcher.
+  const memberships = db.prepare(`
+    SELECT m.user_id AS userId, b.id AS boardId, b.name AS boardName, m.role
+    FROM board_members m
+    JOIN boards b ON b.id = m.board_id
+    ORDER BY b.position, b.created_at
+  `).all() as (UserBoardMembership & { userId: string })[]
+
+  const byUser = new Map<string, UserBoardMembership[]>()
+  for (const { userId, ...membership } of memberships) {
+    const list = byUser.get(userId)
+    if (list) list.push(membership)
+    else byUser.set(userId, [membership])
+  }
+
+  return accounts.map(account => ({ ...account, boards: byUser.get(account.id) || [] }))
 }
 
 export function countUsers(): number {
-  return (getDb().prepare('SELECT COUNT(*) AS value FROM users').get() as { value: number }).value
+  return (getDb().prepare("SELECT COUNT(*) AS value FROM users WHERE kind = 'account'").get() as { value: number }).value
 }
 
 export function findUser(id: string): UserRecord | null {
-  const row = getDb().prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRow | undefined
+  const row = getDb().prepare("SELECT * FROM users WHERE id = ? AND kind = 'account'").get(id) as UserRow | undefined
   return row ? toUser(row) : null
 }
 
+/** Accounts only: a contact has no password, and must never be a login candidate. */
 export function findUserByEmail(email: string): UserRecord | null {
-  const row = getDb().prepare('SELECT * FROM users WHERE email = ? COLLATE NOCASE').get(email.trim()) as UserRow | undefined
+  const row = getDb().prepare("SELECT * FROM users WHERE email = ? COLLATE NOCASE AND kind = 'account'").get(email.trim()) as UserRow | undefined
   return row ? toUser(row) : null
 }
 
@@ -1714,6 +2093,10 @@ export class EmailTakenError extends Error {
   constructor() { super('An account with this email address already exists.') }
 }
 
+export class AnonymizedAccountError extends Error {
+  constructor() { super('An anonymized account cannot be changed or invited back.') }
+}
+
 export interface UserCreateInput {
   email: string
   firstName: string
@@ -1721,44 +2104,152 @@ export interface UserCreateInput {
   role: UserRole
 }
 
+/**
+ * Invites somebody. When that address is already known as a contact — an imported
+ * TestFlight tester, the author of an old ticket — the invitation claims their existing
+ * row rather than opening a second one, so every ticket, comment and activity entry that
+ * already points at them belongs to the new account from the moment it is created.
+ */
 export function createUser(input: UserCreateInput): UserRecord {
   const db = getDb()
   const email = input.email.trim().toLowerCase()
-  if (findUserByEmail(email)) throw new EmailTakenError()
-  const id = randomUUID()
-  db.prepare(`
-    INSERT INTO users (id, email, first_name, last_name, role, status, created_at)
-    VALUES (?, ?, ?, ?, ?, 'invited', ?)
-  `).run(id, email, input.firstName, input.lastName, input.role, new Date().toISOString())
+  const existing = db.prepare('SELECT id, kind FROM users WHERE email = ? COLLATE NOCASE').get(email) as { id: string; kind: UserKind } | undefined
+  if (existing?.kind === 'account') throw new EmailTakenError()
+
+  const id = existing?.id || randomUUID()
+  if (existing) {
+    db.prepare(`
+      UPDATE users SET first_name = ?, last_name = ?, kind = 'account', role = ?, status = 'invited' WHERE id = ?
+    `).run(input.firstName, input.lastName, input.role, id)
+  } else {
+    db.prepare(`
+      INSERT INTO users (id, email, first_name, last_name, kind, role, status, created_at)
+      VALUES (?, ?, ?, ?, 'account', ?, 'invited', ?)
+    `).run(id, email, input.firstName, input.lastName, input.role, new Date().toISOString())
+  }
   invalidateUserDirectory()
   return findUser(id)!
 }
 
 export interface UserUpdateInput {
+  email?: string
   firstName?: string
   lastName?: string
   role?: UserRole
   status?: UserStatus
 }
 
+/** Swaps one person for another everywhere an activity payload names them. */
+function repointPayloadPerson(db: Database.Database, fromId: string, toId: string) {
+  const kinds = Object.keys(personPayloadKeys)
+  const rows = db.prepare(`SELECT id, kind, payload FROM ticket_activity WHERE kind IN (${kinds.map(() => '?').join(', ')})`)
+    .all(...kinds) as Array<{ id: string; kind: ActivityKind; payload: string }>
+  const update = db.prepare('UPDATE ticket_activity SET payload = ? WHERE id = ?')
+  for (const row of rows) {
+    const payload = safeJson(row.payload)
+    let touched = false
+    for (const key of personPayloadKeys[row.kind] || []) {
+      if (payload[key] === fromId) {
+        payload[key] = toId
+        touched = true
+      }
+    }
+    if (touched) update.run(JSON.stringify(payload), row.id)
+  }
+}
+
+/**
+ * Folds a contact into the account that is taking its address. An address only ever belongs
+ * to one person, so these two rows are the same human: everything the contact is named on
+ * moves across and the contact row goes away.
+ *
+ * This is the other direction of what `createUser` does. There the account does not exist
+ * yet, so the contact row simply becomes it; here it already has an id of its own, and the
+ * references have to be carried over instead. Runs inside the caller's transaction.
+ */
+function absorbContact(db: Database.Database, contactId: string, accountId: string) {
+  db.prepare('UPDATE tickets SET author_id = ? WHERE author_id = ?').run(accountId, contactId)
+  db.prepare('UPDATE tickets SET assignee_id = ? WHERE assignee_id = ?').run(accountId, contactId)
+  db.prepare('UPDATE ticket_comments SET author_id = ? WHERE author_id = ?').run(accountId, contactId)
+  db.prepare('UPDATE ticket_activity SET actor_id = ? WHERE actor_id = ?').run(accountId, contactId)
+  db.prepare('UPDATE apple_feedback SET tester_id = ? WHERE tester_id = ?').run(accountId, contactId)
+  repointPayloadPerson(db, contactId, accountId)
+  db.prepare("DELETE FROM users WHERE id = ? AND kind = 'contact'").run(contactId)
+}
+
+/**
+ * Changing the address is a one-row edit: everything that names this person holds their id,
+ * so nothing has to be rewritten and nothing is orphaned. The one exception is an address
+ * already known as a contact — the tester who turns out to be a colleague — which is folded
+ * into the account rather than refused.
+ */
 export function updateUser(id: string, input: UserUpdateInput): UserRecord | null {
+  const db = getDb()
   const existing = findUser(id)
   if (!existing) return null
+  // A tombstone stays a tombstone. Letting one be renamed and re-enabled would hand the
+  // erased person's history to whoever the row was pointed at next.
+  if (existing.anonymizedAt) throw new AnonymizedAccountError()
+
+  const email = input.email === undefined ? existing.email : input.email.trim().toLowerCase()
+  let contactToAbsorb: string | null = null
+  if (email && email !== existing.email) {
+    const holder = db.prepare('SELECT id, kind FROM users WHERE email = ? COLLATE NOCASE').get(email) as { id: string; kind: UserKind } | undefined
+    if (holder && holder.id !== id) {
+      if (holder.kind === 'account') throw new EmailTakenError()
+      contactToAbsorb = holder.id
+    }
+  }
+
   const status = input.status ?? existing.status
   // Locking an account out only helps if the sessions it already has stop working.
   const sessionVersion = status === 'disabled' && existing.status !== 'disabled' ? existing.sessionVersion + 1 : existing.sessionVersion
-  getDb().prepare('UPDATE users SET first_name = ?, last_name = ?, role = ?, status = ?, session_version = ? WHERE id = ?').run(
-    input.firstName ?? existing.firstName,
-    input.lastName ?? existing.lastName,
-    input.role ?? existing.role,
-    status,
-    sessionVersion,
-    id
-  )
+  db.transaction(() => {
+    // Before the update: the contact still holds the address under a unique index.
+    if (contactToAbsorb) absorbContact(db, contactToAbsorb, id)
+    db.prepare('UPDATE users SET email = ?, first_name = ?, last_name = ?, role = ?, status = ?, session_version = ? WHERE id = ?').run(
+      email,
+      input.firstName ?? existing.firstName,
+      input.lastName ?? existing.lastName,
+      input.role ?? existing.role,
+      status,
+      sessionVersion,
+      id
+    )
+  })()
   invalidateUserDirectory()
   return findUser(id)
 }
 
+/**
+ * Erases the person while keeping everything they did. The row stays, so every ticket,
+ * comment and activity entry that points at it stays attached and simply stops naming
+ * anybody; the address is released, and the account can no longer be signed in to.
+ */
+export function anonymizeUser(id: string): UserRecord | null {
+  const existing = findUser(id)
+  if (!existing) return null
+  const db = getDb()
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE users
+      SET email = NULL, first_name = '', last_name = '', password_hash = NULL, status = 'disabled',
+          invite_token_hash = NULL, invite_expires_at = NULL, anonymized_at = COALESCE(anonymized_at, ?),
+          session_version = session_version + 1
+      WHERE id = ?
+    `).run(new Date().toISOString(), id)
+    // Erased means gone from the boards too: nobody should still be able to pick them.
+    db.prepare('DELETE FROM board_members WHERE user_id = ?').run(id)
+  })()
+  invalidateUserDirectory()
+  return findUser(id)
+}
+
+/**
+ * Removes the row outright. Every ticket, comment and activity entry that pointed at it
+ * survives with a null person — use `anonymizeUser` to keep the history readable as one
+ * person's, and this only when the row itself should not exist.
+ */
 export function deleteUser(id: string): boolean {
   const changes = getDb().prepare('DELETE FROM users WHERE id = ?').run(id).changes
   if (changes) invalidateUserDirectory()
@@ -1779,6 +2270,8 @@ export function setUserPassword(id: string, passwordHash: string): UserRecord | 
 }
 
 export function setInviteToken(id: string, tokenHash: string, expiresAt: string): UserRecord | null {
+  // An erased account has no way back in, and issuing a link would be exactly that.
+  if (findUser(id)?.anonymizedAt) throw new AnonymizedAccountError()
   const changes = getDb().prepare('UPDATE users SET invite_token_hash = ?, invite_expires_at = ? WHERE id = ?').run(tokenHash, expiresAt, id).changes
   return changes ? findUser(id) : null
 }
@@ -1810,14 +2303,14 @@ export function countBoardAdmins(boardId: string): number {
   return (getDb().prepare("SELECT COUNT(*) AS value FROM board_members WHERE board_id = ? AND role = 'admin'").get(boardId) as { value: number }).value
 }
 
-type CommentRow = { id: string; ticket_id: string; author_email: string; body: string; created_at: string; updated_at: string }
+type CommentRow = { id: string; ticket_id: string; author_id: string | null; body: string; created_at: string; updated_at: string }
 
 function toComment(row: CommentRow): TicketComment {
   return {
     id: row.id,
     ticketId: row.ticket_id,
-    author: resolvePerson(row.author_email),
-    authorEmail: row.author_email,
+    author: personById(row.author_id),
+    authorId: row.author_id,
     body: row.body,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -1834,15 +2327,15 @@ export function findComment(id: string): TicketComment | null {
   return row ? toComment(row) : null
 }
 
-export function createComment(ticketId: string, authorEmail: string, body: string): TicketComment | null {
+export function createComment(ticketId: string, authorId: string, body: string): TicketComment | null {
   const db = getDb()
   if (!db.prepare('SELECT 1 FROM tickets WHERE id = ?').get(ticketId)) return null
   const id = randomUUID()
   const now = new Date().toISOString()
   db.transaction(() => {
-    db.prepare('INSERT INTO ticket_comments (id, ticket_id, author_email, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(id, ticketId, authorEmail, body, now, now)
-    recordActivity(ticketId, authorEmail, 'commented')
+    db.prepare('INSERT INTO ticket_comments (id, ticket_id, author_id, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, ticketId, authorId, body, now, now)
+    recordActivity(ticketId, authorId, 'commented')
   })()
   return findComment(id)
 }
@@ -1858,15 +2351,23 @@ export function deleteComment(id: string): boolean {
 
 export function listActivity(ticketId: string, limit = 100): TicketActivityEntry[] {
   const rows = getDb().prepare('SELECT * FROM ticket_activity WHERE ticket_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?')
-    .all(ticketId, limit) as Array<{ id: string; ticket_id: string; actor_email: string | null; kind: ActivityKind; payload: string; created_at: string }>
-  return rows.map(row => ({
-    id: row.id,
-    ticketId: row.ticket_id,
-    actor: resolvePerson(row.actor_email),
-    kind: row.kind,
-    payload: safeJson(row.payload),
-    createdAt: row.created_at,
-  }))
+    .all(ticketId, limit) as Array<{ id: string; ticket_id: string; actor_id: string | null; kind: ActivityKind; payload: string; created_at: string }>
+  return rows.map(row => {
+    const payload = safeJson(row.payload)
+    // Person-valued keys are ids on disk; the reader wants people, and an id whose row is
+    // gone resolves to null rather than showing a stranger a raw uuid.
+    const payloadPeople: Record<string, Person | null> = {}
+    for (const key of personPayloadKeys[row.kind] || []) payloadPeople[key] = personById(payload[key])
+    return {
+      id: row.id,
+      ticketId: row.ticket_id,
+      actor: personById(row.actor_id),
+      kind: row.kind,
+      payload,
+      payloadPeople,
+      createdAt: row.created_at,
+    }
+  })
 }
 
 function safeJson(value: string): Record<string, string | null> {

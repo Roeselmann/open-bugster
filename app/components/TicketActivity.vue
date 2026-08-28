@@ -23,13 +23,23 @@ watch(() => [props.ticketId, props.refreshKey], load, { immediate: true })
 const sentences: Record<ActivityKind, (entry: TicketActivityEntry) => string> = {
   created: entry => (entry.payload.source ? `imported this ${entry.payload.source} from TestFlight` : `created this ticket in ${entry.payload.lane || 'the board'}`),
   moved: entry => `moved it from ${entry.payload.from || 'a lane'} to ${entry.payload.to || 'another lane'}`,
-  assigned: entry => `assigned it to ${entry.payload.to}`,
+  assigned: entry => `assigned it to ${personName(entry, 'to')}`,
   unassigned: () => 'removed the assignee',
+  author: entry => (entry.payload.to ? `attributed it to ${personName(entry, 'to')}` : 'removed the attribution'),
   priority: entry => `changed the priority from ${entry.payload.from} to ${entry.payload.to}`,
   due_date: entry => (entry.payload.to ? `set the due date to ${entry.payload.to}` : 'removed the due date'),
   archived: () => 'archived it',
   restored: entry => `restored it to ${entry.payload.lane || 'the board'}`,
   commented: () => 'wrote a comment',
+}
+
+/**
+ * A person-valued payload key holds an id; the entry carries the resolved person beside it,
+ * so an account that has since been erased reads as such instead of leaking an address.
+ */
+function personName(entry: TicketActivityEntry, key: string) {
+  const person = entry.payloadPeople?.[key]
+  return person ? displayName(person) : 'somebody'
 }
 
 function sentence(entry: TicketActivityEntry) {

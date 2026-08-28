@@ -5,7 +5,7 @@ import type { BoardSummary, TestFlightConnection } from '~~/shared/types/domain'
 const props = defineProps<{ board: BoardSummary }>()
 const emit = defineEmits<{ changed: []; notify: [type: 'success' | 'error', text: string] }>()
 
-const form = reactive({ issuerId: '', keyId: '', appId: '', syncLimit: 100 })
+const form = reactive({ issuerId: '', keyId: '', appId: '', syncLimit: 100, autoAuthor: true })
 const saving = ref(false)
 const uploading = ref(false)
 const removingKey = ref(false)
@@ -18,6 +18,7 @@ watchEffect(() => {
   form.keyId = props.board.credentials.keyId
   form.appId = props.board.credentials.appId
   form.syncLimit = props.board.syncLimit
+  form.autoAuthor = props.board.autoAuthor
 })
 
 // A stale "connected" badge next to edited credentials would be misleading.
@@ -36,6 +37,7 @@ const unsaved = computed(() => {
     || form.keyId.trim() !== saved.keyId
     || form.appId.trim() !== saved.appId
     || Number(form.syncLimit) !== props.board.syncLimit
+    || form.autoAuthor !== props.board.autoAuthor
 })
 
 const dateFormatter = new Intl.DateTimeFormat('en', { day: '2-digit', month: 'short', year: 'numeric' })
@@ -171,6 +173,16 @@ async function removeKey() {
         >
         <span class="muted mt-2 block text-[11px] leading-relaxed">
           Each sync checks this many of the newest submissions per feedback type — screenshots and crashes counted separately — and imports the ones that are not on the board yet.
+        </span>
+      </label>
+
+      <label class="flex max-w-xl cursor-pointer items-start gap-3">
+        <input v-model="form.autoAuthor" type="checkbox" class="focus-ring mt-0.5 size-4 shrink-0 cursor-pointer accent-[var(--accent)]">
+        <span>
+          <span class="block text-xs font-bold uppercase tracking-[.08em]">Attribute imports to their tester</span>
+          <span class="muted mt-2 block text-[11px] leading-relaxed">
+            When the tester of an imported submission already has an account here, record them as the ticket's author. Testers without an account are noted on the ticket either way, and a board admin can set the author by hand at any time.
+          </span>
         </span>
       </label>
 

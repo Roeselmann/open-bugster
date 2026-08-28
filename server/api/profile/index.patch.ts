@@ -1,4 +1,4 @@
-import { updateUser } from '~~/server/utils/db'
+import { AnonymizedAccountError, EmailTakenError, updateUser } from '~~/server/utils/db'
 import { requireAuthUser } from '~~/server/utils/access'
 import { profileUpdateSchema, validationError } from '~~/server/utils/validation'
 
@@ -6,12 +6,22 @@ export default defineEventHandler(async (event) => {
   const account = requireAuthUser(event)
   const parsed = profileUpdateSchema.safeParse(await readBody(event))
   if (!parsed.success) throw validationError(parsed.error)
-  const updated = updateUser(account.id, parsed.data)!
-  // The session carries the display name, so it has to be refreshed alongside the row.
+  let updated
+  try {
+    updated = updateUser(account.id, parsed.data)!
+  } catch (error) {
+    if (error instanceof EmailTakenError || error instanceof AnonymizedAccountError) {
+      throw createError({ statusCode: 409, statusMessage: error.message })
+    }
+    throw error
+  }
+  // The session carries the display name and address, so it has to be refreshed alongside
+  // the row. Only an anonymized account has no address, and the auth middleware turns those
+  // away as disabled, so a session always has one.
   await replaceUserSession(event, {
     user: {
       id: updated.id,
-      email: updated.email,
+      email: updated.email!,
       firstName: updated.firstName,
       lastName: updated.lastName,
       role: updated.role,

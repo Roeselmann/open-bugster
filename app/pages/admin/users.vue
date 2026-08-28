@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Check, Copy, Link2, Link2Off, Trash2 } from '@lucide/vue'
-import type { UserAccount, UserRole, UserStatus } from '~~/shared/types/domain'
+import { Check, Copy, KeyRound, Link2, Link2Off, Trash2, UserRoundX } from '@lucide/vue'
+import type { BoardRole, UserAccount, UserRole, UserStatus } from '~~/shared/types/domain'
 
 const { user: currentUser, instanceAdmin } = useAuth()
 const { notice, notify, closeNotice } = useNotify()
@@ -16,6 +16,7 @@ const roleOptions = [
   { value: 'admin', label: 'Administrator' },
 ]
 const statusLabels: Record<UserStatus, string> = { invited: 'Invitation pending', active: 'Active', disabled: 'Disabled' }
+const boardRoleLabels: Record<BoardRole, string> = { viewer: 'Viewer', editor: 'Editor', admin: 'Administrator' }
 
 const DAY = 24 * 60 * 60 * 1000
 
@@ -24,12 +25,27 @@ const DAY = 24 * 60 * 60 * 1000
  * ago looks exactly like one sent this morning. Report what the link is actually doing.
  */
 function accountState(account: UserAccount): string {
-  if (account.status !== 'invited') return statusLabels[account.status]
+  const noun = account.status === 'invited' ? 'Invitation' : 'Password link'
+  if (account.status !== 'invited' && !account.inviteExpiresAt) return statusLabels[account.status]
   if (!account.inviteExpiresAt) return 'No invitation link'
   const remaining = Date.parse(account.inviteExpiresAt) - Date.now()
-  if (!Number.isFinite(remaining) || remaining <= 0) return 'Invitation expired'
+  if (!Number.isFinite(remaining) || remaining <= 0) return `${noun} expired`
   const days = Math.ceil(remaining / DAY)
-  return days <= 1 ? 'Invitation expires today' : `Invitation expires in ${days} days`
+  const validity = days <= 1 ? 'expires today' : `expires in ${days} days`
+  // An outstanding reset says nothing about whether the account still works, so on an
+  // account that has a password the status has to be named alongside it.
+  return account.status === 'invited' ? `${noun} ${validity}` : `${statusLabels[account.status]} · ${noun} ${validity}`
+}
+
+/**
+ * Who can be handed a link. It sets a password and signs the holder in, which is why a
+ * disabled account is left out, and why an administrator cannot issue one for the owner —
+ * the owner recovers with `npm run owner:reset` on the server. Your own password is
+ * changed under Your profile, so your row does not offer it either.
+ */
+function canIssueLink(account: UserAccount): boolean {
+  if (account.anonymizedAt || account.status === 'disabled') return false
+  return account.role !== 'owner' && account.id !== currentUser.value?.id
 }
 
 const invite = reactive({ email: '', firstName: '', lastName: '', role: 'member' as UserRole })
@@ -37,8 +53,25 @@ const inviting = ref(false)
 const pendingLink = ref<{ userId: string; url: string } | null>(null)
 const copied = ref(false)
 const busyId = ref('')
-const confirmation = ref<UserAccount | null>(null)
+/** Erasing keeps the person's history readable as one person's; removing does not. */
+const confirmation = ref<{ account: UserAccount; kind: 'delete' | 'anonymize' } | null>(null)
 const confirmationPending = ref(false)
+
+const confirmationCopy = computed(() => {
+  const pending = confirmation.value
+  if (!pending) return null
+  return pending.kind === 'anonymize'
+    ? {
+        title: `Anonymize ${displayName(pending.account)}?`,
+        description: 'Their name and email address are erased everywhere, including inside the ticket history. Everything they filed, wrote and were assigned stays on the boards, still recognisable as one person, and they can no longer sign in. This cannot be undone.',
+        confirmLabel: 'Anonymize account',
+      }
+    : {
+        title: `Remove ${displayName(pending.account)}?`,
+        description: 'The account is deleted outright. Their tickets, comments and history stay on the boards but lose the person behind them — to keep that link, anonymize instead.',
+        confirmLabel: 'Remove account',
+      }
+})
 
 const dateFormat = new Intl.DateTimeFormat('en', { day: '2-digit', month: 'short', year: 'numeric' })
 
@@ -74,11 +107,13 @@ async function createUser() {
 async function regenerateInvite(account: UserAccount) {
   busyId.value = account.id
   try {
-    const response = await $fetch<{ inviteUrl: string }>(`/api/users/${account.id}/invite`, { method: 'POST' })
+    const response = await $fetch<{ inviteUrl: string; purpose: 'invite' | 'reset' }>(`/api/users/${account.id}/invite`, { method: 'POST' })
     // Before showing the link, so the row reports the new expiry rather than the old state.
     await refresh()
     showLink(account.id, response.inviteUrl)
-    notify('success', 'A fresh invitation link was generated.')
+    notify('success', response.purpose === 'reset'
+      ? `A password link for ${account.email} was generated. Pass it on and they can set a new one.`
+      : 'A fresh invitation link was generated.')
   } catch (error) {
     notify('error', errorText(error))
   } finally {
@@ -92,7 +127,7 @@ async function revokeInvite(account: UserAccount) {
     await $fetch(`/api/users/${account.id}/invite`, { method: 'DELETE' })
     if (pendingLink.value?.userId === account.id) pendingLink.value = null
     await refresh()
-    notify('success', `The invitation for ${account.email} no longer works.`)
+    notify('success', `The link for ${account.email} no longer works.`)
   } catch (error) {
     notify('error', errorText(error))
   } finally {
@@ -113,15 +148,17 @@ async function patchUser(account: UserAccount, body: { role?: UserRole; status?:
   }
 }
 
-async function deleteUser() {
-  const account = confirmation.value
-  if (!account) return
+async function confirmRemoval() {
+  const pending = confirmation.value
+  if (!pending) return
+  const name = displayName(pending.account)
   confirmationPending.value = true
   try {
-    await $fetch(`/api/users/${account.id}`, { method: 'DELETE' })
+    if (pending.kind === 'anonymize') await $fetch(`/api/users/${pending.account.id}/anonymize`, { method: 'POST' })
+    else await $fetch(`/api/users/${pending.account.id}`, { method: 'DELETE' })
     await refresh()
     confirmation.value = null
-    notify('success', `${displayName(account)} was removed.`)
+    notify('success', pending.kind === 'anonymize' ? `${name} was anonymized.` : `${name} was removed.`)
   } catch (error) {
     notify('error', errorText(error))
   } finally {
@@ -181,15 +218,34 @@ async function copyLink() {
                 {{ displayName(account) }}
                 <span v-if="account.id === currentUser?.id" class="muted font-normal">· you</span>
               </p>
-              <p class="muted truncate text-xs">{{ account.email }}</p>
+              <p class="muted truncate text-xs">{{ account.email || 'Anonymized — no address' }}</p>
               <p class="muted mt-0.5 text-[11px]">
                 {{ accountState(account) }} ·
-                {{ account.boardCount }} {{ account.boardCount === 1 ? 'board' : 'boards' }} ·
                 {{ account.lastLoginAt ? `last seen ${dateFormat.format(new Date(account.lastLoginAt))}` : 'never signed in' }}
               </p>
+              <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
+                <span
+                  v-for="membership in account.boards"
+                  :key="membership.boardId"
+                  class="tone tone-neutral rounded-full px-2 py-0.5 text-[11px] font-semibold"
+                  :title="`${boardRoleLabels[membership.role]} on ${membership.boardName}`"
+                >
+                  {{ membership.boardName }}
+                  <span class="font-normal opacity-70">· {{ boardRoleLabels[membership.role] }}</span>
+                </span>
+                <!--
+                  A membership row is not the whole truth for an administrator: the instance
+                  role outranks it and opens every board, so it has to be said next to the list.
+                -->
+                <span v-if="account.role !== 'member'" class="muted text-[11px]">
+                  {{ account.boards.length ? 'and every other board as an instance administrator' : 'Every board, as an instance administrator' }}
+                </span>
+                <span v-else-if="!account.boards.length" class="muted text-[11px]">On no board yet</span>
+              </div>
             </div>
 
             <span v-if="account.role === 'owner'" class="tone tone-violet rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide">Owner</span>
+            <span v-else-if="account.anonymizedAt" class="surface-strong rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide">Anonymized</span>
             <div v-else class="w-40 shrink-0">
               <UiSelect
                 :model-value="account.role"
@@ -202,24 +258,28 @@ async function copyLink() {
             </div>
 
             <button
-              v-if="account.status === 'invited'"
+              v-if="canIssueLink(account)"
               class="focus-ring flex h-8 items-center gap-1.5 rounded-lg border border-[var(--line)] px-2.5 text-xs font-semibold transition hover:bg-[var(--panel-strong)]"
               :disabled="busyId === account.id"
+              :title="account.status === 'invited'
+                ? `Replace the invitation link for ${account.email}`
+                : `Generate a link that lets ${displayName(account)} set a new password`"
               @click="regenerateInvite(account)"
             >
-              <Link2 :size="14" aria-hidden="true" /> New link
+              <component :is="account.status === 'invited' ? Link2 : KeyRound" :size="14" aria-hidden="true" />
+              {{ account.status === 'invited' ? 'New link' : 'Reset password' }}
             </button>
             <button
-              v-if="account.status === 'invited' && account.inviteExpiresAt"
+              v-if="account.inviteExpiresAt && !account.anonymizedAt"
               class="focus-ring flex h-8 items-center gap-1.5 rounded-lg border border-[var(--line)] px-2.5 text-xs font-semibold transition hover:bg-[var(--panel-strong)]"
               :disabled="busyId === account.id"
-              :title="`Stop the current invitation link for ${account.email} from working`"
+              :title="`Stop the current link for ${account.email} from working`"
               @click="revokeInvite(account)"
             >
               <Link2Off :size="14" aria-hidden="true" /> Revoke
             </button>
             <button
-              v-if="account.status !== 'invited' && account.role !== 'owner' && account.id !== currentUser?.id"
+              v-if="account.status !== 'invited' && account.role !== 'owner' && account.id !== currentUser?.id && !account.anonymizedAt"
               class="focus-ring h-8 rounded-lg border border-[var(--line)] px-2.5 text-xs font-semibold transition hover:bg-[var(--panel-strong)]"
               :disabled="busyId === account.id"
               @click="patchUser(account, { status: account.status === 'disabled' ? 'active' : 'disabled' })"
@@ -228,10 +288,19 @@ async function copyLink() {
             </button>
 
             <button
+              v-if="account.role !== 'owner' && account.id !== currentUser?.id && !account.anonymizedAt"
+              class="focus-ring grid size-8 place-items-center rounded-lg transition hover:bg-[var(--panel-strong)]"
+              :aria-label="`Anonymize ${displayName(account)}`"
+              title="Erase the person, keep everything they did"
+              @click="confirmation = { account, kind: 'anonymize' }"
+            >
+              <UserRoundX :size="15" />
+            </button>
+            <button
               v-if="account.role !== 'owner' && account.id !== currentUser?.id"
               class="focus-ring grid size-8 place-items-center rounded-lg text-rose-600 transition hover:bg-rose-500/10"
               :aria-label="`Remove ${displayName(account)}`"
-              @click="confirmation = account"
+              @click="confirmation = { account, kind: 'delete' }"
             >
               <Trash2 :size="15" />
             </button>
@@ -242,13 +311,16 @@ async function copyLink() {
               data-invite-link
               class="mt-3 rounded-xl border border-[color-mix(in_srgb,var(--accent)_35%,var(--line))] bg-[var(--accent-soft)] px-3.5 py-3"
             >
-              <p class="text-[10px] font-bold uppercase tracking-[.14em] text-[var(--accent)]">Invitation link</p>
+              <p class="text-[10px] font-bold uppercase tracking-[.14em] text-[var(--accent)]">
+                {{ account.status === 'invited' ? 'Invitation link' : 'Password link' }}
+              </p>
               <p class="muted mt-0.5 text-xs">
                 Valid for seven days and usable once—Open-Bugster sends no mail, so pass it on yourself.
                 Hiding this does not revoke the link, and it cannot be shown again.
+                <template v-if="account.status !== 'invited'">Using it replaces the old password and signs out every open session.</template>
               </p>
               <div class="mt-2.5 flex flex-wrap items-center gap-2">
-                <input :value="pendingLink.url" readonly class="focus-ring surface-strong h-10 min-w-56 flex-1 rounded-lg px-2.5 font-mono text-xs outline-none" :aria-label="`Invitation link for ${account.email}`">
+                <input :value="pendingLink.url" readonly class="focus-ring surface-strong h-10 min-w-56 flex-1 rounded-lg px-2.5 font-mono text-xs outline-none" :aria-label="`Link for ${account.email}`">
                 <button type="button" class="focus-ring flex h-10 items-center gap-2 rounded-lg bg-[var(--ink)] px-3.5 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85" @click="copyLink">
                   <component :is="copied ? Check : Copy" :size="15" aria-hidden="true" />
                   {{ copied ? 'Copied' : 'Copy' }}
@@ -283,14 +355,14 @@ async function copyLink() {
     </main>
 
     <UiConfirmDialog
-      v-if="confirmation"
+      v-if="confirmationCopy"
       :open="true"
-      :title="`Remove ${displayName(confirmation)}?`"
-      description="The account is deleted. Their tickets, comments and history stay on the boards, attributed to their email address."
-      confirm-label="Remove account"
+      :title="confirmationCopy.title"
+      :description="confirmationCopy.description"
+      :confirm-label="confirmationCopy.confirmLabel"
       :pending="confirmationPending"
       @update:open="open => !open && (confirmation = null)"
-      @confirm="deleteUser"
+      @confirm="confirmRemoval"
     />
     <UiToastHost :notice="notice" @close="closeNotice" />
   </div>

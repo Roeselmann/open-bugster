@@ -15,9 +15,11 @@ const props = withDefaults(defineProps<{
   syncing?: boolean
   latestRun?: SyncRun | null
   archiveMode?: boolean
-  /** Importing writes tickets, so viewers are not offered it. */
+  /** The archive is a board administrator's view, so the way into it is theirs too. */
+  canViewArchive?: boolean
+  /** Importing spends the board's Apple credentials, so only its administrators are offered it. */
   canSync?: boolean
-}>(), { boardId: '', syncing: false, latestRun: null, archiveMode: false, canSync: true })
+}>(), { boardId: '', syncing: false, latestRun: null, archiveMode: false, canSync: true, canViewArchive: true })
 const emit = defineEmits<{ sync: [] }>()
 
 const { isDark, toggle } = useTheme()
@@ -54,7 +56,7 @@ function syncLabel(run: SyncRun | null) {
       </div>
 
       <NuxtLink
-        v-if="boardId"
+        v-if="boardId && (archiveMode || canViewArchive)"
         :to="archiveMode ? `/b/${boardId}` : `/b/${boardId}/archive`"
         class="focus-ring grid size-10 place-items-center rounded-xl border border-[var(--line)] transition hover:bg-[var(--panel-strong)]"
         :aria-label="archiveMode ? 'Back to board' : 'Open archive'"

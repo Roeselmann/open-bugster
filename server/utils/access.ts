@@ -58,12 +58,16 @@ export function requireTicketAccess(event: H3Event, ticketId: string, minimum: B
   const ticket = findTicket(ticketId)
   if (!ticket) throw createError({ statusCode: 404, statusMessage: 'Ticket not found.' })
   const { account, role } = requireBoardAccess(event, ticket.boardId, minimum)
+  // The archive belongs to the board's administrators. To everybody else an archived ticket
+  // reads as gone rather than as forbidden: it has left their board, and holding on to its
+  // id is not a way to keep reading it, its comments, or its history.
+  if (ticket.archivedAt && role !== 'admin') throw createError({ statusCode: 404, statusMessage: 'Ticket not found.' })
   return { account, role, ticket }
 }
 
-/** The addresses a ticket on this board may be assigned to. */
-export function boardMemberEmails(boardId: string): Set<string> {
-  return new Set(boardMembers(boardId).map(member => member.email.trim().toLowerCase()))
+/** The people a ticket on this board may be assigned to, or attributed to. */
+export function boardMemberIds(boardId: string): Set<string> {
+  return new Set(boardMembers(boardId).map(member => member.userId))
 }
 
 /**
@@ -74,7 +78,7 @@ export function requireCommentAccess(event: H3Event, commentId: string) {
   const comment = findComment(commentId)
   if (!comment) throw createError({ statusCode: 404, statusMessage: 'Comment not found.' })
   const { account, role } = requireTicketAccess(event, comment.ticketId)
-  const isAuthor = comment.authorEmail.trim().toLowerCase() === account.email.trim().toLowerCase()
+  const isAuthor = Boolean(comment.authorId) && comment.authorId === account.id
   if (!isAuthor && role !== 'admin') {
     throw createError({ statusCode: 403, statusMessage: 'Only the author can change this comment.' })
   }
