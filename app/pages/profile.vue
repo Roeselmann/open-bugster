@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronRight, KeyRound, LayoutGrid, Terminal, UserRound } from '@lucide/vue'
+import { Bot, ChevronRight, KeyRound, LayoutGrid, Terminal, UserRound } from '@lucide/vue'
 import type { BoardRole, BoardSummary } from '~~/shared/types/domain'
 
 const { user, instanceAdmin } = useAuth()
@@ -154,6 +154,18 @@ async function savePassword() {
           </p>
         </header>
         <ApiTokenManager :boards="boards" />
+      </section>
+
+      <section class="surface rounded-2xl">
+        <header class="border-b border-[var(--line)] px-5 py-4">
+          <p class="muted text-[10px] font-bold uppercase tracking-[.14em]">Integrations</p>
+          <h2 class="mt-0.5 flex items-center gap-2 text-lg font-bold"><Bot :size="18" aria-hidden="true" /> Connect an AI agent</h2>
+          <p class="muted mt-1 text-sm">
+            Point Claude, Cursor or anything else that speaks MCP at this instance, and it can read
+            and work the boards you can.
+          </p>
+        </header>
+        <McpConnection />
       </section>
 
       <section class="surface rounded-2xl">

@@ -88,6 +88,10 @@ a { color: var(--accent) }
   <div class="note">
     Machine-readable spec: <a href="./openapi.json"><code>/api/v1/openapi.json</code></a> —
     point a client generator or a self-hosted Swagger UI at it.
+    <br>
+    Connecting an AI agent instead? That is <code>/mcp</code>, which speaks JSON-RPC rather than
+    REST and so is not described here — see <a href="/profile">your profile</a> for the endpoint
+    and the tools it offers.
   </div>
   <div id="ops"></div>
 </div>
