@@ -11,6 +11,8 @@ async function login() {
   try {
     await $fetch('/api/auth/login', { method: 'POST', body: form })
     await useUserSession().fetch()
+    // Whatever a previous session left in this tab is not this account's to see.
+    clearBoards()
     await navigateTo('/')
   } catch (error) {
     errorMessage.value = errorText(error)

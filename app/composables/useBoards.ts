@@ -2,9 +2,15 @@ import type { BoardSummary } from '~~/shared/types/domain'
 
 const BOARD_COOKIE = 'open-bugster-board'
 const BOARD_STATE = 'boards'
+const BOARD_STATE_OWNER = 'boards-loaded-for'
 
 function boardState() {
   return useState<BoardSummary[]>(BOARD_STATE, () => [])
+}
+
+/** Whose list the cache holds. Null before anything has been loaded. */
+function loadedFor() {
+  return useState<string | null>(BOARD_STATE_OWNER, () => null)
 }
 
 /**
@@ -15,10 +21,22 @@ function boardState() {
  */
 export async function loadBoards(force = false): Promise<BoardSummary[]> {
   const state = boardState()
-  if (state.value.length && !force) return state.value
+  const owner = loadedFor()
+  const userId = useUserSession().user.value?.id ?? null
+  // The cache belongs to the account that fetched it. Signing in as somebody else happens
+  // without a page load, so without this the next account inherits the previous one's boards,
+  // their roles and their member counts until the tab is reloaded.
+  if (state.value.length && !force && owner.value === userId) return state.value
   const { boards } = await useRequestFetch()<{ boards: BoardSummary[] }>('/api/boards')
   state.value = boards
+  owner.value = userId
   return boards
+}
+
+/** Drops the cached list, so nothing of one session is left in memory for the next. */
+export function clearBoards() {
+  boardState().value = []
+  loadedFor().value = null
 }
 
 export function useBoards() {

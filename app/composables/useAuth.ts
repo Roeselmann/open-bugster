@@ -10,6 +10,8 @@ export function useAuth() {
   async function logout() {
     await $fetch('/api/auth/logout', { method: 'POST' })
     await session.fetch()
+    // Signing out leaves nothing of this account behind for whoever signs in next.
+    clearBoards()
     await navigateTo('/login')
   }
 
