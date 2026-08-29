@@ -60,6 +60,9 @@ export const v1Routes: readonly V1Route[] = [
   },
   { method: 'POST', path: '/tickets', operation: ops.ticketCreate, status: 201, response: z.object({ ticket: ticketSchema }) },
   { method: 'GET', path: '/tickets/{ticketId}', operation: ops.ticketGet, response: z.object({ ticket: ticketSchema }) },
+  // Numbers are unique instance-wide, so this needs no board. It is how a commit message or a
+  // CI job refers to a ticket, which is the only identifier those ever have to hand.
+  { method: 'GET', path: '/tickets/by-number/{ticketNumber}', operation: ops.ticketGetByNumber, response: z.object({ ticket: ticketSchema }) },
   { method: 'PATCH', path: '/tickets/{ticketId}', operation: ops.ticketUpdate, response: z.object({ ticket: ticketSchema }) },
   { method: 'POST', path: '/tickets/{ticketId}/move', operation: ops.ticketMove, response: z.object({ ticket: ticketSchema }) },
   { method: 'POST', path: '/tickets/{ticketId}/archive', operation: ops.ticketArchive, response: z.object({ ticket: ticketSchema }) },

@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { boardMemberIds } from '../utils/access'
 import {
   archiveTicket, createTicket, listActivity, listTickets, listTicketsPage, moveTicket,
-  personById, restoreTicket, updateTicket
+  personById, restoreTicket, ticketIdByNumber, updateTicket
 } from '../utils/db'
 import { importedTicketUpdateSchema, ticketCreateSchema, ticketMoveSchema, ticketUpdateSchema } from '../utils/validation'
 import { createdId, defineOperation } from './types'
@@ -40,6 +40,32 @@ export const ticketGet = defineOperation({
   summary: 'Read one ticket',
   input: z.object({ ticketId }),
   requires: { scope: 'ticket', role: 'viewer', ticketId: input => input.ticketId },
+  audit: false,
+  run: ctx => ({ ticket: ctx.ticket! })
+})
+
+/**
+ * The same read, reached by the number a ticket is known by rather than its id.
+ *
+ * Its own operation rather than a second shape for `ticketGet`, because the two differ in
+ * exactly one thing — how the subject is named — and widening the input of the operation
+ * three surfaces already depend on would buy nothing but a schema that has to say "one of
+ * these, never both".
+ *
+ * The lookup sits in `requires` so it happens *before* the access check, which therefore
+ * lands on the ticket the number actually names. A number nobody can reach and a number that
+ * was never issued both answer 404, the same answer `requireTicketAccess` gives for an id.
+ */
+export const ticketGetByNumber = defineOperation({
+  name: 'ticket.getByNumber',
+  summary: 'Read one ticket by its number',
+  // Coerced because a path parameter arrives as text; MCP and the UI pass a real number.
+  input: z.object({ ticketNumber: z.coerce.number().int().positive() }),
+  requires: {
+    scope: 'ticket',
+    role: 'viewer',
+    ticketId: input => orNotFound(ticketIdByNumber(input.ticketNumber), 'Ticket')
+  },
   audit: false,
   run: ctx => ({ ticket: ctx.ticket! })
 })

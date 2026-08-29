@@ -1966,6 +1966,18 @@ export function findTicket(id: string): Ticket | null {
   return row ? hydrateTicket(row) : null
 }
 
+/**
+ * The id behind a ticket number.
+ *
+ * Numbers are unique across the instance rather than per board, so this needs nothing to
+ * disambiguate it. That is the point: "ticket 42" is how a person — and an agent reading
+ * after them — refers to one, and resolving it should not cost a board lookup first.
+ */
+export function ticketIdByNumber(ticketNumber: number): string | null {
+  const row = getDb().prepare('SELECT id FROM tickets WHERE ticket_number = ?').get(ticketNumber) as { id: string } | undefined
+  return row?.id ?? null
+}
+
 export function listCategories(boardId: string): CategorySummary[] {
   return getDb().prepare(`
     SELECT c.id, c.name, c.color, COUNT(t.id) AS ticketCount

@@ -150,6 +150,22 @@ describe('the MCP tool surface', () => {
       expect(full).toHaveProperty('attachments')
     })
 
+    it('finds a ticket by the number people refer to it by', async () => {
+      const listed = (await call('search_tickets', { boardId, text: 'crash' })).tickets[0]
+      const byNumber = await call('get_ticket', { ticketNumber: listed.number })
+      expect(byNumber.id).toBe(ticketId)
+      // The number is a whole handle, not a hint: the answer is the same one an id gives.
+      expect(byNumber).toEqual(await call('get_ticket', { ticketId }))
+    })
+
+    it('answers 404 for a number nobody was issued', async () => {
+      await expect(call('get_ticket', { ticketNumber: 999_999 })).rejects.toMatchObject({ statusCode: 404 })
+    })
+
+    it('refuses to guess when given neither identifier', async () => {
+      await expect(call('get_ticket', {})).rejects.toMatchObject({ statusCode: 400 })
+    })
+
     it('honours the search limit and still reports the true total', async () => {
       for (let i = 0; i < 5; i++) await call('create_ticket', { boardId, laneId, title: `Extra ${i}` })
       const page = await call('search_tickets', { boardId, limit: 2 })

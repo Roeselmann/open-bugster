@@ -1,3 +1,4 @@
+import { createError } from 'h3'
 import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { run, type AnyOperation } from '~~/server/operations'
@@ -143,13 +144,29 @@ export function registerTools(server: McpServer, actor: Actor) {
 
   server.registerTool('get_ticket', {
     title: 'Get a ticket',
-    description: 'One ticket in full, with its description, to-do list, attachments, comment thread and history. The only tool that returns everything, so prefer search_tickets when scanning.',
-    inputSchema: { ticketId: z.string() }
-  }, async ({ ticketId }) => {
-    const [{ ticket }, { comments }, { activity }] = await Promise.all([
-      call<{ ticket: Ticket }>(ops.ticketGet, { ticketId }),
-      call<{ comments: TicketComment[] }>(ops.commentList, { ticketId }),
-      call<{ activity: TicketActivityEntry[] }>(ops.ticketActivity, { ticketId })
+    description:
+      'One ticket in full, with its description, to-do list, attachments, comment thread and '
+      + 'history. Takes either an id or the number the ticket is known by, so someone asking '
+      + 'about "ticket 42" costs one call and no board. The only tool that returns everything, '
+      + 'so prefer search_tickets when scanning.',
+    inputSchema: {
+      ticketId: z.string().optional().describe('From search_tickets. Give this or ticketNumber.'),
+      ticketNumber: z.number().int().positive().optional()
+        .describe('The number a ticket is referred to by — the `number` field of a search result. Unique across the instance, so it names a ticket on its own.')
+    }
+  }, async ({ ticketId, ticketNumber }) => {
+    if (!ticketId && ticketNumber === undefined) {
+      throw createError({ statusCode: 400, statusMessage: 'Give either ticketId or ticketNumber.' })
+    }
+    // Resolved first rather than alongside, because the comment thread and the history are
+    // asked for by id and a number does not become one until the ticket has been read. Three
+    // local reads instead of one round trip; the ordering costs nothing worth measuring.
+    const { ticket } = ticketId
+      ? await call<{ ticket: Ticket }>(ops.ticketGet, { ticketId })
+      : await call<{ ticket: Ticket }>(ops.ticketGetByNumber, { ticketNumber })
+    const [{ comments }, { activity }] = await Promise.all([
+      call<{ comments: TicketComment[] }>(ops.commentList, { ticketId: ticket.id }),
+      call<{ activity: TicketActivityEntry[] }>(ops.ticketActivity, { ticketId: ticket.id })
     ])
     return reply({
       ...slim(ticket),

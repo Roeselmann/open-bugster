@@ -93,6 +93,14 @@ describe('the v1 surface', () => {
       }
     })
 
+    it('keeps a literal segment from being eaten by the id route beside it', () => {
+      // `/tickets/{ticketId}` is declared first and matches one segment, so it cannot swallow
+      // this — but the two live next to each other, and the order is worth pinning down.
+      const matched = routes.matchRoute('GET', '/tickets/by-number/42')
+      expect(matched?.route.operation.name).toBe('ticket.getByNumber')
+      expect(matched?.params).toEqual({ ticketNumber: '42' })
+    })
+
     it('decodes a parameter that arrived percent-encoded', () => {
       expect(routes.matchRoute('GET', '/tickets/a%2Fb')?.params.ticketId).toBe('a/b')
     })
@@ -147,6 +155,19 @@ describe('the v1 surface', () => {
       expect(post.parameters.map(p => p.name)).toContain('Idempotency-Key')
       const get = spec.paths['/tickets/{ticketId}']!.get as { parameters: Array<{ name: string }> }
       expect(get.parameters.map(p => p.name)).not.toContain('Idempotency-Key')
+    })
+
+    it('documents a ticket number as the integer path parameter it is', () => {
+      const get = spec.paths['/tickets/by-number/{ticketNumber}']!.get as {
+        parameters: Array<{ name: string; in: string; required: boolean; schema: { type?: string } }>
+      }
+      const parameter = get.parameters.find(p => p.name === 'ticketNumber')!
+      expect(parameter).toMatchObject({ in: 'path', required: true })
+      // Coerced from text in the schema, so the published type is the one a caller sends.
+      expect(parameter.schema.type).toBe('integer')
+      // The id route keeps its own shape: a second way in is not a second parameter on the first.
+      const byId = spec.paths['/tickets/{ticketId}']!.get as { parameters: Array<{ name: string }> }
+      expect(byId.parameters.map(p => p.name)).not.toContain('ticketNumber')
     })
 
     /**
