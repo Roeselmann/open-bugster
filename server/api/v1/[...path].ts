@@ -5,6 +5,10 @@ import { findIdempotent, saveIdempotent } from '~~/server/utils/db'
 import { buildOpenApiDocument } from '~~/server/utils/openapi'
 import { sendProblem, toProblem } from '~~/server/utils/problem'
 import { checkRateLimit } from '~~/server/utils/rate-limit'
+import { createReadStream } from 'node:fs'
+import type { H3Event } from 'h3'
+import { safeAttachmentName } from '~~/server/utils/app-store-connect'
+import { resolveAttachmentFile } from '~~/server/utils/attachment-file'
 import { matchRoute } from './routes'
 import { docsPage } from '~~/server/utils/docs-page'
 
@@ -78,6 +82,11 @@ export default defineEventHandler(async (event) => {
       ip: getRequestIP(event, { xForwardedFor: true }) ?? null
     })
 
+    // A download leaves the JSON convention here and nowhere earlier: the operation ran, the
+    // access check passed, and only the shape of the answer differs. Nothing is recorded for
+    // a replay either — an Idempotency-Key on a GET is ignored, as it is for every other read.
+    if (route.download) return await sendAttachment(event, result)
+
     const status = route.status ?? 200
     const payload = status === 204 ? null : result
     if (replayable) {
@@ -93,6 +102,25 @@ export default defineEventHandler(async (event) => {
     return sendProblem(event, toProblem(error, `${method} /api/v1${suffix}`))
   }
 })
+
+/**
+ * Streams the file an operation identified.
+ *
+ * Always `attachment`, never `inline`. The UI serves images for display because it renders
+ * them in a lightbox on its own origin; a public endpoint handing back a browser-rendered
+ * response is a different question, and answering it is not worth what a download API gains.
+ */
+async function sendAttachment(event: H3Event, result: unknown) {
+  const { attachment } = result as { attachment: { filename: string; mime_type: string; size: number; relative_path: string } }
+  const file = await resolveAttachmentFile(attachment.relative_path)
+  setResponseHeaders(event, {
+    'Content-Type': attachment.mime_type,
+    'Content-Length': String(attachment.size),
+    'Content-Disposition': `attachment; filename="${safeAttachmentName(attachment.filename)}"`,
+    'X-Content-Type-Options': 'nosniff'
+  })
+  return sendStream(event, createReadStream(file))
+}
 
 /**
  * Query strings carry only text, and the schemas want the types they describe. This converts

@@ -3,6 +3,14 @@ import { basename, extname } from 'node:path'
 export const MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024
 export const MAX_ATTACHMENT_COUNT = 10
 export const MAX_ATTACHMENT_BATCH_SIZE = 100 * 1024 * 1024
+/**
+ * The longest base64 string that can still decode to a permitted file.
+ *
+ * Derived rather than written down, so it cannot drift from the limit it exists to enforce.
+ * Checking the encoded length first means an oversized upload is refused before 25 MB of
+ * text is turned into 25 MB of bytes to find out it was too big.
+ */
+export const MAX_ATTACHMENT_BASE64_LENGTH = 4 * Math.ceil(MAX_ATTACHMENT_SIZE / 3)
 
 type AttachmentRule = {
   mimeTypes: string[]

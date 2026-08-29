@@ -178,7 +178,15 @@ export function registerTools(server: McpServer, actor: Actor) {
       createdAt: ticket.createdAt,
       archivedAt: ticket.archivedAt,
       todos: ticket.todos.map(todo => ({ text: todo.text, completed: todo.completed })),
-      attachments: ticket.attachments.map(file => ({ filename: file.filename, mimeType: file.mimeType, url: file.url })),
+      // The v1 path, not the `url` on the record: that one is the UI's own API and takes a
+      // session cookie, so the token this tool holds could see an attachment listed and
+      // fetch none of them. This one answers to the same bearer token.
+      attachments: ticket.attachments.map(file => ({
+        filename: file.filename,
+        mimeType: file.mimeType,
+        size: file.size,
+        url: `/api/v1/attachments/${file.id}`
+      })),
       feedback: ticket.feedback,
       comments: comments.map(comment => ({ id: comment.id, author: nameOf(comment.author), body: comment.body, createdAt: comment.createdAt })),
       history: activity.map(entry => ({

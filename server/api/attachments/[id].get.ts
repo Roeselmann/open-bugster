@@ -1,10 +1,8 @@
 import { createReadStream } from 'node:fs'
-import { realpath, stat } from 'node:fs/promises'
-import { isAbsolute, resolve, sep } from 'node:path'
 import { findAttachment } from '~~/server/utils/db'
 import { requireTicketAccess } from '~~/server/utils/access'
 import { safeAttachmentName } from '~~/server/utils/app-store-connect'
-import { getServerConfig } from '~~/server/utils/config'
+import { resolveAttachmentFile } from '~~/server/utils/attachment-file'
 import { sessionActor } from '~~/server/utils/actor'
 
 export default defineEventHandler(async (event) => {
@@ -12,17 +10,11 @@ export default defineEventHandler(async (event) => {
   if (!attachment) throw createError({ statusCode: 404, statusMessage: 'Attachment not found.' })
   // Reached by id alone, so the board it belongs to has to be checked explicitly.
   requireTicketAccess(sessionActor(event), attachment.ticket_id)
-  const config = getServerConfig()
-  const root = await realpath(resolve(config.attachmentsPath)).catch(() => resolve(config.attachmentsPath))
-  const candidate = resolve(root, attachment.relative_path)
-  if (isAbsolute(attachment.relative_path) || (candidate !== root && !candidate.startsWith(`${root}${sep}`))) {
-    throw createError({ statusCode: 400, statusMessage: 'Invalid file path.' })
-  }
-  const actual = await realpath(candidate).catch(() => null)
-  if (!actual || (actual !== root && !actual.startsWith(`${root}${sep}`))) throw createError({ statusCode: 404, statusMessage: 'File not found.' })
-  await stat(actual).catch(() => { throw createError({ statusCode: 404, statusMessage: 'File not found.' }) })
+  const actual = await resolveAttachmentFile(attachment.relative_path)
   setHeader(event, 'Content-Type', attachment.mime_type)
   setHeader(event, 'Content-Length', attachment.size)
+  // The UI shows images in a lightbox, so they are served for display; anything else is a
+  // download. The public API takes the stricter line — see the v1 dispatcher.
   const disposition = attachment.mime_type.startsWith('image/') ? 'inline' : 'attachment'
   setHeader(event, 'Content-Disposition', `${disposition}; filename="${safeAttachmentName(attachment.filename)}"`)
   setHeader(event, 'X-Content-Type-Options', 'nosniff')

@@ -3,7 +3,8 @@ import * as ops from '~~/server/operations'
 import type { AnyOperation } from '~~/server/operations'
 import {
   boardSummarySchema, categorySummarySchema, laneSummarySchema, labelSummarySchema,
-  boardMemberSchema, personSchema, syncRunSchema, ticketActivitySchema, ticketCommentSchema, ticketSchema
+  attachmentSchema, boardMemberSchema, personSchema, syncRunSchema, ticketActivitySchema,
+  ticketCommentSchema, ticketSchema
 } from '~~/shared/schemas/domain'
 
 export interface V1Route {
@@ -17,6 +18,12 @@ export interface V1Route {
   response?: z.ZodType
   /** Applied under the request, so a public list has a page size even when nobody asked. */
   defaults?: Record<string, unknown>
+  /**
+   * Answers with the file itself rather than JSON. The operation still runs, and still does
+   * the access check — only the response leaves the JSON convention, which is why this is a
+   * flag on the route and not a second kind of operation.
+   */
+  download?: boolean
 }
 
 /**
@@ -68,6 +75,16 @@ export const v1Routes: readonly V1Route[] = [
   { method: 'POST', path: '/tickets/{ticketId}/archive', operation: ops.ticketArchive, response: z.object({ ticket: ticketSchema }) },
   { method: 'POST', path: '/tickets/{ticketId}/restore', operation: ops.ticketRestore, response: z.object({ ticket: ticketSchema }) },
   { method: 'GET', path: '/tickets/{ticketId}/activity', operation: ops.ticketActivity, response: z.object({ activity: z.array(ticketActivitySchema) }) },
+
+  // Attachments
+  // The download is what an agent following a ticket's `url` was always missing — that path
+  // is the UI's own API and takes a cookie, so a token could list attachments and fetch
+  // none of them. The upload carries the file as base64 in the body; see `attachment.add`.
+  { method: 'GET', path: '/attachments/{attachmentId}', operation: ops.attachmentGet, download: true },
+  {
+    method: 'POST', path: '/tickets/{ticketId}/attachments', operation: ops.attachmentAdd, status: 201,
+    response: z.object({ attachment: attachmentSchema })
+  },
 
   // Comments
   { method: 'GET', path: '/tickets/{ticketId}/comments', operation: ops.commentList, response: z.object({ comments: z.array(ticketCommentSchema) }) },

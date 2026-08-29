@@ -157,6 +157,27 @@ describe('the v1 surface', () => {
       expect(get.parameters.map(p => p.name)).not.toContain('Idempotency-Key')
     })
 
+    it('publishes an upload as base64 text, so a generator knows how to send a file', () => {
+      const post = spec.paths['/tickets/{ticketId}/attachments']!.post as {
+        requestBody: { content: Record<string, { schema: { properties: Record<string, { contentEncoding?: string }> } }> }
+      }
+      const body = post.requestBody.content['application/json']!.schema
+      expect(body.properties.content).toMatchObject({ contentEncoding: 'base64' })
+      // The path parameter is not also asked for in the body.
+      expect(Object.keys(body.properties)).not.toContain('ticketId')
+    })
+
+    it('publishes a download as bytes rather than as JSON', () => {
+      const get = spec.paths['/attachments/{attachmentId}']!.get as {
+        responses: Record<string, { content: Record<string, { schema: { type?: string; format?: string } }> }>
+      }
+      const ok = get.responses['200']!.content
+      expect(Object.keys(ok)).toEqual(['application/octet-stream'])
+      expect(ok['application/octet-stream']!.schema).toMatchObject({ type: 'string', format: 'binary' })
+      // The failures stay JSON — a generator has to know a 404 is still a Problem document.
+      expect(Object.keys(get.responses['404']!.content)).toEqual(['application/problem+json'])
+    })
+
     it('documents a ticket number as the integer path parameter it is', () => {
       const get = spec.paths['/tickets/by-number/{ticketNumber}']!.get as {
         parameters: Array<{ name: string; in: string; required: boolean; schema: { type?: string } }>

@@ -96,10 +96,15 @@ function operationObject(route: V1Route, registry: Record<string, unknown>) {
   const responses: Record<string, unknown> = {
     [String(route.status ?? 200)]: route.status === 204
       ? { description: 'Done. No content.' }
-      : {
-          description: 'Success',
-          content: { 'application/json': { schema: route.response ? refOrInline(route.response, registry) : { type: 'object' } } }
-        }
+      : route.download
+        ? {
+            description: 'The file itself. Content-Type is the attachment’s own.',
+            content: { 'application/octet-stream': { schema: { type: 'string', format: 'binary' } } }
+          }
+        : {
+            description: 'Success',
+            content: { 'application/json': { schema: route.response ? refOrInline(route.response, registry) : { type: 'object' } } }
+          }
   }
   // Inlined rather than referenced through `components.responses`, so a generator that only
   // resolves `components.schemas` still gets the whole picture.

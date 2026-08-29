@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, readFile } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -107,6 +107,55 @@ describe('the operation registry', () => {
       // stranger gets the same 404 as for a number that was never issued — no existence leak.
       expect(await statusOf(ops.run(ops.ticketGetByNumber, actorOf('stranger'), { ticketNumber: ticket.ticketNumber }))).toBe(404)
       expect(await statusOf(ops.run(ops.ticketGetByNumber, actorOf('viewer'), { ticketNumber: 999_999 }))).toBe(404)
+    })
+
+    it('checks an attachment against the board of the ticket holding it', async () => {
+      const { ticket } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'With a file', laneId }) as { ticket: { id: string } }
+      const attachmentId = db.addAttachment(ticket.id, 'file', 'shot.png', 'image/png', 11, `${ticket.id}/shot.png`)
+      // An attachment id names a file with no board and no ticket in the request, so the
+      // check has to reach the owning ticket itself rather than trust what was asked for.
+      expect(await statusOf(ops.run(ops.attachmentGet, actorOf('viewer'), { attachmentId }))).toBe(200)
+      expect(await statusOf(ops.run(ops.attachmentGet, actorOf('stranger'), { attachmentId }))).toBe(404)
+      expect(await statusOf(ops.run(ops.attachmentGet, actorOf('viewer'), { attachmentId: 'att_nope' }))).toBe(404)
+    })
+
+    it('takes a file in and gives the same file back', async () => {
+      const { ticket } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Round trip', laneId }) as { ticket: { id: string } }
+      const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('pixels')])
+      const { attachment } = await ops.run(ops.attachmentAdd, actorOf('editor'), {
+        ticketId: ticket.id, filename: 'shot.png', mimeType: 'image/png', content: png.toString('base64')
+      }) as { attachment: { id: string; size: number; mimeType: string; url: string } }
+
+      expect(attachment).toMatchObject({ size: png.length, mimeType: 'image/png' })
+      // The url points at the surface a token can actually reach, not the UI's own path.
+      expect(attachment.url).toBe(`/api/v1/attachments/${attachment.id}`)
+
+      const stored = await ops.run(ops.attachmentGet, actorOf('viewer'), { attachmentId: attachment.id }) as { attachment: { relative_path: string } }
+      const file = await import('../server/utils/attachment-file')
+      const onDisk = await readFile(await file.resolveAttachmentFile(stored.attachment.relative_path))
+      expect(onDisk.equals(png)).toBe(true)
+    })
+
+    it('holds an upload to the same policy the browser goes through', async () => {
+      const { ticket } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Policed', laneId }) as { ticket: { id: string } }
+      const upload = (input: Record<string, unknown>) => ops.run(ops.attachmentAdd, actorOf('editor'), { ticketId: ticket.id, ...input })
+
+      // Claims to be a PNG, is not one. Decoding base64 is lenient, so this is the check that
+      // stops a body that was never really a file.
+      expect(await statusOf(upload({ filename: 'fake.png', mimeType: 'image/png', content: Buffer.from('<html>').toString('base64') }))).toBe(422)
+      expect(await statusOf(upload({ filename: 'evil.svg', content: Buffer.from('<svg/>').toString('base64') }))).toBe(422)
+      // Viewers read a board; attaching to it is an editor's.
+      expect(await statusOf(ops.run(ops.attachmentAdd, actorOf('viewer'), {
+        ticketId: ticket.id, filename: 'note.txt', content: Buffer.from('hi').toString('base64')
+      }))).toBe(403)
+    })
+
+    it('refuses to attach to a ticket that has left the board', async () => {
+      const { ticket } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Gone', laneId }) as { ticket: { id: string } }
+      await ops.run(ops.ticketArchive, actorOf('owner'), { ticketId: ticket.id })
+      expect(await statusOf(ops.run(ops.attachmentAdd, actorOf('owner'), {
+        ticketId: ticket.id, filename: 'note.txt', content: Buffer.from('too late').toString('base64')
+      }))).toBe(409)
     })
 
     it('an agent still cannot exceed its principal', async () => {
@@ -276,6 +325,21 @@ describe('the operation registry', () => {
         expect(text).not.toContain('the-old-password-here')
         expect(text).not.toContain('a-brand-new-password')
       }
+    })
+
+    it('records an attachment by filename and never by its bytes', async () => {
+      const { ticket } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Has a file', laneId }) as { ticket: { id: string } }
+      const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('RECOGNISABLE-PIXELS')])
+      await ops.run(ops.attachmentAdd, actorOf('editor'), {
+        ticketId: ticket.id, filename: 'shot.png', mimeType: 'image/png', content: png.toString('base64')
+      })
+
+      const entry = audit.listAudit({ operation: 'attachment.add' })[0]!
+      expect(entry.changes).toMatchObject({ filename: 'shot.png' })
+      // A 20 MB file in the log would bury everything worth finding, quite apart from what
+      // it might contain. The allowlist is what keeps it out.
+      expect(JSON.stringify(entry)).not.toContain('RECOGNISABLE-PIXELS')
+      expect(JSON.stringify(entry)).not.toContain(png.toString('base64'))
     })
 
     it('records a key upload by filename and never by its contents', async () => {
