@@ -70,6 +70,30 @@ async function changeRole(member: BoardMember, role: BoardRole) {
   }
 }
 
+/**
+ * The **Integration** box: whether this membership may be worked through a token.
+ *
+ * The role is sent along because it is a full membership write; the server keeps whatever it
+ * is not told about, but saying both makes the request describe the membership it means.
+ */
+async function setAutomation(member: BoardMember, mayAutomate: boolean) {
+  busyId.value = member.userId
+  try {
+    await $fetch(`/api/boards/${props.board.id}/members/${member.userId}`, {
+      method: 'PUT',
+      body: { role: member.role, mayAutomate },
+    })
+    emit('changed')
+    emit('notify', 'success', mayAutomate
+      ? `${displayName(member)} can now work this board through the API and agents.`
+      : `${displayName(member)} can now only work this board in the browser.`)
+  } catch (error) {
+    emit('notify', 'error', errorText(error))
+  } finally {
+    busyId.value = ''
+  }
+}
+
 async function removeMember(member: BoardMember) {
   busyId.value = member.userId
   try {
@@ -92,6 +116,9 @@ async function removeMember(member: BoardMember) {
       <p class="muted mt-1 text-sm">
         Viewers read and comment, editors work the board, administrators also change these settings
         and the App Store Connect key. Instance administrators always have access.
+        <strong class="font-semibold">Integration</strong> is separate from the role: it says whether
+        somebody may work this board through the API or an agent, at their own role and no further.
+        Administrators always may.
       </p>
     </header>
 
@@ -104,6 +131,24 @@ async function removeMember(member: BoardMember) {
             {{ member.email }}<span v-if="member.status === 'invited'"> · invitation pending</span>
           </p>
         </div>
+        <!-- An administrator always holds it, so the box is ticked and left alone. -->
+        <label
+          class="flex shrink-0 items-center gap-2"
+          :class="member.role === 'admin' ? 'cursor-default' : 'cursor-pointer'"
+          :title="member.role === 'admin'
+            ? 'A board administrator may always work this board through the API or an agent.'
+            : `Whether ${displayName(member)} may work this board through the API or an agent`"
+        >
+          <input
+            type="checkbox"
+            :checked="member.mayAutomate"
+            :disabled="!canManage || member.role === 'admin' || busyId === member.userId"
+            class="focus-ring size-4 rounded"
+            :class="member.role === 'admin' ? 'cursor-default' : 'disabled:opacity-40'"
+            @change="setAutomation(member, !member.mayAutomate)"
+          >
+          <span class="muted text-[10px] font-bold uppercase tracking-[.08em]">Integration</span>
+        </label>
         <div class="w-40 shrink-0">
           <UiSelect
             :model-value="member.role"

@@ -86,6 +86,69 @@ describe('access guards', () => {
     db.archiveTicket(archivedTicketId, actorModule.actorFor(db.findUser(people.boardAdmin!)!))
   })
 
+  /**
+   * Automation is a second axis, not a rank: it says through what somebody may act, and the
+   * role still says how much. These check the two never bleed into each other.
+   */
+  describe('working a board through a token', () => {
+    const viaToken = (who: string, channel: 'api' | 'mcp' = 'mcp') =>
+      actorModule.actorFor(db.findUser(people[who]!)!, { channel, agentId: 'n8n prod', tokenId: 'tok_1' })
+
+    it('refuses a member who has not been given it', () => {
+      // `editor` was added without the permission, so the browser works and a token does not.
+      expect(status(() => access.requireBoardAccess(actorOf('editor'), boardId))).toBe(200)
+      expect(status(() => access.requireBoardAccess(viaToken('editor'), boardId))).toBe(403)
+      expect(status(() => access.requireBoardAccess(viaToken('editor', 'api'), boardId))).toBe(403)
+    })
+
+    it('lets a member through once a board admin allows it, at their own role and no further', () => {
+      db.setBoardMember(boardId, people.viewer!, 'viewer', true)
+      expect(access.requireBoardAccess(viaToken('viewer'), boardId).role).toBe('viewer')
+      // The permission is about the channel, so it does not lift the role.
+      expect(status(() => access.requireBoardAccess(viaToken('viewer'), boardId, 'editor'))).toBe(403)
+      db.setBoardMember(boardId, people.viewer!, 'viewer', false)
+      expect(status(() => access.requireBoardAccess(viaToken('viewer'), boardId))).toBe(403)
+    })
+
+    it('always lets a board administrator through, without a flag ever being set', () => {
+      // They hand the permission out; withholding it from them would be a lock with the key
+      // beside it. The membership was never given the flag in the setup above.
+      expect(access.requireBoardAccess(viaToken('boardAdmin'), boardId).role).toBe('admin')
+      expect(db.boardMembers(boardId).find(member => member.userId === people.boardAdmin)?.mayAutomate).toBe(true)
+    })
+
+    it('brings back the stored permission when an administrator is demoted', () => {
+      db.setBoardMember(boardId, people.boardAdmin!, 'editor')
+      expect(status(() => access.requireBoardAccess(viaToken('boardAdmin'), boardId))).toBe(403)
+      db.setBoardMember(boardId, people.boardAdmin!, 'admin')
+      expect(status(() => access.requireBoardAccess(viaToken('boardAdmin'), boardId))).toBe(200)
+    })
+
+    it('keeps a non-member at 404 rather than telling them the board exists', () => {
+      expect(status(() => access.requireBoardAccess(viaToken('stranger'), boardId))).toBe(404)
+    })
+
+    it('exempts an instance admin, who holds every board without a membership row', () => {
+      for (const who of ['owner', 'admin']) {
+        expect(access.requireBoardAccess(viaToken(who), boardId).role).toBe('admin')
+      }
+    })
+
+    it('leaves the permission alone when only the role is written', () => {
+      db.setBoardMember(boardId, people.viewer!, 'viewer', true)
+      db.setBoardMember(boardId, people.viewer!, 'editor')
+      expect(status(() => access.requireBoardAccess(viaToken('viewer'), boardId))).toBe(200)
+      db.setBoardMember(boardId, people.viewer!, 'viewer', false)
+    })
+
+    it('starts a new membership without it', () => {
+      const board = db.createBoard('Automation default')
+      db.setBoardMember(board.id, people.editor!, 'editor')
+      expect(db.boardMembers(board.id).find(member => member.userId === people.editor)?.mayAutomate).toBe(false)
+      expect(status(() => access.requireBoardAccess(viaToken('editor'), board.id))).toBe(403)
+    })
+  })
+
   describe('requireBoardAccess', () => {
     it('gives an instance admin admin rights on every board, member or not', () => {
       for (const who of ['owner', 'admin']) {
@@ -189,26 +252,54 @@ describe('access guards', () => {
 
   /**
    * The guarantee the whole Actor split exists for. An agent carries provenance, not power:
-   * naming one must not change a single answer above.
+   * naming one must never turn a refusal into a permission.
+   *
+   * The board's automation permission is the one thing that can make an agent's answer differ,
+   * and it only ever makes it stricter — so the invariant is one-directional rather than an
+   * equality, and equality is checked separately on a board that allows automation.
    */
   describe('an agent never widens what its principal may do', () => {
     const viaAgent = (who: string) =>
       actorModule.actorFor(db.findUser(people[who]!)!, { channel: 'mcp', agentId: 'claude-desktop', tokenId: 'tok_1' })
 
-    it('leaves every board answer identical', () => {
+    /** The three memberships on `boardId`, so the permission can be turned on and off as a set. */
+    const memberRoles = { boardAdmin: 'admin', editor: 'editor', viewer: 'viewer' } as const
+    const allowAutomation = (allowed: boolean) => {
+      for (const [who, role] of Object.entries(memberRoles)) db.setBoardMember(boardId, people[who]!, role, allowed)
+    }
+
+    it('never turns a refusal into a permission', () => {
+      for (const allowed of [false, true]) {
+        allowAutomation(allowed)
+        for (const who of ['owner', 'boardAdmin', 'editor', 'viewer', 'stranger']) {
+          for (const minimum of boardRoles) {
+            const asAgent = status(() => access.requireBoardAccess(viaAgent(who), boardId, minimum))
+            const asPerson = status(() => access.requireBoardAccess(actorOf(who), boardId, minimum))
+            if (asAgent === 200) expect(asPerson).toBe(200)
+          }
+        }
+      }
+      allowAutomation(false)
+    })
+
+    it('answers exactly as the browser does where the board allows automation', () => {
+      allowAutomation(true)
       for (const who of ['owner', 'boardAdmin', 'editor', 'viewer', 'stranger']) {
         for (const minimum of boardRoles) {
           expect(status(() => access.requireBoardAccess(viaAgent(who), boardId, minimum)))
             .toBe(status(() => access.requireBoardAccess(actorOf(who), boardId, minimum)))
         }
       }
+      allowAutomation(false)
     })
 
     it('leaves the archive rule identical', () => {
+      allowAutomation(true)
       for (const who of ['boardAdmin', 'editor', 'viewer']) {
         expect(status(() => access.requireTicketAccess(viaAgent(who), archivedTicketId)))
           .toBe(status(() => access.requireTicketAccess(actorOf(who), archivedTicketId)))
       }
+      allowAutomation(false)
     })
 
     it('cannot make a non-admin into an instance admin', () => {
@@ -216,9 +307,11 @@ describe('access guards', () => {
     })
 
     it('carries the provenance through to the caller unchanged', () => {
+      allowAutomation(true)
       const resolved = access.requireBoardAccess(viaAgent('editor'), boardId)
       expect(resolved.actor).toMatchObject({ agentId: 'claude-desktop', tokenId: 'tok_1', channel: 'mcp' })
       expect(resolved.account.id).toBe(people.editor)
+      allowAutomation(false)
     })
   })
 })

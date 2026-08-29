@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { AppleApiError, syncTestFlight, verifyTestFlightAccess } from '../utils/app-store-connect'
 import { getServerConfig } from '../utils/config'
 import { SecretBoxError } from '../utils/secret-box'
-import { boardViewer } from '../utils/access'
+import { boardViewer, isInstanceAdmin } from '../utils/access'
 import { listAudit } from '../utils/audit'
 import {
   CategoryNameTakenError, LaneDeleteError, boardMembers, boardRoleFor, countBoardAdmins, countBoards,
@@ -17,7 +17,7 @@ import {
   boardCreateSchema, boardMemberSchema, boardUpdateSchema, categoryUpdateSchema, commentSaveSchema, connectionTestSchema,
   importRequestSchema, laneCreateSchema, laneOrderSchema, laneUpdateSchema
 } from '../utils/validation'
-import { createdId, defineOperation } from './types'
+import { createdId, defineOperation, type OperationContext } from './types'
 import { orNotFound } from './run'
 
 const id = z.string().trim().min(1).max(64)
@@ -31,8 +31,16 @@ export const boardList = defineOperation({
   input: z.object({}),
   requires: { scope: 'authenticated' },
   audit: false,
-  run: ctx => ({ boards: listBoards(boardViewer(ctx.account)) })
+  // Board access itself is checked per board; this only keeps the listing honest, so an agent
+  // is not shown boards every later call would refuse it.
+  run: ctx => ({ boards: automatable(listBoards(boardViewer(ctx.account)), ctx) })
 })
+
+/** The boards this context may actually work, once the channel has had its say. */
+function automatable(boards: BoardSummary[], ctx: OperationContext): BoardSummary[] {
+  if (ctx.actor.channel === 'web' || isInstanceAdmin(ctx.account)) return boards
+  return boards.filter(board => board.members.some(member => member.userId === ctx.account.id && member.mayAutomate))
+}
 
 export const boardGet = defineOperation({
   name: 'board.get',
@@ -220,9 +228,9 @@ export const memberSet = defineOperation({
   summary: 'Add somebody to a board, or change the role they hold',
   input: boardMemberSchema.extend({ boardId: id, userId: id }),
   requires: { scope: 'board', role: 'admin', boardId: boardOf },
-  audit: { targetType: 'user', targetId: input => input.userId, changes: ['role'] },
+  audit: { targetType: 'user', targetId: input => input.userId, changes: ['role', 'mayAutomate'] },
   run: (ctx, input) => {
-    const member = setBoardMember(input.boardId, input.userId, input.role)
+    const member = setBoardMember(input.boardId, input.userId, input.role, input.mayAutomate)
     if (!member) throw createError({ statusCode: 404, statusMessage: 'This account does not exist.' })
     return { member, board: findBoardSummary(input.boardId, boardViewer(ctx.account)) }
   }

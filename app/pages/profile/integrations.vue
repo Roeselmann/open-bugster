@@ -2,6 +2,18 @@
 import { Bot, Terminal } from '@lucide/vue'
 
 const { boards } = useBoards()
+
+definePageMeta({
+  /**
+   * The tab is hidden for somebody who may not automate anything; typing the URL should not
+   * be a way around that. The list is already loaded by the profile shell, and loading it
+   * again is a no-op.
+   */
+  middleware: async () => {
+    await loadBoards()
+    if (!useCanAutomate().value) return navigateTo('/profile')
+  },
+})
 </script>
 
 <template>

@@ -135,6 +135,7 @@ export const boardMemberSchema = z.object({
   lastName: z.string(),
   status: z.enum(userStatuses),
   role: z.enum(boardRoles),
+  mayAutomate: z.boolean(),
   addedAt: z.string()
 })
 

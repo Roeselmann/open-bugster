@@ -15,8 +15,8 @@ const sections = computed(() => {
   return [
     { to: `/b/${id}/settings/board`, label: 'Board', icon: SlidersHorizontal },
     users,
-    { to: `/b/${id}/settings/integration`, label: 'Integration', icon: Plug },
-    { to: `/b/${id}/settings/automation`, label: 'Automation', icon: Webhook },
+    { to: `/b/${id}/settings/integration`, label: 'TestFlight', icon: Plug },
+    { to: `/b/${id}/settings/automation`, label: 'Webhooks', icon: Webhook },
     { to: `/b/${id}/settings/audit`, label: 'Audit', icon: ScrollText },
   ]
 })

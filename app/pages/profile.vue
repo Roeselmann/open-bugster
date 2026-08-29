@@ -9,12 +9,16 @@ const { notice, closeNotice } = useNotify()
 // can read `useBoards()` without each one fetching again.
 await loadBoards()
 
-const sections = [
+const canAutomate = useCanAutomate()
+
+// Integrations is only there for somebody who may actually point a token at a board; for
+// anybody else the tokens it mints would be refused everywhere.
+const sections = computed(() => [
   { to: '/profile', label: 'Account', icon: UserRound },
   { to: '/profile/boards', label: 'Boards', icon: LayoutGrid },
-  { to: '/profile/integrations', label: 'Integrations', icon: Plug },
+  ...(canAutomate.value ? [{ to: '/profile/integrations', label: 'Integrations', icon: Plug }] : []),
   { to: '/profile/security', label: 'Security', icon: KeyRound },
-]
+])
 </script>
 
 <template>

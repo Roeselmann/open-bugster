@@ -130,7 +130,7 @@ Open-Bugster is one container and one data volume. From nothing to a working boa
 
    From here on the database is the only source of truth: the variables in step 4 are never read again, and passwords are changed in the app. If you mistyped something and cannot get in, see [If nobody can sign in](#if-nobody-can-sign-in).
 
-7. **Set up the board.** Rename it, adjust its lanes, and—if you have an API key—enter the credentials under **Board settings → Integration**, press **Test connection**, then **TestFlight Sync** in the header.
+7. **Set up the board.** Rename it, adjust its lanes, and—if you have an API key—enter the credentials under **Board settings → TestFlight**, press **Test connection**, then **TestFlight Sync** in the header.
 
 8. **Invite your team.** **Users** in the account menu (top right) creates an account and shows a one-time link to pass on. Then add them to the board under **Board settings → Users**, as viewer, editor, or administrator.
 
@@ -312,6 +312,26 @@ once.
 Give a token an **agent label** — "Claude Desktop", "n8n prod" — and it appears in every ticket's
 history as *via that label*, beside the person who answers for it.
 
+### Who may integrate with a board
+
+Being on a board and being allowed to drive it from other software are two different things.
+Every membership carries an **Integration** permission, set per person under **Board settings →
+Users**, and without it that account's tokens are refused on that board — the browser still
+works exactly as before. Somebody who holds it on no board is not shown the **Integrations** tab
+in their profile at all, since anything minted there would be refused everywhere.
+
+It is a second axis rather than a rank above editor: it says *through what* somebody may act,
+never *how much*. An agent still reaches exactly as far as the person's own board role, and a
+viewer with the permission is still a viewer. The reasoning is that an editor can already do by
+hand everything their agent would do; what a token changes is that it happens in bulk and at
+machine pace, which is worth handing out deliberately.
+
+Administrators always hold it — the board's, who hand the permission out and could tick their
+own box in a second, and the instance's, who hold every board without a membership row for a
+flag to live on. Existing memberships kept the permission when this arrived, so an instance that
+was already running an agent or a script does not break on upgrade; memberships created since
+start without it.
+
 ### Service identities
 
 For something that is not a person — a CI pipeline, a scheduled job — open a **service identity**
@@ -350,7 +370,7 @@ person or service the token belongs to.
 
 ### Webhooks
 
-Under **Board settings → Automation**, a board can push its events somewhere rather than being
+Under **Board settings → Webhooks**, a board can push its events somewhere rather than being
 polled — which is what makes it useful to n8n and anything like it. Events cover tickets being
 created, updated, moved, archived and restored, comments, and completed TestFlight imports.
 
@@ -386,7 +406,7 @@ The key needs at least the Developer, App Manager, or Admin role for the app.
 
 ### Entering them
 
-Open **Board settings → Integration**, enter issuer ID, key ID, and app ID, upload the `.p8` exactly as downloaded, and save. The key is verified on upload and stored AES-256-GCM encrypted in the database; it is never written to disk and never sent back to the browser. It can be replaced or removed at any time, but never displayed again.
+Open **Board settings → TestFlight**, enter issuer ID, key ID, and app ID, upload the `.p8` exactly as downloaded, and save. The key is verified on upload and stored AES-256-GCM encrypted in the database; it is never written to disk and never sent back to the browser. It can be replaced or removed at any time, but never displayed again.
 
 <p align="center">
 <img src="docs/images/screenshot-settings-apple-testflight.png">
@@ -420,7 +440,7 @@ It checks the values currently **in the form**, saved or not—so a corrected ke
 
 Installations that configured TestFlight through the `ASC_ISSUER_ID`, `ASC_KEY_ID`, `ASC_APP_ID`, and `ASC_PRIVATE_KEY_PATH` variables keep working. On the first start after the upgrade, all existing tickets become a board named **Workboard** whose lanes match the previous columns, and those four values—including the `.p8` read from `ASC_PRIVATE_KEY_PATH`—are imported into it.
 
-After that first start the variables are no longer read, and the `.p8` bind mount in `docker-compose.yml` can be removed. Verify the import under **Board settings → Integration** before deleting anything.
+After that first start the variables are no longer read, and the `.p8` bind mount in `docker-compose.yml` can be removed. Verify the import under **Board settings → TestFlight** before deleting anything.
 
 ## How Open-Bugster stores data
 

@@ -134,6 +134,9 @@ CREATE TABLE IF NOT EXISTS board_members (
   board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   role TEXT NOT NULL DEFAULT 'editor' CHECK (role IN ('admin', 'editor', 'viewer')),
+  -- Whether this membership may be worked through a token — the API, or an agent over MCP.
+  -- Another axis than the role, not a rank above it: it says how somebody may act, not how much.
+  may_automate INTEGER NOT NULL DEFAULT 0,
   added_at TEXT NOT NULL,
   PRIMARY KEY (board_id, user_id)
 );
@@ -268,6 +271,7 @@ export function getDb() {
   ensureApiTokens(database)
   ensureIdempotencyKeys(database)
   ensureWebhooks(database)
+  ensureBoardMemberAutomation(database)
   database.exec(boardIndexes)
   database.exec(personIndexes)
   clearImportedDescriptions(database)
@@ -1499,6 +1503,20 @@ export function pruneIdempotent(hours = 24): number {
  * to reproduce it to sign each delivery, so there is nothing a hash could be checked against.
  * It is generated here rather than supplied, so it is always long enough to matter.
  */
+/**
+ * Adds the per-membership automation permission.
+ *
+ * Existing memberships are granted it, because on an instance that is already running an
+ * agent or a script, an upgrade that silently starts refusing them would look like an
+ * outage. New memberships default to off: it is a permission a board admin gives out.
+ */
+export function ensureBoardMemberAutomation(db: Database.Database) {
+  if (tableColumns(db, 'board_members').has('may_automate')) return false
+  db.exec('ALTER TABLE board_members ADD COLUMN may_automate INTEGER NOT NULL DEFAULT 0')
+  db.exec('UPDATE board_members SET may_automate = 1')
+  return true
+}
+
 export function ensureWebhooks(db: Database.Database) {
   const existed = Boolean(db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'webhooks'").get())
   db.exec(`
@@ -1576,13 +1594,31 @@ export interface BoardViewer {
 }
 
 export function boardMembers(boardId: string): BoardMember[] {
-  return (getDb().prepare(`
-    SELECT u.id AS userId, u.email, u.first_name AS firstName, u.last_name AS lastName, u.status, m.role, m.added_at AS addedAt
+  const rows = getDb().prepare(`
+    SELECT u.id AS userId, u.email, u.first_name AS firstName, u.last_name AS lastName, u.status,
+           m.role, m.may_automate AS mayAutomate, m.added_at AS addedAt
     FROM board_members m
     JOIN users u ON u.id = m.user_id
     WHERE m.board_id = ?
     ORDER BY u.first_name COLLATE NOCASE, u.last_name COLLATE NOCASE, u.email COLLATE NOCASE
-  `).all(boardId)) as BoardMember[]
+  `).all(boardId) as Array<Omit<BoardMember, 'mayAutomate'> & { mayAutomate: number }>
+  // SQLite has no boolean, so the flag arrives as 0 or 1 and is mapped rather than cast.
+  // A board administrator always holds it: they may hand it to anybody, themselves included,
+  // so withholding it from them would be a lock with the key beside it. The stored value is
+  // left untouched, so demoting somebody to editor brings back whatever they were given.
+  return rows.map(row => ({ ...row, mayAutomate: row.role === 'admin' || Boolean(row.mayAutomate) }))
+}
+
+/**
+ * Whether somebody may work this board through a token rather than the browser.
+ *
+ * Absent membership reads as false; the caller has already decided what a non-member is told.
+ */
+export function boardAutomationAllowed(boardId: string, userId: string): boolean {
+  const row = getDb().prepare('SELECT role, may_automate FROM board_members WHERE board_id = ? AND user_id = ?')
+    .get(boardId, userId) as { role: BoardRole; may_automate: number } | undefined
+  if (!row) return false
+  return row.role === 'admin' || Boolean(row.may_automate)
 }
 
 function toBoardSummary(row: BoardRow, viewer?: BoardViewer | null): BoardSummary {
@@ -2636,13 +2672,19 @@ export function touchLastLogin(id: string) {
   getDb().prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(new Date().toISOString(), id)
 }
 
-/** Takes any principal: a service identity holds a board role exactly as a person does. */
-export function setBoardMember(boardId: string, userId: string, role: BoardRole): BoardMember | null {
+/**
+ * Takes any principal: a service identity holds a board role exactly as a person does.
+ *
+ * `mayAutomate` left undefined keeps whatever the membership already had, so a caller that
+ * only means to change the role cannot revoke the permission by omission.
+ */
+export function setBoardMember(boardId: string, userId: string, role: BoardRole, mayAutomate?: boolean): BoardMember | null {
   if (!findBoard(boardId) || !findPrincipal(userId)) return null
+  const flag = mayAutomate === undefined ? null : (mayAutomate ? 1 : 0)
   getDb().prepare(`
-    INSERT INTO board_members (board_id, user_id, role, added_at) VALUES (?, ?, ?, ?)
-    ON CONFLICT (board_id, user_id) DO UPDATE SET role = excluded.role
-  `).run(boardId, userId, role, new Date().toISOString())
+    INSERT INTO board_members (board_id, user_id, role, may_automate, added_at) VALUES (?, ?, ?, COALESCE(?, 0), ?)
+    ON CONFLICT (board_id, user_id) DO UPDATE SET role = excluded.role, may_automate = COALESCE(?, may_automate)
+  `).run(boardId, userId, role, flag, new Date().toISOString(), flag)
   return boardMembers(boardId).find(member => member.userId === userId) || null
 }
 

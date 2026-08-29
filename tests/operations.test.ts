@@ -53,8 +53,9 @@ describe('the operation registry', () => {
     const board = db.listBoards()[0]!
     boardId = board.id
     laneId = board.lanes.find(lane => !lane.isImport)!.id
-    db.setBoardMember(boardId, people.editor!, 'editor')
-    db.setBoardMember(boardId, people.viewer!, 'viewer')
+    // This board is worked through tokens further down, so it permits automation.
+    db.setBoardMember(boardId, people.editor!, 'editor', true)
+    db.setBoardMember(boardId, people.viewer!, 'viewer', true)
   })
 
   describe('shape', () => {
@@ -97,6 +98,15 @@ describe('the operation registry', () => {
       const { ticket } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Scoped', laneId }) as { ticket: { id: string } }
       expect(await statusOf(ops.run(ops.ticketGet, actorOf('viewer'), { ticketId: ticket.id }))).toBe(200)
       expect(await statusOf(ops.run(ops.ticketMove, actorOf('viewer'), { ticketId: ticket.id, laneId, index: 0 }))).toBe(403)
+    })
+
+    it('checks a ticket number against the ticket it names, not the caller', async () => {
+      const { ticket } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Numbered', laneId }) as { ticket: { id: string; ticketNumber: number } }
+      expect(await statusOf(ops.run(ops.ticketGetByNumber, actorOf('viewer'), { ticketNumber: ticket.ticketNumber }))).toBe(200)
+      // A number is a global handle, so it must not become a way to read across boards. A
+      // stranger gets the same 404 as for a number that was never issued — no existence leak.
+      expect(await statusOf(ops.run(ops.ticketGetByNumber, actorOf('stranger'), { ticketNumber: ticket.ticketNumber }))).toBe(404)
+      expect(await statusOf(ops.run(ops.ticketGetByNumber, actorOf('viewer'), { ticketNumber: 999_999 }))).toBe(404)
     })
 
     it('an agent still cannot exceed its principal', async () => {
@@ -182,8 +192,10 @@ describe('the operation registry', () => {
         .filter(operation => operation.audit === false)
         .map(operation => operation.name)
       // Everything left is a read; the naming convention is what makes that checkable. A write
-      // that does not end in one of these words fails here, which is the point.
-      expect(unaudited.every(name => /\.(list|get|activity|status|candidates|deliveries)$/.test(name)), unaudited.join(', ')).toBe(true)
+      // that does not end in one of these words fails here, which is the point. `get` and
+      // `list` may carry a qualifier for how the subject is named — `getByNumber` — because
+      // that changes the lookup and never the verb; nothing that mutates is named `getX`.
+      expect(unaudited.every(name => /\.((list|get)([A-Z]\w*)?|activity|status|candidates|deliveries)$/.test(name)), unaudited.join(', ')).toBe(true)
     })
   })
 

@@ -2,7 +2,7 @@ import { createError } from 'h3'
 import type { BoardRole } from '../../shared/types/domain'
 import type { Actor } from './actor'
 import { ceilingFor } from './token'
-import { boardMembers, boardRoleFor, findBoard, findComment, findTicket, type UserRecord } from './db'
+import { boardAutomationAllowed, boardMembers, boardRoleFor, findBoard, findComment, findTicket, type UserRecord } from './db'
 
 const rank: Record<BoardRole, number> = { viewer: 0, editor: 1, admin: 2 }
 
@@ -45,6 +45,28 @@ function effectiveRole(actor: Actor, held: BoardRole): BoardRole | null {
   return satisfiesRole(held, ceiling) ? ceiling : held
 }
 
+/**
+ * Whether this actor may work the board through anything but the browser.
+ *
+ * A separate axis from the board role, because it answers a different question: not how much
+ * somebody may do, but through what. An editor can already do by hand everything their agent
+ * would do — what a token changes is that it happens in bulk and at machine pace, which is
+ * worth handing out deliberately rather than as a side effect of being added to a board.
+ *
+ * An administrator is exempt, whether the board's or the instance's. A board admin hands the
+ * permission out and could give it to themselves in a click; an instance admin holds every
+ * board without a membership row for a flag to live on. Refusing either would be a lock with
+ * the key beside it.
+ */
+function requireAutomationAllowed(actor: Actor, boardId: string, held: BoardRole): void {
+  if (actor.channel === 'web' || held === 'admin') return
+  if (boardAutomationAllowed(boardId, actor.principal.id)) return
+  throw createError({
+    statusCode: 403,
+    statusMessage: 'This account may not work this board through the API or an agent. A board administrator can allow it with the Integration box under Board settings → Users.'
+  })
+}
+
 export function boardViewer(account: UserRecord) {
   return { userId: account.id, instanceAdmin: isInstanceAdmin(account) }
 }
@@ -67,6 +89,9 @@ export function requireBoardAccess(actor: Actor, boardId: string, minimum: Board
   // Same rule as the board summary reports, so what the UI enables is what the API allows.
   const held: BoardRole | null = isInstanceAdmin(account) ? 'admin' : boardRoleFor(boardId, account.id)
   if (!held) throw createError({ statusCode: 404, statusMessage: 'Board not found.' })
+  // Checked after the membership, so a board somebody cannot see stays a 404 rather than
+  // becoming a 403 that confirms it exists.
+  requireAutomationAllowed(actor, boardId, held)
   const role = effectiveRole(actor, held)
   if (!role || !satisfiesRole(role, minimum)) throw createError({ statusCode: 403, statusMessage: 'You do not have permission to do this.' })
   return { actor, account, role }

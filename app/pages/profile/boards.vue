@@ -15,6 +15,16 @@ const boardRoleLabels: Record<BoardRole, string> = { viewer: 'Viewer', editor: '
 function viaInstanceRole(board: BoardSummary): boolean {
   return instanceAdmin.value && !board.members.some(member => member.userId === user.value?.id)
 }
+
+/**
+ * Whether a token of this person's would be refused here. Worth saying on the page they look
+ * at when an agent answers 403 — the permission is a board admin's to give, not theirs.
+ */
+function automationRefused(board: BoardSummary): boolean {
+  if (instanceAdmin.value) return false
+  const membership = board.members.find(member => member.userId === user.value?.id)
+  return Boolean(membership && !membership.mayAutomate)
+}
 </script>
 
 <template>
@@ -40,6 +50,7 @@ function viaInstanceRole(board: BoardSummary): boolean {
               {{ board.ticketCount }} open {{ board.ticketCount === 1 ? 'ticket' : 'tickets' }} ·
               {{ board.members.length }} {{ board.members.length === 1 ? 'member' : 'members' }}
               <template v-if="viaInstanceRole(board)"> · through your instance role, not a membership</template>
+              <template v-else-if="automationRefused(board)"> · browser only; the API and agents are not permitted here</template>
             </p>
           </div>
           <span class="tone tone-neutral shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide">

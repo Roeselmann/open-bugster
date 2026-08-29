@@ -39,6 +39,20 @@ export function clearBoards() {
   loadedFor().value = null
 }
 
+/**
+ * Whether this person may work any board through a token — the API, or an agent over MCP.
+ *
+ * An instance administrator always may. For everybody else it takes a membership carrying the
+ * permission, which a board administrator's always does. Somebody with none of that has
+ * nothing to configure under Integrations, so the tab is not shown to them at all.
+ */
+export function useCanAutomate() {
+  const { user, instanceAdmin } = useAuth()
+  const boards = boardState()
+  return computed(() => instanceAdmin.value || boards.value.some(board =>
+    board.members.some(member => member.userId === user.value?.id && member.mayAutomate)))
+}
+
 export function useBoards() {
   return { boards: boardState(), refresh: () => loadBoards(true) }
 }

@@ -70,9 +70,10 @@ describe('service identities and API tokens', () => {
     boardId = board.id
     laneId = board.lanes.find(lane => !lane.isImport)!.id
     otherBoardId = db.createBoard('Second board').id
-    db.setBoardMember(boardId, people.editor!, 'editor')
-    db.setBoardMember(boardId, people.viewer!, 'viewer')
-    db.setBoardMember(otherBoardId, people.editor!, 'editor')
+    // Every membership here is worked through a token, so each one permits automation.
+    db.setBoardMember(boardId, people.editor!, 'editor', true)
+    db.setBoardMember(boardId, people.viewer!, 'viewer', true)
+    db.setBoardMember(otherBoardId, people.editor!, 'editor', true)
   })
 
   describe('service identities', () => {
@@ -255,7 +256,7 @@ describe('service identities and API tokens', () => {
         name: 'ci', principalId: service.id, scopes: ['write'], boardId
       }) as { secret: string }
 
-      db.setBoardMember(boardId, service.id, 'editor')
+      db.setBoardMember(boardId, service.id, 'editor', true)
       const botActor = token.resolveToken(result.secret, 'api')!
       expect(botActor.principalId).toBe(service.id)
 

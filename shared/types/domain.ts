@@ -65,6 +65,12 @@ export interface BoardMember {
   lastName: string
   status: UserStatus
   role: BoardRole
+  /**
+   * Whether this membership may be worked through a token — the API, or an agent over MCP.
+   * Independent of the role: it says how somebody may act on the board, not how much.
+   * Shown as the **Integration** box under Board settings → Users.
+   */
+  mayAutomate: boolean
   addedAt: string
 }
 

@@ -135,7 +135,9 @@ export const inviteAcceptSchema = z.object({
 })
 
 export const boardMemberSchema = z.object({
-  role: z.enum(boardRoles)
+  role: z.enum(boardRoles),
+  /** Omitted leaves an existing membership's permission alone; a new one starts without it. */
+  mayAutomate: z.boolean().optional()
 })
 
 export const commentSaveSchema = z.object({
