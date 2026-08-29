@@ -2,6 +2,7 @@ import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { isIP } from 'node:net'
 import { lookup } from 'node:dns/promises'
 import { getDb } from './db'
+import { WEBHOOK_DELIVERY } from '../../shared/utils/webhook-catalogue'
 
 /**
  * The events a board can send.
@@ -225,7 +226,7 @@ export function signPayload(secret: string, body: string, timestamp = Math.floor
 }
 
 /** For a receiver, and for the tests: constant-time, and it re-derives rather than trusting. */
-export function verifySignature(secret: string, body: string, header: string, toleranceSeconds = 300): boolean {
+export function verifySignature(secret: string, body: string, header: string, toleranceSeconds = WEBHOOK_DELIVERY.signatureToleranceSeconds): boolean {
   const parts = Object.fromEntries(header.split(',').map(piece => piece.split('=') as [string, string]))
   const timestamp = Number(parts.t)
   if (!Number.isFinite(timestamp) || !parts.v1) return false
@@ -237,8 +238,9 @@ export function verifySignature(secret: string, body: string, header: string, to
 
 /* ── delivery ───────────────────────────────────────────────────────────── */
 
-const MAX_ATTEMPTS = 5
-const FAILURES_BEFORE_DISABLING = 20
+// Shared with the settings page, which prints these as the rules a receiver has to live with.
+const MAX_ATTEMPTS = WEBHOOK_DELIVERY.maxAttempts
+const FAILURES_BEFORE_DISABLING = WEBHOOK_DELIVERY.failuresBeforeDisabling
 
 /**
  * The backoff step, squared per attempt: 1s, 4s, 9s, 16s by default — long enough to ride out
@@ -250,7 +252,7 @@ const FAILURES_BEFORE_DISABLING = 20
  */
 function retryBaseMs(): number {
   const configured = Number(process.env.WEBHOOK_RETRY_BASE_MS)
-  return Number.isFinite(configured) && configured >= 0 ? configured : 1000
+  return Number.isFinite(configured) && configured >= 0 ? configured : WEBHOOK_DELIVERY.retryBaseSeconds * 1000
 }
 
 export interface WebhookPayload {
@@ -301,7 +303,7 @@ async function deliver(webhookId: string, event: WebhookEvent, body: string, att
         'X-Bugster-Signature': signPayload(hook.secret, body)
       },
       body,
-      signal: AbortSignal.timeout(10_000)
+      signal: AbortSignal.timeout(WEBHOOK_DELIVERY.requestTimeoutSeconds * 1000)
     })
     status = response.status
     if (!response.ok) error = `HTTP ${response.status}`
@@ -351,7 +353,7 @@ function record(webhookId: string, event: string, attempt: number, status: numbe
 }
 
 /** Deliveries are a diagnostic, not a record; they are pruned like the idempotency keys. */
-export function pruneDeliveries(days = 7): number {
+export function pruneDeliveries(days = WEBHOOK_DELIVERY.deliveryLogDays): number {
   const cutoff = new Date(Date.now() - days * 86_400_000).toISOString()
   return getDb().prepare('DELETE FROM webhook_deliveries WHERE at < ?').run(cutoff).changes
 }

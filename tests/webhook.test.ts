@@ -297,6 +297,48 @@ describe('outgoing webhooks', () => {
       await ops.run(ops.webhookDelete, actorOf(), { webhookId: created.webhook.id })
     })
 
+    /**
+     * What the settings page's edit button does. The point of editing in place rather than
+     * recreating: the secret the receiver already holds, and the delivery log, both survive.
+     */
+    it('changes which events a webhook subscribes to, keeping its secret and its log', async () => {
+      received.length = 0
+      const created = await ops.run(ops.webhookCreate, actorOf(), {
+        boardId, url: receiverUrl, events: ['ticket.created'], description: 'before'
+      }) as { webhook: { id: string }; secret: string }
+
+      // Other webhooks on this board point at the same receiver, so a delivery is recognised
+      // by the secret that signed it rather than by counting what arrived.
+      const mine = () => received.filter(delivery =>
+        hooks.verifySignature(created.secret, delivery.body, delivery.headers['x-bugster-signature']!))
+
+      await ops.run(ops.ticketCreate, actorOf(), { boardId, laneId, title: 'Before the edit' })
+      expect(await waitFor(() => mine().length === 1)).toBe(true)
+
+      const { webhook } = await ops.run(ops.webhookUpdate, actorOf(), {
+        webhookId: created.webhook.id, events: ['comment.added'], description: 'after'
+      }) as { webhook: { events: string[]; description: string; enabled: boolean } }
+      expect(webhook).toMatchObject({ events: ['comment.added'], description: 'after', enabled: true })
+
+      // The old event stops arriving, the new one starts, and the secret still verifies.
+      received.length = 0
+      const { ticket } = await ops.run(ops.ticketCreate, actorOf(), { boardId, laneId, title: 'After the edit' }) as { ticket: { id: string } }
+      await settle()
+      expect(mine()).toHaveLength(0)
+
+      received.length = 0
+      await ops.run(ops.commentAdd, actorOf(), { ticketId: ticket.id, body: 'Now this one fires.' })
+      expect(await waitFor(() => mine().length === 1)).toBe(true)
+      expect(mine()[0]!.headers['x-bugster-event']).toBe('comment.added')
+
+      // The log kept what the webhook did before the edit.
+      const { deliveries } = await ops.run(ops.webhookDeliveries, actorOf(), { webhookId: created.webhook.id }) as {
+        deliveries: Array<{ event: string }>
+      }
+      expect(deliveries.map(entry => entry.event)).toContain('ticket.created')
+      await ops.run(ops.webhookDelete, actorOf(), { webhookId: created.webhook.id })
+    })
+
     it('re-enabling clears the failure count', async () => {
       const created = await ops.run(ops.webhookCreate, actorOf(), {
         boardId, url: receiverUrl, events: ['ticket.created']
@@ -309,6 +351,25 @@ describe('outgoing webhooks', () => {
       }
       expect(webhook).toMatchObject({ enabled: true, consecutiveFailures: 0, disabledAt: null })
       await ops.run(ops.webhookDelete, actorOf(), { webhookId: created.webhook.id })
+    })
+  })
+
+  /**
+   * The settings page documents each event from the shared catalogue. If an event is added to
+   * the sender without a line here, the page would quietly stop describing what it sends.
+   */
+  describe('the documented catalogue', () => {
+    it('describes exactly the events the sender can raise, in the same order', async () => {
+      const { WEBHOOK_EVENTS } = await import('../shared/utils/webhook-catalogue')
+      expect(WEBHOOK_EVENTS.map(entry => entry.event)).toEqual([...hooks.webhookEvents])
+    })
+
+    it('names the operation each event really comes from', async () => {
+      const { WEBHOOK_EVENTS } = await import('../shared/utils/webhook-catalogue')
+      for (const entry of WEBHOOK_EVENTS) {
+        expect(hooks.eventForOperation[entry.operation]).toBe(entry.event)
+      }
+      expect(WEBHOOK_EVENTS.length).toBe(Object.keys(hooks.eventForOperation).length)
     })
   })
 })
