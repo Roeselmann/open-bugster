@@ -50,3 +50,54 @@ helper_image() {
   image=$(docker compose images -q "$SERVICE" 2>/dev/null | head -n 1)
   if [ -n "$image" ]; then printf '%s\n' "$image"; else printf '%s\n' "${HELPER_IMAGE:-alpine:3}"; fi
 }
+
+# Where the service is published on the host, as a host:port curl can dial, or nothing.
+#
+# `docker compose port` is the direct question, but it answers ":0" when it cannot match a
+# mapping rather than failing, so its output has to be checked instead of trusted. The
+# container's own bindings answer the same question and are asked as a fallback. Either can
+# name a wildcard host, which is fine to listen on and impossible to dial — those become
+# loopback.
+published_address() {
+  local port=$1 cid
+  # Nothing in here may report failure: the caller runs under `set -e` with `pipefail`, where a
+  # non-zero anywhere in this pipeline would abort the update instead of leaving the address
+  # empty for the caller to handle.
+  cid=$(service_container) || cid=""
+  {
+    docker compose port "$SERVICE" "$port" 2>/dev/null || true
+    if [ -n "$cid" ]; then
+      docker inspect \
+        -f "{{range \$b := index .NetworkSettings.Ports \"$port/tcp\"}}{{\$b.HostIp}}:{{\$b.HostPort}}{{println}}{{end}}" \
+        "$cid" 2>/dev/null || true
+    fi
+  } | sed 's/^\[\(.*\)\]:/\1:/' | awk -F: '
+      NF > 1 {
+        p = $NF
+        h = substr($0, 1, length($0) - length(p) - 1)
+        if (p !~ /^[0-9]+$/ || p + 0 == 0) next
+        if (h == "" || h == "0.0.0.0" || h == "::" || h == "*") h = "127.0.0.1"
+        if (h ~ /:/) h = "[" h "]"
+        print h ":" p
+        exit
+      }'
+}
+
+# One request to the application, printing the HTTP status it answered with, or 000.
+#
+# Two ways in, because whether the application is reachable from the host is an installation's
+# choice, not a given: put it behind a reverse proxy on a shared network and it publishes no
+# host port at all. Inside the container it is always reachable. The image has no curl or
+# wget — it is node:22-slim — but it does have the node that runs the application, and node 22
+# has fetch built in.
+host_probe() {
+  curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$1" 2>/dev/null || true
+}
+
+container_probe() {
+  docker compose exec -T "$SERVICE" node -e '
+    fetch(process.argv[1], { signal: AbortSignal.timeout(5000) })
+      .then(r => process.stdout.write(String(r.status)))
+      .catch(() => process.stdout.write("000"))
+  ' "$1" 2>/dev/null || true
+}

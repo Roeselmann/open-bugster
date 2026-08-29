@@ -505,7 +505,7 @@ It asks for confirmation, stops the stack, replaces the volume contents, and sta
 scripts/update.sh
 ```
 
-Refuses to run on a dirty working tree, pulls fast-forward only, writes a `pre-update` archive, rebuilds, and then waits for the published port to answer—a request, not just a running process, because that is what proves the migrations went through. On a failure it prints the container log and the two commands that undo the update. `--no-pull` rebuilds the working tree as it stands, `--prune` removes dangling images once the new container is healthy.
+Refuses to run on a dirty working tree, pulls fast-forward only, writes a `pre-update` archive, rebuilds, and then waits for the application to answer—a request, not just a running process, because that is what proves the migrations went through. It asks the published port when there is one and the container itself when there is not, so an installation that publishes nothing and sits behind a reverse proxy is checked the same way. On a failure it prints the container log and the two commands that undo the update. `--no-pull` rebuilds the working tree as it stands, `--prune` removes dangling images once the new container is healthy.
 
 ## Local development
 
