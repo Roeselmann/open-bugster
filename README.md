@@ -32,6 +32,12 @@ Open-Bugster is a lightweight, self-hosted Kanban board for small teams—with a
   Record the next steps within each ticket, reorder them, and work through them systematically.
 - **Archive instead of delete**  
   Archived tickets stay restorable by a board administrator and are never re-imported from TestFlight.
+- **Drive it from your own tools**  
+  A versioned REST API at `/api/v1`, generated from the same definitions that validate the app itself, with a reference you can read in a browser and an OpenAPI document to generate a client from.
+- **Connect AI agents**  
+  An MCP endpoint lets Claude, Cursor, or anything else that speaks the protocol search a board, file tickets, and comment—reaching exactly as far as its token does, and recorded under the person or service it belongs to.
+- **Push events to other systems**  
+  Signed webhooks tell n8n, a chat channel, or a build pipeline when a ticket is created, updated, moved, archived, or restored, when somebody comments, and when a TestFlight import finishes.
 - **Light and dark**  
   A theme toggle in the header, remembered per browser.
 
