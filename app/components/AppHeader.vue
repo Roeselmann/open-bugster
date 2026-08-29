@@ -33,7 +33,10 @@ function syncLabel(run: SyncRun | null) {
   if (!run) return 'Not synced yet'
   if (run.status === 'running') return 'Sync in progress'
   const date = new Intl.DateTimeFormat('en', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(run.finishedAt || run.startedAt))
-  return run.status === 'failed' ? `Error · ${date}` : `${run.importedCount} new · ${date}`
+  // Said in full, because a bare date beside a count reads as when the tickets arrived rather
+  // than when the board last looked.
+  const when = `last sync on ${date}`
+  return run.status === 'failed' ? `Error · ${when}` : `${run.importedCount} new · ${when}`
 }
 </script>
 
