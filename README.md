@@ -4,16 +4,16 @@
 
 # Open-Bugster
 
-Open-Bugster is a lightweight, self-hosted Kanban board for small teams—with a TestFlight integration that turns beta feedback into tickets on its own. Built for independent iOS developers, useful to any team that wants a board of its own, and easy to customize with AI-assisted coding.
+Open-Bugster is a lightweight, self-hosted Kanban board that is meant to be driven by other software as much as by people. It started as the shortest path from TestFlight feedback to a ticket — App Store Connect is still the one integration that ships built in — but everything the board can do is also a REST endpoint, an MCP tool, and an outgoing webhook, so any application, script, or AI agent can work the same board with the same permissions.
 
 ## Features
 
+### A board first
+
 - **Work as a team**  
   Real accounts with per-board roles, ticket assignment, comment threads, and a history on every ticket.
-- **Import TestFlight feedback**  
-  Screenshots and crash reports land as tickets, with tester, device, system, build, and the original comment attached.
 - **Run several boards**  
-  Give every app its own board with its own lanes, categories, labels, archive, and App Store Connect credentials.
+  Give every app or project its own board with its own lanes, categories, labels, and archive.
 - **Shape the workflow**  
   Add, rename, drag to reorder, and remove lanes per board—only the import lane is fixed.
 - **Move tickets by dragging**  
@@ -31,21 +31,33 @@ Open-Bugster is a lightweight, self-hosted Kanban board for small teams—with a
 - **Manage to-do lists**  
   Record the next steps within each ticket, reorder them, and work through them systematically.
 - **Archive instead of delete**  
-  Archived tickets stay restorable by a board administrator and are never re-imported from TestFlight.
+  Archived tickets stay restorable by a board administrator and are never re-imported.
+- **Light and dark**  
+  A theme toggle in the header, remembered per browser.
+
+### Open to any application
+
 - **Drive it from your own tools**  
   A versioned REST API at `/api/v1`, generated from the same definitions that validate the app itself, with a reference you can read in a browser and an OpenAPI document to generate a client from.
 - **Connect AI agents**  
   An MCP endpoint lets Claude, Cursor, or anything else that speaks the protocol search a board, file tickets, and comment—reaching exactly as far as its token does, and recorded under the person or service it belongs to.
 - **Push events to other systems**  
-  Signed webhooks tell n8n, a chat channel, or a build pipeline when a ticket is created, updated, moved, archived, or restored, when somebody comments, and when a TestFlight import finishes.
-- **Light and dark**  
-  A theme toggle in the header, remembered per browser.
+  Signed webhooks tell n8n, a chat channel, or a build pipeline when a ticket is created, updated, moved, archived, or restored, when somebody comments, and when an import finishes.
+- **Give machines their own identity**  
+  Scoped tokens, service identities for pipelines and jobs, and an audit trail that records which agent acted through which channel—so automation is accountable rather than anonymous.
+
+### The integration that ships with it
+
+- **Import TestFlight feedback**  
+  Screenshots and crash reports land as tickets, with tester, device, system, build, and the original comment attached—per board, on that board's own App Store Connect credentials.
 
 ## The idea behind Open-Bugster
 
 **It is a Kanban board first.** Several boards side by side, lanes you arrange yourself, and tickets with a priority, due date, assignee, labels, a category, a to-do list, attachments, and a comment thread—plus per-board roles so a team can share one instance, and an archive so nothing is ever really lost. None of that needs an Apple account, and a board that imports nothing never even shows an import lane. Used this way it is simply a small, self-hosted work tracker that a team can run for the cost of a container.
 
-**The TestFlight integration is the shortcut on top.** For an iOS team it removes the most tedious part of beta testing: feedback arrives as tickets by itself, with the tester, device, system, locale, build, and the original screenshot or crash report already attached. Nothing gets copied out of App Store Connect by hand, and no device details are re-typed. Because people are matched by email address, a tester who is also on the team shows up as a colleague rather than as a string—and the same will hold for any other source that is wired up later.
+**App Store Connect is where it started.** For an iOS team the TestFlight import removes the most tedious part of beta testing: feedback arrives as tickets by itself, with the tester, device, system, locale, build, and the original screenshot or crash report already attached. Nothing gets copied out of App Store Connect by hand, and no device details are re-typed. Because people are matched by email address, a tester who is also on the team shows up as a colleague rather than as a string.
+
+**Every other source connects through the API.** Rather than growing an integration per service, the board exposes itself: a versioned REST API, an MCP endpoint for AI agents, and signed outgoing webhooks. A crash reporter, a support inbox, a CI pipeline, an n8n flow, or an agent reading a codebase can all file, move, and comment on tickets—and the same email matching that turns a tester into a colleague works for whatever they bring in. Every entry point runs under the same roles as the browser does, and everything a token does is recorded against the person or service it belongs to, so opening the board to software does not mean opening it wider than a person would be.
 
 **It is deliberately small.** It gives a useful workflow out of the box without trying to become an enterprise issue tracker: no sprints, no burndowns, no workflow engine. That is what makes it suitable for solo developers and small teams who want a practical process without meaningful setup, administration, or hosting costs.
 
@@ -278,8 +290,10 @@ docker compose exec bugster npm run owner:reset -- you@example.com "a-new-long-p
 
 ## The API, agents and webhooks
 
-Open-Bugster can be driven by something other than a person. There is a REST API, an MCP endpoint
-for AI agents, and outgoing webhooks — all of them speaking the same permissions as the board does.
+This is how Open-Bugster connects to anything that is not App Store Connect. There is a REST API,
+an MCP endpoint for AI agents, and outgoing webhooks — all of them speaking the same permissions as
+the board does, so a script, a service, or an agent joins the board the way a colleague would rather
+than through a side door.
 
 ### Tokens
 
@@ -357,7 +371,7 @@ anonymizing somebody empties it of anything identifying without losing the histo
 
 ## App Store Connect
 
-Importing TestFlight feedback requires an App Store Connect API key. Credentials are configured **in the app, per board**, so every board tracks its own app.
+App Store Connect is the one integration built into Open-Bugster; everything else connects through [the API](#the-api-agents-and-webhooks). Importing TestFlight feedback requires an App Store Connect API key. Credentials are configured **in the app, per board**, so every board tracks its own app.
 
 ### What is needed
 
