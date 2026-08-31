@@ -16,7 +16,16 @@ const { boards, refresh: refreshBoards } = useBoards()
 const board = computed(() => boards.value.find(item => item.id === boardId.value) || null)
 
 const lastBoardId = useLastBoardId()
-watchEffect(() => { if (board.value) lastBoardId.value = board.value.id })
+const lastWorkspaceId = useLastWorkspaceId()
+watchEffect(() => {
+  if (!board.value) return
+  lastBoardId.value = board.value.id
+  // The board decides the workspace, so the two cookies can never point apart.
+  lastWorkspaceId.value = board.value.workspaceId
+})
+
+// The switcher offers the boards around this one; other workspaces have their own.
+const workspaceBoards = computed(() => boards.value.filter(item => item.workspaceId === board.value?.workspaceId))
 
 const lanes = computed(() => board.value?.lanes || [])
 
@@ -297,7 +306,7 @@ async function sync() {
 
     <main class="mx-auto max-w-[1800px] px-4 py-6 sm:px-6">
       <div class="mb-6 flex flex-col gap-4 md:flex-row md:items-end">
-        <BoardSwitcher :board="board" :boards="boards" :syncing="syncing" :latest-run="syncData?.run || null" :can-sync="canModerate" @sync="sync" />
+        <BoardSwitcher :board="board" :boards="workspaceBoards" :syncing="syncing" :latest-run="syncData?.run || null" :can-sync="canModerate" @sync="sync" />
         <div class="flex flex-wrap gap-2 md:ml-auto md:justify-end">
           <div class="relative w-full sm:w-72">
             <Search :size="17" class="muted absolute left-3 top-1/2 -translate-y-1/2" />

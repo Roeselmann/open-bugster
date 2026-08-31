@@ -12,6 +12,7 @@ export function useAuth() {
     await session.fetch()
     // Signing out leaves nothing of this account behind for whoever signs in next.
     clearBoards()
+    clearWorkspaces()
     await navigateTo('/login')
   }
 

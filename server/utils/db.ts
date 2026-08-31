@@ -1,11 +1,12 @@
 import Database from 'better-sqlite3'
 import { mkdirSync, readFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { dirname, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type {
   ActivityKind, AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardRole, BoardSummary, Category, CategoryColor,
   CategorySummary, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
-  TicketPriority, TicketSource, TicketTodo, TicketTodoInput, UserAccount, UserBoardMembership, UserRole, UserStatus
+  TicketPriority, TicketSource, TicketTodo, TicketTodoInput, UserAccount, UserBoardMembership, UserRole, UserStatus,
+  Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
 } from '../../shared/types/domain'
 import type { Actor, ActorChannel } from './actor'
 import { decryptSecret, encryptSecret, secretKeyAvailable } from './secret-box'
@@ -276,6 +277,7 @@ export function getDb() {
   ensureIdempotencyKeys(database)
   ensureWebhooks(database)
   ensureBoardMemberAutomation(database)
+  ensureWorkspaces(database)
   database.exec(boardIndexes)
   database.exec(personIndexes)
   clearImportedDescriptions(database)
@@ -1538,6 +1540,50 @@ export function ensureBoardMemberAutomation(db: Database.Database) {
   return true
 }
 
+/**
+ * Adds the level above boards.
+ *
+ * `boards.workspace_id` has no NOT NULL because SQLite cannot add one without a constant
+ * default; the adoption below is what makes it always set in practice, and it doubles as
+ * the safety net for any row that ever ends up without one.
+ *
+ * Runs its statements every start on purpose: an instance always keeps at least one
+ * workspace, so a fresh database gets its first one here, under the same name an upgraded
+ * one gets — the upgrade is invisible until somebody creates a second.
+ */
+export function ensureWorkspaces(db: Database.Database) {
+  const migrated = !tableColumns(db, 'boards').has('workspace_id')
+  if (migrated) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS workspace_members (
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member')),
+        added_at TEXT NOT NULL,
+        PRIMARY KEY (workspace_id, user_id)
+      );
+      ALTER TABLE boards ADD COLUMN workspace_id TEXT REFERENCES workspaces(id);
+    `)
+  }
+  const count = (db.prepare('SELECT COUNT(*) AS value FROM workspaces').get() as { value: number }).value
+  if (count === 0) {
+    db.prepare('INSERT INTO workspaces (id, name, position, created_at) VALUES (?, ?, 0, ?)')
+      .run(randomUUID(), 'Workspace', new Date().toISOString())
+  }
+  db.prepare('UPDATE boards SET workspace_id = (SELECT id FROM workspaces ORDER BY position, created_at LIMIT 1) WHERE workspace_id IS NULL').run()
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_boards_workspace ON boards(workspace_id, position);
+    CREATE INDEX IF NOT EXISTS idx_workspace_members_user ON workspace_members(user_id);
+  `)
+  return migrated
+}
+
 export function ensureWebhooks(db: Database.Database) {
   const existed = Boolean(db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'webhooks'").get())
   db.exec(`
@@ -1578,7 +1624,12 @@ type BoardRow = {
   asc_issuer_id: string; asc_key_id: string; asc_app_id: string
   asc_private_key: string | null; asc_key_filename: string | null; asc_key_uploaded_at: string | null
   sync_limit: number; auto_author: number; created_at: string
+  // Nullable in the column (SQLite cannot add NOT NULL after the fact), never null in
+  // practice: `ensureWorkspaces` adopts every orphan on start.
+  workspace_id: string
 }
+
+type WorkspaceRow = { id: string; name: string; position: number; created_at: string }
 
 type LaneRow = { id: string; board_id: string; name: string; position: number; is_import: number }
 
@@ -1590,7 +1641,7 @@ type TicketRow = {
 }
 
 function toBoard(row: BoardRow): Board {
-  return { id: row.id, name: row.name, description: row.description, position: row.position, syncLimit: row.sync_limit, autoAuthor: Boolean(row.auto_author), createdAt: row.created_at }
+  return { id: row.id, workspaceId: row.workspace_id, name: row.name, description: row.description, position: row.position, syncLimit: row.sync_limit, autoAuthor: Boolean(row.auto_author), createdAt: row.created_at }
 }
 
 function toCredentials(row: BoardRow): BoardCredentials {
@@ -1642,6 +1693,284 @@ export function boardAutomationAllowed(boardId: string, userId: string): boolean
   return row.role === 'admin' || Boolean(row.may_automate)
 }
 
+function toWorkspace(row: WorkspaceRow): Workspace {
+  return { id: row.id, name: row.name, position: row.position, createdAt: row.created_at }
+}
+
+export function workspaceMembers(workspaceId: string): WorkspaceMember[] {
+  return getDb().prepare(`
+    SELECT u.id AS userId, u.email, u.first_name AS firstName, u.last_name AS lastName, u.status,
+           m.role, m.added_at AS addedAt
+    FROM workspace_members m
+    JOIN users u ON u.id = m.user_id
+    WHERE m.workspace_id = ?
+    ORDER BY u.first_name COLLATE NOCASE, u.last_name COLLATE NOCASE, u.email COLLATE NOCASE
+  `).all(workspaceId) as WorkspaceMember[]
+}
+
+/** The explicit role somebody holds on a workspace, or null when they hold none. */
+export function workspaceRoleFor(workspaceId: string, userId: string): WorkspaceRole | null {
+  const row = getDb().prepare('SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(workspaceId, userId) as { role: WorkspaceRole } | undefined
+  return row?.role || null
+}
+
+/** Whether one of the workspace's boards lets this user in, membership row or not. */
+export function workspaceReachableThroughBoards(workspaceId: string, userId: string): boolean {
+  return Boolean(getDb().prepare(`
+    SELECT 1 FROM boards b
+    JOIN board_members m ON m.board_id = b.id AND m.user_id = ?
+    WHERE b.workspace_id = ?
+    LIMIT 1
+  `).get(userId, workspaceId))
+}
+
+function toWorkspaceSummary(row: WorkspaceRow, viewer?: BoardViewer | null): WorkspaceSummary {
+  return {
+    ...toWorkspace(row),
+    members: workspaceMembers(row.id),
+    boardCount: (getDb().prepare('SELECT COUNT(*) AS value FROM boards WHERE workspace_id = ?').get(row.id) as { value: number }).value,
+    // Same rule as the board summary: an instance admin — or an internal call — holds every
+    // workspace. Everybody else gets their explicit role, or null for board-derived visibility.
+    role: !viewer || viewer.instanceAdmin ? 'admin' : workspaceRoleFor(row.id, viewer.userId)
+  }
+}
+
+export function listWorkspaces(viewer?: BoardViewer | null): WorkspaceSummary[] {
+  const db = getDb()
+  const scoped = viewer && !viewer.instanceAdmin
+  const rows = (scoped
+    ? db.prepare(`
+        SELECT DISTINCT w.* FROM workspaces w
+        LEFT JOIN workspace_members wm ON wm.workspace_id = w.id AND wm.user_id = ?
+        LEFT JOIN boards b ON b.workspace_id = w.id
+        LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = ?
+        WHERE wm.user_id IS NOT NULL OR bm.user_id IS NOT NULL
+        ORDER BY w.position, w.created_at
+      `).all(viewer.userId, viewer.userId)
+    : db.prepare('SELECT * FROM workspaces ORDER BY position, created_at').all()) as WorkspaceRow[]
+  return rows.map(row => toWorkspaceSummary(row, viewer))
+}
+
+export function findWorkspace(id: string): Workspace | null {
+  const row = getDb().prepare('SELECT * FROM workspaces WHERE id = ?').get(id) as WorkspaceRow | undefined
+  return row ? toWorkspace(row) : null
+}
+
+export function findWorkspaceSummary(id: string, viewer?: BoardViewer | null): WorkspaceSummary | null {
+  const row = getDb().prepare('SELECT * FROM workspaces WHERE id = ?').get(id) as WorkspaceRow | undefined
+  return row ? toWorkspaceSummary(row, viewer) : null
+}
+
+export function countWorkspaces(): number {
+  return (getDb().prepare('SELECT COUNT(*) AS value FROM workspaces').get() as { value: number }).value
+}
+
+export function countWorkspaceBoards(workspaceId: string): number {
+  return (getDb().prepare('SELECT COUNT(*) AS value FROM boards WHERE workspace_id = ?').get(workspaceId) as { value: number }).value
+}
+
+/** Where a board lands when nobody named a workspace: the first one, by position. */
+export function defaultWorkspaceId(): string {
+  return (getDb().prepare('SELECT id FROM workspaces ORDER BY position, created_at LIMIT 1').get() as { id: string }).id
+}
+
+export function createWorkspace(name: string, creatorId: string | null = null): WorkspaceSummary {
+  const db = getDb()
+  const id = randomUUID()
+  const now = new Date().toISOString()
+  const position = (db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM workspaces').get() as { position: number }).position
+  db.transaction(() => {
+    db.prepare('INSERT INTO workspaces (id, name, position, created_at) VALUES (?, ?, ?, ?)').run(id, name, position, now)
+    // The creator is an instance admin today, but an explicit row keeps their hold on the
+    // workspace even if that instance role is ever taken away — same move as `createBoard`.
+    if (creatorId) {
+      db.prepare("INSERT INTO workspace_members (workspace_id, user_id, role, added_at) VALUES (?, ?, 'admin', ?)").run(id, creatorId, now)
+    }
+  })()
+  return findWorkspaceSummary(id, creatorId ? { userId: creatorId, instanceAdmin: false } : null)!
+}
+
+export function updateWorkspace(id: string, input: { name?: string }, viewer?: BoardViewer | null): WorkspaceSummary | null {
+  const db = getDb()
+  const row = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id) as WorkspaceRow | undefined
+  if (!row) return null
+  db.prepare('UPDATE workspaces SET name = ? WHERE id = ?').run(input.name ?? row.name, id)
+  return findWorkspaceSummary(id, viewer)
+}
+
+/** The guards — no boards left behind, never the last workspace — belong to the operation. */
+export function deleteWorkspace(id: string): boolean {
+  return getDb().prepare('DELETE FROM workspaces WHERE id = ?').run(id).changes > 0
+}
+
+/** Takes any principal, like `setBoardMember`: a service identity may hold a workspace role. */
+export function setWorkspaceMember(workspaceId: string, userId: string, role: WorkspaceRole): WorkspaceMember | null {
+  if (!findWorkspace(workspaceId) || !findPrincipal(userId)) return null
+  getDb().prepare(`
+    INSERT INTO workspace_members (workspace_id, user_id, role, added_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = excluded.role
+  `).run(workspaceId, userId, role, new Date().toISOString())
+  return workspaceMembers(workspaceId).find(member => member.userId === userId) || null
+}
+
+export function removeWorkspaceMember(workspaceId: string, userId: string): boolean {
+  return getDb().prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?').run(workspaceId, userId).changes > 0
+}
+
+/** Re-homes a board. Membership travels with it, so nobody gains or loses any access. */
+export function moveBoardToWorkspace(boardId: string, workspaceId: string, viewer?: BoardViewer | null): BoardSummary | null {
+  const db = getDb()
+  if (!findBoard(boardId) || !findWorkspace(workspaceId)) return null
+  db.transaction(() => {
+    const position = (db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM boards WHERE workspace_id = ?').get(workspaceId) as { position: number }).position
+    db.prepare('UPDATE boards SET workspace_id = ?, position = ? WHERE id = ?').run(workspaceId, position, boardId)
+  })()
+  return findBoardSummary(boardId, viewer)
+}
+
+export interface BoardDuplicateOptions {
+  name: string
+  workspaceId: string
+  /** Off copies the structure — lanes, categories, labels, members — and nothing on it. */
+  includeTickets: boolean
+  creatorId: string | null
+}
+
+/** A file the caller still has to copy on disk; both paths are attachment-root-relative. */
+export interface AttachmentCopy {
+  from: string
+  to: string
+}
+
+/**
+ * Copies a board.
+ *
+ * Deliberately not copied, ever: the App Store Connect credentials (two boards spending one
+ * Apple key would import every submission twice, and the key is the board's own), webhooks
+ * (their secrets and receivers belong to the original), comments, activity, sync history and
+ * audit entries (history stays where it happened).
+ *
+ * Attachment rows are written here, pointing at fresh paths; the bytes are copied by the
+ * caller afterwards, because this transaction is synchronous and the filesystem is not.
+ */
+export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions): { board: BoardSummary; attachmentCopies: AttachmentCopy[] } | null {
+  const db = getDb()
+  const source = db.prepare('SELECT * FROM boards WHERE id = ?').get(sourceId) as BoardRow | undefined
+  if (!source || !findWorkspace(options.workspaceId)) return null
+  const id = randomUUID()
+  const now = new Date().toISOString()
+  const attachmentCopies: AttachmentCopy[] = []
+  db.transaction(() => {
+    const position = (db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM boards WHERE workspace_id = ?').get(options.workspaceId) as { position: number }).position
+    db.prepare('INSERT INTO boards (id, workspace_id, name, description, position, sync_limit, auto_author, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, options.workspaceId, options.name, source.description, position, source.sync_limit, source.auto_author, now)
+
+    const laneIds = new Map<string, string>()
+    for (const lane of db.prepare('SELECT * FROM lanes WHERE board_id = ? ORDER BY position').all(sourceId) as LaneRow[]) {
+      const laneId = randomUUID()
+      laneIds.set(lane.id, laneId)
+      db.prepare('INSERT INTO lanes (id, board_id, name, position, is_import) VALUES (?, ?, ?, ?, ?)').run(laneId, id, lane.name, lane.position, lane.is_import)
+    }
+
+    const categoryIds = new Map<string, string>()
+    for (const category of db.prepare('SELECT id, name, color FROM categories WHERE board_id = ?').all(sourceId) as Array<{ id: string; name: string; color: string }>) {
+      const categoryId = randomUUID()
+      categoryIds.set(category.id, categoryId)
+      db.prepare('INSERT INTO categories (id, board_id, name, color) VALUES (?, ?, ?, ?)').run(categoryId, id, category.name, category.color)
+    }
+
+    const labelIds = new Map<string, string>()
+    for (const label of db.prepare('SELECT id, name FROM labels WHERE board_id = ?').all(sourceId) as Array<{ id: string; name: string }>) {
+      const labelId = randomUUID()
+      labelIds.set(label.id, labelId)
+      db.prepare('INSERT INTO labels (id, board_id, name) VALUES (?, ?, ?)').run(labelId, id, label.name)
+    }
+
+    // The team travels with the structure. The duplicator ends up an admin either way —
+    // exactly as if they had created the board by hand.
+    db.prepare('INSERT INTO board_members (board_id, user_id, role, may_automate, added_at) SELECT ?, user_id, role, may_automate, ? FROM board_members WHERE board_id = ?')
+      .run(id, now, sourceId)
+    if (options.creatorId) {
+      db.prepare(`
+        INSERT INTO board_members (board_id, user_id, role, added_at) VALUES (?, ?, 'admin', ?)
+        ON CONFLICT (board_id, user_id) DO UPDATE SET role = 'admin'
+      `).run(id, options.creatorId, now)
+    }
+
+    if (options.includeTickets) {
+      // Numbers are unique instance-wide, so the whole batch draws from one counter read
+      // once — the per-row MAX subquery `createTicket` uses would rescan for every ticket.
+      let nextNumber = (db.prepare('SELECT COALESCE(MAX(ticket_number), 0) AS value FROM tickets').get() as { value: number }).value
+      const insertTicket = db.prepare(`
+        INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, source, external_id, created_at, updated_at, archived_at, author_id, assignee_id, category_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      const labelsOf = db.prepare('SELECT label_id FROM ticket_labels WHERE ticket_id = ?')
+      const attachLabel = db.prepare('INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)')
+      const todosOf = db.prepare('SELECT text, completed, position FROM ticket_todos WHERE ticket_id = ? ORDER BY position')
+      const insertTodo = db.prepare('INSERT INTO ticket_todos (id, ticket_id, text, completed, position) VALUES (?, ?, ?, ?, ?)')
+      const feedbackOf = db.prepare('SELECT * FROM apple_feedback WHERE ticket_id = ?')
+      const insertFeedback = db.prepare(`
+        INSERT INTO apple_feedback (ticket_id, feedback_type, comment, tester_id, device_model, os_version, locale, build_id, build_version, build_bundle_id, source_created_at, raw_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      const attachmentsOf = db.prepare('SELECT * FROM attachments WHERE ticket_id = ?')
+      const insertAttachment = db.prepare('INSERT INTO attachments (id, ticket_id, kind, filename, mime_type, size, relative_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+
+      for (const ticket of db.prepare('SELECT * FROM tickets WHERE board_id = ?').all(sourceId) as TicketRow[]) {
+        const ticketId = randomUUID()
+        nextNumber += 1
+        insertTicket.run(
+          ticketId, nextNumber, id, laneIds.get(ticket.lane_id)!, ticket.title, ticket.description,
+          ticket.position, ticket.priority, ticket.due_date, ticket.build_number, ticket.source,
+          ticket.external_id, ticket.created_at, ticket.updated_at, ticket.archived_at,
+          ticket.author_id, ticket.assignee_id, ticket.category_id ? categoryIds.get(ticket.category_id) ?? null : null
+        )
+        for (const row of labelsOf.all(ticket.id) as Array<{ label_id: string }>) {
+          const labelId = labelIds.get(row.label_id)
+          if (labelId) attachLabel.run(ticketId, labelId)
+        }
+        for (const todo of todosOf.all(ticket.id) as Array<{ text: string; completed: number; position: number }>) {
+          insertTodo.run(randomUUID(), ticketId, todo.text, todo.completed, todo.position)
+        }
+        const feedback = feedbackOf.get(ticket.id) as {
+          feedback_type: string; comment: string | null; tester_id: string | null; device_model: string | null
+          os_version: string | null; locale: string | null; build_id: string | null; build_version: string | null
+          build_bundle_id: string | null; source_created_at: string; raw_json: string
+        } | undefined
+        if (feedback) {
+          insertFeedback.run(
+            ticketId, feedback.feedback_type, feedback.comment, feedback.tester_id, feedback.device_model,
+            feedback.os_version, feedback.locale, feedback.build_id, feedback.build_version,
+            feedback.build_bundle_id, feedback.source_created_at, feedback.raw_json
+          )
+        }
+        for (const attachment of attachmentsOf.all(ticket.id) as Array<{ kind: string; filename: string; mime_type: string; size: number; relative_path: string; created_at: string }>) {
+          const relativePath = join(ticketId, `${randomUUID()}${extname(attachment.relative_path)}`)
+          insertAttachment.run(randomUUID(), ticketId, attachment.kind, attachment.filename, attachment.mime_type, attachment.size, relativePath, attachment.created_at)
+          attachmentCopies.push({ from: attachment.relative_path, to: relativePath })
+        }
+      }
+    }
+  })()
+  return {
+    board: findBoardSummary(id, options.creatorId ? { userId: options.creatorId, instanceAdmin: false } : null)!,
+    attachmentCopies
+  }
+}
+
+/** Same contract as `reorderLanes`: every board of the workspace exactly once, or nothing. */
+export function reorderWorkspaceBoards(workspaceId: string, orderedIds: string[]): boolean {
+  const db = getDb()
+  const existing = (db.prepare('SELECT id FROM boards WHERE workspace_id = ?').all(workspaceId) as Array<{ id: string }>).map(row => row.id)
+  if (!existing.length) return false
+  const known = new Set(existing)
+  if (orderedIds.length !== known.size || orderedIds.some(id => !known.has(id))) return false
+  const update = db.prepare('UPDATE boards SET position = ? WHERE id = ? AND workspace_id = ?')
+  db.transaction(() => orderedIds.forEach((id, position) => update.run(position, id, workspaceId)))()
+  return true
+}
+
 function toBoardSummary(row: BoardRow, viewer?: BoardViewer | null): BoardSummary {
   const members = boardMembers(row.id)
   const own = viewer ? members.find(member => member.userId === viewer.userId)?.role || null : null
@@ -1661,13 +1990,19 @@ function toBoardSummary(row: BoardRow, viewer?: BoardViewer | null): BoardSummar
 export function listBoards(viewer?: BoardViewer | null): BoardSummary[] {
   const db = getDb()
   const scoped = viewer && !viewer.instanceAdmin
+  // Board positions live per workspace now, so the workspaces order the list first.
   const rows = (scoped
     ? db.prepare(`
         SELECT b.* FROM boards b
         JOIN board_members m ON m.board_id = b.id AND m.user_id = ?
-        ORDER BY b.position, b.created_at
+        JOIN workspaces w ON w.id = b.workspace_id
+        ORDER BY w.position, w.created_at, b.position, b.created_at
       `).all(viewer.userId)
-    : db.prepare('SELECT * FROM boards ORDER BY position, created_at').all()) as BoardRow[]
+    : db.prepare(`
+        SELECT b.* FROM boards b
+        JOIN workspaces w ON w.id = b.workspace_id
+        ORDER BY w.position, w.created_at, b.position, b.created_at
+      `).all()) as BoardRow[]
   return rows.map(row => toBoardSummary(row, viewer))
 }
 
@@ -1698,13 +2033,15 @@ export function countBoards(): number {
   return (getDb().prepare('SELECT COUNT(*) AS value FROM boards').get() as { value: number }).value
 }
 
-export function createBoard(name: string, creatorId: string | null = null): BoardSummary {
+export function createBoard(name: string, creatorId: string | null = null, workspaceId?: string): BoardSummary {
   const db = getDb()
   const id = randomUUID()
   const now = new Date().toISOString()
-  const position = (db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM boards').get() as { position: number }).position
+  // Callers that predate workspaces — and clients that never picked one — land in the default.
+  const workspace = workspaceId ?? defaultWorkspaceId()
+  const position = (db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM boards WHERE workspace_id = ?').get(workspace) as { position: number }).position
   db.transaction(() => {
-    db.prepare('INSERT INTO boards (id, name, position, created_at) VALUES (?, ?, ?, ?)').run(id, name, position, now)
+    db.prepare('INSERT INTO boards (id, workspace_id, name, position, created_at) VALUES (?, ?, ?, ?, ?)').run(id, workspace, name, position, now)
     const insertLane = db.prepare('INSERT INTO lanes (id, board_id, name, position, is_import) VALUES (?, ?, ?, ?, ?)')
     newBoardLanes.forEach((lane, lanePosition) => insertLane.run(randomUUID(), id, lane.name, lanePosition, lane.isImport ? 1 : 0))
     if (creatorId) {

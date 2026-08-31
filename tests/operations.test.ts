@@ -62,7 +62,9 @@ describe('the operation registry', () => {
     it('registers every operation under a unique dotted name', () => {
       expect(ops.operations.size).toBeGreaterThan(20)
       for (const [name, operation] of ops.operations) {
-        expect(name).toMatch(/^[a-z]+\.[a-zA-Z]+$/)
+        // Two segments, or three for a nested family like `workspace.member.set`; camel case
+        // only ever in the final verb.
+        expect(name).toMatch(/^[a-z]+(\.[a-z]+)?\.[a-zA-Z]+$/)
         // The key and the operation's own name are the same published identifier.
         expect(operation.name).toBe(name)
       }

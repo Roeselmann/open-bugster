@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, Bug, LogOut, Moon, Sun, User, Users } from '@lucide/vue'
+import { Archive, Bug, Layers, LogOut, Moon, Sun, User, Users } from '@lucide/vue'
 import {
   DropdownMenuContent,
   DropdownMenuItem,
@@ -18,6 +18,7 @@ const props = withDefaults(defineProps<{
 
 const { isDark, toggle } = useTheme()
 const { user, instanceAdmin, logout } = useAuth()
+const { workspaceId } = useCurrentWorkspace()
 
 // Board-less pages (profile, user administration) mount the same header.
 const home = computed(() => (props.boardId ? `/b/${props.boardId}` : '/'))
@@ -26,15 +27,20 @@ const home = computed(() => (props.boardId ? `/b/${props.boardId}` : '/'))
 <template>
   <header class="border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_88%,transparent)] backdrop-blur-xl">
     <div class="mx-auto flex min-h-18 max-w-[1800px] items-center gap-3 px-4 sm:px-6">
-      <NuxtLink :to="home" class="focus-ring mr-auto flex items-center gap-3 rounded-xl" aria-label="Open-Bugster board">
-        <span class="grid size-10 place-items-center rounded-xl bg-[var(--ink)] text-[var(--canvas)] shadow-sm">
-          <Bug :size="20" :stroke-width="2.2" />
-        </span>
-        <span>
-          <span class="block text-[15px] font-bold tracking-[-0.02em]">Open-Bugster</span>
-          <span class="muted hidden text-[11px] font-medium tracking-wide sm:block">TESTFLIGHT TRIAGE</span>
-        </span>
-      </NuxtLink>
+      <!-- The wrapper carries the mr-auto: the workspace switcher inside renders nothing
+           while only one workspace exists, and the layout must not depend on it. -->
+      <div class="mr-auto flex min-w-0 items-center gap-1">
+        <NuxtLink :to="home" class="focus-ring flex shrink-0 items-center gap-3 rounded-xl" aria-label="Open-Bugster board">
+          <span class="grid size-10 place-items-center rounded-xl bg-[var(--ink)] text-[var(--canvas)] shadow-sm">
+            <Bug :size="20" :stroke-width="2.2" />
+          </span>
+          <span>
+            <span class="block text-[15px] font-bold tracking-[-0.02em]">Open-Bugster</span>
+            <span class="muted hidden text-[11px] font-medium tracking-wide sm:block">TESTFLIGHT TRIAGE</span>
+          </span>
+        </NuxtLink>
+        <WorkspaceSwitcher />
+      </div>
 
       <NuxtLink
         v-if="boardId && (archiveMode || canViewArchive)"
@@ -76,6 +82,14 @@ const home = computed(() => (props.boardId ? `/b/${props.boardId}` : '/'))
               @select="navigateTo('/admin/users')"
             >
               <Users :size="15" aria-hidden="true" /> Users
+            </DropdownMenuItem>
+            <!-- The way in while the switcher is hidden — the second workspace is created here. -->
+            <DropdownMenuItem
+              v-if="instanceAdmin && workspaceId"
+              class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm outline-none data-[highlighted]:bg-[var(--accent-soft)]"
+              @select="navigateTo(`/w/${workspaceId}/settings`)"
+            >
+              <Layers :size="15" aria-hidden="true" /> Workspaces
             </DropdownMenuItem>
             <DropdownMenuSeparator class="my-1 h-px bg-[var(--line)]" />
             <DropdownMenuItem

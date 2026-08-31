@@ -1,17 +1,17 @@
-import { rm } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { copyFile, mkdir, rm } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 import { createError } from 'h3'
 import { z } from 'zod'
 import { AppleApiError, syncTestFlight, verifyTestFlightAccess } from '../utils/app-store-connect'
 import { getServerConfig } from '../utils/config'
 import { SecretBoxError } from '../utils/secret-box'
-import { boardViewer, isInstanceAdmin } from '../utils/access'
+import { boardViewer, isInstanceAdmin, requireWorkspaceAccess } from '../utils/access'
 import { listAudit } from '../utils/audit'
 import {
   CategoryNameTakenError, LaneDeleteError, boardMembers, boardRoleFor, countBoardAdmins, countBoards,
-  createBoard, createComment, createLane, deleteBoard, deleteCategory, deleteComment, deleteLane, findBoardSummary,
+  createBoard, createComment, createLane, defaultWorkspaceId, deleteBoard, deleteCategory, deleteComment, deleteLane, duplicateBoard, findBoard, findBoardSummary,
   boardSyncCredentials, clearBoardPrivateKey, findCategory, findLane, importLaneFor, latestSyncRun, listBoards, listCategories, listComments, listLabels, listLanes,
-  listUsers, personById, removeBoardMember, reorderLanes, setBoardMember, setBoardPrivateKey, updateBoard, updateCategory, updateComment, updateLane
+  listUsers, moveBoardToWorkspace, personById, removeBoardMember, reorderLanes, setBoardMember, setBoardPrivateKey, updateBoard, updateCategory, updateComment, updateLane
 } from '../utils/db'
 import {
   boardCreateSchema, boardMemberSchema, boardUpdateSchema, categoryUpdateSchema, commentSaveSchema, connectionTestSchema,
@@ -55,9 +55,12 @@ export const boardCreate = defineOperation({
   name: 'board.create',
   summary: 'Open a new board',
   input: boardCreateSchema,
-  requires: { scope: 'instance' },
-  audit: { targetType: 'board', targetId: createdId('board'), changes: ['name'] },
-  run: (ctx, input) => ({ board: createBoard(input.name, ctx.account.id) })
+  // Was instance-scoped before workspaces existed. A workspace admin opens boards in their
+  // own workspace now; an omitted id resolves to the default workspace, so pre-workspace
+  // clients keep working — and instance admins pass either way, as they always did.
+  requires: { scope: 'workspace', role: 'admin', workspaceId: input => input.workspaceId ?? defaultWorkspaceId() },
+  audit: { targetType: 'board', targetId: createdId('board'), changes: ['name', 'workspaceId'] },
+  run: (ctx, input) => ({ board: createBoard(input.name, ctx.account.id, input.workspaceId ?? defaultWorkspaceId()) })
 })
 
 export const boardUpdate = defineOperation({
@@ -71,6 +74,56 @@ export const boardUpdate = defineOperation({
   run: (ctx, input) => {
     const { boardId, ...fields } = input
     return { board: orNotFound(updateBoard(boardId, fields, boardViewer(ctx.account)), 'Board') }
+  }
+})
+
+export const boardMove = defineOperation({
+  name: 'board.move',
+  summary: 'Move a board into another workspace',
+  input: z.object({ boardId: id, workspaceId: id }),
+  requires: { scope: 'board', role: 'admin', boardId: boardOf },
+  audit: { targetType: 'board', targetId: input => input.boardId, changes: ['workspaceId'] },
+  run: (ctx, input) => {
+    // Placing a board in a workspace is what `board.create` guards, so the destination asks
+    // for the same right — on top of the board-admin requirement above. Membership travels
+    // with the board, so the move itself changes nobody's access to anything.
+    requireWorkspaceAccess(ctx.actor, input.workspaceId, 'admin')
+    const board = orNotFound(findBoard(input.boardId), 'Board')
+    if (board.workspaceId === input.workspaceId) {
+      throw createError({ statusCode: 409, statusMessage: 'The board is already in this workspace.' })
+    }
+    return { board: orNotFound(moveBoardToWorkspace(input.boardId, input.workspaceId, boardViewer(ctx.account)), 'Board') }
+  }
+})
+
+export const boardDuplicate = defineOperation({
+  name: 'board.duplicate',
+  summary: 'Copy a board, with or without its tickets',
+  input: boardCreateSchema.extend({ boardId: id, includeTickets: z.boolean().default(false) }),
+  requires: { scope: 'board', role: 'admin', boardId: boardOf },
+  audit: { targetType: 'board', targetId: createdId('board'), changes: ['name', 'workspaceId', 'includeTickets'] },
+  run: async (ctx, input) => {
+    const source = orNotFound(findBoard(input.boardId), 'Board')
+    // An omitted target duplicates in place; naming one is subject to the same right as
+    // opening a board there by hand.
+    const workspaceId = input.workspaceId ?? source.workspaceId
+    requireWorkspaceAccess(ctx.actor, workspaceId, 'admin')
+    const result = orNotFound(
+      duplicateBoard(input.boardId, { name: input.name, workspaceId, includeTickets: input.includeTickets, creatorId: ctx.account.id }),
+      'Board'
+    )
+    // After the commit, best effort per file: the transaction is synchronous, the filesystem
+    // is not, and a missing file costs one download rather than the whole copy.
+    const root = resolve(getServerConfig().attachmentsPath)
+    for (const copy of result.attachmentCopies) {
+      try {
+        await mkdir(dirname(join(root, copy.to)), { recursive: true })
+        await copyFile(join(root, copy.from), join(root, copy.to))
+      } catch (error) {
+        console.warn(`[open-bugster] could not copy attachment ${copy.from}:`, (error as Error).message)
+      }
+    }
+    return { board: result.board }
   }
 })
 

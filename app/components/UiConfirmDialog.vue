@@ -17,8 +17,11 @@ const props = withDefaults(defineProps<{
   description: string
   confirmLabel: string
   pending?: boolean
+  /** `danger` paints the confirm button red; `neutral` is for deliberate-but-safe actions. */
+  tone?: 'danger' | 'neutral'
 }>(), {
   pending: false,
+  tone: 'danger',
 })
 
 const emit = defineEmits<{
@@ -67,7 +70,10 @@ function handleContentClick(event: MouseEvent) {
               type="button"
               data-confirm-action
               :disabled="interactionLocked"
-              class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-rose-600 px-4 text-sm font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+              class="focus-ring flex h-10 items-center gap-2 rounded-xl px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
+              :class="tone === 'danger'
+                ? 'bg-rose-600 text-white hover:bg-rose-700'
+                : 'bg-[var(--ink)] text-[var(--canvas)] hover:opacity-85'"
             >
               <LoaderCircle v-if="interactionLocked" :size="16" class="animate-spin" aria-hidden="true" />
               {{ interactionLocked ? 'Please wait…' : confirmLabel }}

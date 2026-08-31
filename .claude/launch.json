@@ -1,0 +1,27 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "bugster",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000,
+      "autoPort": true
+    },
+    {
+      "name": "bugster-scratch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3100,
+      "autoPort": true,
+      "env": {
+        "DATABASE_PATH": "./data/tmp/e2e-workspaces.sqlite",
+        "ATTACHMENTS_PATH": "./data/tmp/e2e-attachments",
+        "APP_ADMIN_EMAIL": "owner@example.com",
+        "APP_ADMIN_FIRST_NAME": "Grace",
+        "APP_ADMIN_LAST_NAME": "Hopper",
+        "APP_PASSWORD_HASH": "scrypt$d2931b23ce61be8bb4ff40477f177db9$7a48c78cc22cee2868d93d3f4afb1776f7788d5c96f984c88fd6fd5585fce7277123e5abd0618760efb18f80735e03224ae180266c13d585c6fdf484842d7e69"
+      }
+    }
+  ]
+}

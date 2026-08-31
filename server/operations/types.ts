@@ -1,5 +1,5 @@
 import type { ZodType } from 'zod'
-import type { BoardRole, Ticket, TicketComment } from '../../shared/types/domain'
+import type { BoardRole, Ticket, TicketComment, WorkspaceRole } from '../../shared/types/domain'
 import type { Actor } from '../utils/actor'
 import type { UserRecord } from '../utils/db'
 
@@ -13,6 +13,7 @@ import type { UserRecord } from '../utils/db'
 export type Requirement<I> =
   | { scope: 'authenticated' }
   | { scope: 'instance' }
+  | { scope: 'workspace'; role?: WorkspaceRole; workspaceId: (input: I) => string }
   | { scope: 'board'; role?: BoardRole; boardId: (input: I) => string }
   | { scope: 'ticket'; role?: BoardRole; ticketId: (input: I) => string }
   | { scope: 'comment'; commentId: (input: I) => string }
@@ -23,6 +24,7 @@ export interface OperationContext {
   account: UserRecord
   /** The board role the requirement resolved, or null for instance-scoped operations. */
   role: BoardRole | null
+  workspaceId: string | null
   boardId: string | null
   ticket: Ticket | null
   comment: TicketComment | null

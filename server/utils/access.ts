@@ -1,10 +1,14 @@
 import { createError } from 'h3'
-import type { BoardRole } from '../../shared/types/domain'
+import type { BoardRole, WorkspaceRole } from '../../shared/types/domain'
 import type { Actor } from './actor'
 import { ceilingFor } from './token'
-import { boardAutomationAllowed, boardMembers, boardRoleFor, findBoard, findComment, findTicket, type UserRecord } from './db'
+import {
+  boardAutomationAllowed, boardMembers, boardRoleFor, findBoard, findComment, findTicket,
+  findWorkspace, workspaceReachableThroughBoards, workspaceRoleFor, type UserRecord
+} from './db'
 
 const rank: Record<BoardRole, number> = { viewer: 0, editor: 1, admin: 2 }
+const workspaceRank: Record<WorkspaceRole, number> = { member: 0, admin: 1 }
 
 /** Whether a held board role covers what an endpoint asks for. */
 export function satisfiesRole(held: BoardRole, minimum: BoardRole): boolean {
@@ -95,6 +99,37 @@ export function requireBoardAccess(actor: Actor, boardId: string, minimum: Board
   const role = effectiveRole(actor, held)
   if (!role || !satisfiesRole(role, minimum)) throw createError({ statusCode: 403, statusMessage: 'You do not have permission to do this.' })
   return { actor, account, role }
+}
+
+/**
+ * Resolves what the caller may do on a workspace.
+ *
+ * The same manners as `requireBoardAccess`: a workspace somebody cannot see is a 404, not a
+ * 403 that confirms it exists. Visibility is derived — an explicit membership row, any board
+ * of the workspace that lets them in, or being an instance admin — because a workspace only
+ * groups boards and grants nothing on them, so seeing it merely mirrors what the switcher
+ * already shows.
+ *
+ * A board-pinned credential is refused outright: it manages tickets, not containers, and is
+ * told the same thing a stranger is told. The scope ceiling stays blunt here — administering
+ * a workspace needs the `admin` scope, viewing one needs any — since there is no per-role
+ * ceiling worth mapping onto two ranks.
+ */
+export function requireWorkspaceAccess(actor: Actor, workspaceId: string, minimum: WorkspaceRole = 'member'): { actor: Actor; account: UserRecord; role: WorkspaceRole } {
+  const account = actor.principal
+  if (!findWorkspace(workspaceId)) throw createError({ statusCode: 404, statusMessage: 'Workspace not found.' })
+  if (actor.boardScope) throw createError({ statusCode: 404, statusMessage: 'Workspace not found.' })
+  const held: WorkspaceRole | null = isInstanceAdmin(account)
+    ? 'admin'
+    : workspaceRoleFor(workspaceId, account.id) || (workspaceReachableThroughBoards(workspaceId, account.id) ? 'member' : null)
+  if (!held) throw createError({ statusCode: 404, statusMessage: 'Workspace not found.' })
+  if (actor.scopes && minimum === 'admin' && !actor.scopes.includes('admin')) {
+    throw createError({ statusCode: 403, statusMessage: 'This token is not permitted to administer workspaces.' })
+  }
+  if (workspaceRank[held] < workspaceRank[minimum]) {
+    throw createError({ statusCode: 403, statusMessage: 'You do not have permission to do this.' })
+  }
+  return { actor, account, role: held }
 }
 
 /** The same check, reached through a ticket rather than a board id. */

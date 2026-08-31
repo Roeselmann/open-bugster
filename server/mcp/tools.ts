@@ -73,6 +73,7 @@ export function registerTools(server: McpServer, actor: Actor) {
     const { boards } = await call<{ boards: BoardSummary[] }>(ops.boardList, {})
     return reply(boards.map(board => ({
       id: board.id,
+      workspaceId: board.workspaceId,
       name: board.name,
       description: board.description,
       yourRole: board.role,
@@ -96,6 +97,7 @@ export function registerTools(server: McpServer, actor: Actor) {
     ])
     return reply({
       id: board.id,
+      workspaceId: board.workspaceId,
       name: board.name,
       description: board.description,
       yourRole: board.role,

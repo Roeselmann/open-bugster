@@ -1,5 +1,5 @@
 import { createError } from 'h3'
-import { requireBoardAccess, requireCommentAccess, requireInstanceAdmin, requireTicketAccess } from '../utils/access'
+import { requireBoardAccess, requireCommentAccess, requireInstanceAdmin, requireTicketAccess, requireWorkspaceAccess } from '../utils/access'
 import type { Actor } from '../utils/actor'
 import { writeAudit, type AuditResult } from '../utils/audit'
 import { dispatch, eventForOperation } from '../utils/webhook'
@@ -49,7 +49,7 @@ export async function run<I, O>(operation: Operation<I, O>, actor: Actor, rawInp
 }
 
 function resolveAccess<I, O>(operation: Operation<I, O>, actor: Actor, input: I): OperationContext {
-  const base: OperationContext = { actor, account: actor.principal, role: null, boardId: null, ticket: null, comment: null }
+  const base: OperationContext = { actor, account: actor.principal, role: null, workspaceId: null, boardId: null, ticket: null, comment: null }
   const requires = operation.requires
 
   switch (requires.scope) {
@@ -59,6 +59,12 @@ function resolveAccess<I, O>(operation: Operation<I, O>, actor: Actor, input: I)
     case 'instance':
       requireInstanceAdmin(actor)
       return base
+
+    case 'workspace': {
+      const workspaceId = (requires.workspaceId as (value: I) => string)(input)
+      requireWorkspaceAccess(actor, workspaceId, requires.role)
+      return { ...base, workspaceId }
+    }
 
     case 'board': {
       const boardId = (requires.boardId as (value: I) => string)(input)

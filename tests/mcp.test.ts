@@ -111,7 +111,7 @@ describe('the MCP tool surface', () => {
     it('orients on a board in one call', async () => {
       const overview = await call('board_overview', { boardId })
       expect(Object.keys(overview).sort()).toEqual(
-        ['categories', 'description', 'id', 'labels', 'lanes', 'members', 'name', 'yourRole']
+        ['categories', 'description', 'id', 'labels', 'lanes', 'members', 'name', 'workspaceId', 'yourRole']
       )
     })
   })

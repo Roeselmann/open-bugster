@@ -29,8 +29,12 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ created: []; sync: [] }>()
 
 const { refresh: refreshBoards } = useBoards()
-const { instanceAdmin } = useAuth()
+const { workspaces } = useWorkspaces()
 const lastBoardId = useLastBoardId()
+
+// Opening a board belongs to the workspace's admins now, not only the instance's — the
+// summary already reports instance admins as `admin` on every workspace.
+const canCreate = computed(() => workspaces.value.find(item => item.id === props.board.workspaceId)?.role === 'admin')
 
 const createOpen = ref(false)
 const newName = ref('')
@@ -66,7 +70,7 @@ async function createBoard() {
   creating.value = true
   createError.value = ''
   try {
-    const response = await $fetch<{ board: BoardSummary }>('/api/boards', { method: 'POST', body: { name } })
+    const response = await $fetch<{ board: BoardSummary }>('/api/boards', { method: 'POST', body: { name, workspaceId: props.board.workspaceId } })
     // The `board` middleware validates the route against the shared board list, so that list
     // has to know the new board before we navigate — otherwise it bounces straight back to
     // the previous board. The cookie makes the new board the one "/" reopens.
@@ -112,9 +116,9 @@ async function createBoard() {
               <span class="min-w-0 flex-1 truncate font-medium">{{ item.name }}</span>
               <span class="muted shrink-0 text-[11px] font-semibold tabular-nums">{{ item.ticketCount }}</span>
             </DropdownMenuItem>
-            <DropdownMenuSeparator v-if="instanceAdmin" class="my-1 h-px bg-[var(--line)]" />
+            <DropdownMenuSeparator v-if="canCreate" class="my-1 h-px bg-[var(--line)]" />
             <DropdownMenuItem
-              v-if="instanceAdmin"
+              v-if="canCreate"
               class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-semibold outline-none data-[highlighted]:bg-[var(--accent-soft)]"
               @select="openCreate"
             >
@@ -153,7 +157,7 @@ async function createBoard() {
       </div>
 
       <button
-        v-if="!hasChoice && instanceAdmin"
+        v-if="!hasChoice && canCreate"
         class="focus-ring surface grid size-9 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]"
         aria-label="New board"
         title="New board"

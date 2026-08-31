@@ -1,12 +1,12 @@
 import { z } from 'zod'
 import {
   activityChannels, activityKinds, boardRoles, categoryColors, ticketPriorities, ticketSources,
-  userRoles, userStatuses
+  userRoles, userStatuses, workspaceRoles
 } from '../types/domain'
 import type {
   AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardSummary, Category,
   CategorySummary, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket,
-  TicketActivityEntry, TicketComment, TicketTodo
+  TicketActivityEntry, TicketComment, TicketTodo, Workspace, WorkspaceMember, WorkspaceSummary
 } from '../types/domain'
 
 /**
@@ -148,8 +148,32 @@ export const boardCredentialsSchema = z.object({
   complete: z.boolean()
 }).describe('App Store Connect settings. The private key itself is never returned.')
 
+export const workspaceSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  position: z.number().int(),
+  createdAt: z.string()
+}).describe('The level above boards. Groups them; grants no board access by itself.')
+
+export const workspaceMemberSchema = z.object({
+  userId: z.string(),
+  email: z.string().nullable(),
+  firstName: z.string(),
+  lastName: z.string(),
+  status: z.enum(userStatuses),
+  role: z.enum(workspaceRoles),
+  addedAt: z.string()
+})
+
+export const workspaceSummarySchema = workspaceSchema.extend({
+  members: z.array(workspaceMemberSchema),
+  boardCount: z.number().int().describe('Every board in the workspace, whether or not the caller can open it.'),
+  role: z.enum(workspaceRoles).nullable().describe('The calling principal’s own role; null when visibility comes from a board alone.')
+})
+
 export const boardSchema = z.object({
   id: z.string(),
+  workspaceId: z.string(),
   name: z.string(),
   description: z.string(),
   position: z.number().int(),
@@ -220,6 +244,9 @@ const named: Record<string, z.ZodType> = {
   BoardCredentials: boardCredentialsSchema,
   Board: boardSchema,
   BoardSummary: boardSummarySchema,
+  Workspace: workspaceSchema,
+  WorkspaceMember: workspaceMemberSchema,
+  WorkspaceSummary: workspaceSummarySchema,
   SyncRun: syncRunSchema,
   UserAccount: userAccountSchema
 }
@@ -258,5 +285,8 @@ export type SchemasMatchDomain = [
   Expect<Equal<z.infer<typeof boardCredentialsSchema>, BoardCredentials>>,
   Expect<Equal<z.infer<typeof boardSchema>, Board>>,
   Expect<Equal<z.infer<typeof boardSummarySchema>, BoardSummary>>,
+  Expect<Equal<z.infer<typeof workspaceSchema>, Workspace>>,
+  Expect<Equal<z.infer<typeof workspaceMemberSchema>, WorkspaceMember>>,
+  Expect<Equal<z.infer<typeof workspaceSummarySchema>, WorkspaceSummary>>,
   Expect<Equal<z.infer<typeof syncRunSchema>, SyncRun>>
 ]

@@ -4,6 +4,7 @@ export const categoryColors = ['neutral', 'rose', 'amber', 'emerald', 'teal', 'b
 export const userRoles = ['owner', 'admin', 'member'] as const
 export const userStatuses = ['invited', 'active', 'disabled'] as const
 export const boardRoles = ['admin', 'editor', 'viewer'] as const
+export const workspaceRoles = ['admin', 'member'] as const
 
 export type TicketPriority = typeof ticketPriorities[number]
 export type TicketSource = typeof ticketSources[number]
@@ -11,6 +12,7 @@ export type CategoryColor = typeof categoryColors[number]
 export type UserRole = typeof userRoles[number]
 export type UserStatus = typeof userStatuses[number]
 export type BoardRole = typeof boardRoles[number]
+export type WorkspaceRole = typeof workspaceRoles[number]
 
 /**
  * Someone referenced by a ticket, comment, or activity entry. Everybody gets a row in
@@ -130,8 +132,43 @@ export interface BoardCredentials {
   complete: boolean
 }
 
+/**
+ * The level above boards: a workspace groups them and will own everything meant to be
+ * shared across them. It grants no board access by itself — board membership stays the
+ * only key to a board; the workspace decides what is *around* the boards, not who is in.
+ */
+export interface Workspace {
+  id: string
+  name: string
+  position: number
+  createdAt: string
+}
+
+export interface WorkspaceMember {
+  userId: string
+  /** null for a service identity, which holds a role without having an address. */
+  email: string | null
+  firstName: string
+  lastName: string
+  status: UserStatus
+  role: WorkspaceRole
+  addedAt: string
+}
+
+export interface WorkspaceSummary extends Workspace {
+  members: WorkspaceMember[]
+  /** Counts every board in the workspace, whether or not the caller can open it. */
+  boardCount: number
+  /**
+   * The requesting user's own role. null when they see the workspace only because one of
+   * its boards lets them in — they can pick it in the switcher, but not manage it.
+   */
+  role: WorkspaceRole | null
+}
+
 export interface Board {
   id: string
+  workspaceId: string
   name: string
   /** Shown under the board title. Empty when the board has none. */
   description: string

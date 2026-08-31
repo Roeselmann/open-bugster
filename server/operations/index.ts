@@ -5,6 +5,7 @@ import * as boardDomain from './board-domain'
 import * as credentials from './credentials'
 import * as webhooks from './webhooks'
 import * as tickets from './tickets'
+import * as workspaces from './workspaces'
 
 export { defineOperation, createdId } from './types'
 export type { Operation, OperationContext, Requirement, AuditSpec } from './types'
@@ -15,6 +16,7 @@ export * from './board-domain'
 export * from './credentials'
 export * from './webhooks'
 export * from './tickets'
+export * from './workspaces'
 
 /**
  * Every operation by name.
@@ -24,7 +26,7 @@ export * from './tickets'
  * target and the tool source at once. Renaming one is a breaking change.
  */
 export const operations: ReadonlyMap<string, AnyOperation> = new Map(
-  [...Object.values(accounts), ...Object.values(attachments), ...Object.values(boardDomain), ...Object.values(credentials), ...Object.values(tickets), ...Object.values(webhooks)]
+  [...Object.values(accounts), ...Object.values(attachments), ...Object.values(boardDomain), ...Object.values(credentials), ...Object.values(tickets), ...Object.values(webhooks), ...Object.values(workspaces)]
     .filter(isOperation)
     .map(operation => [operation.name, operation])
 )

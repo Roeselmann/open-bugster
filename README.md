@@ -14,6 +14,8 @@ Open-Bugster is a lightweight, self-hosted Kanban board that is meant to be driv
   Real accounts with per-board roles, ticket assignment, comment threads, and a history on every ticket.
 - **Run several boards**  
   Give every app or project its own board with its own lanes, categories, labels, and archive.
+- **Group boards into workspaces**  
+  A level above the boards for teams, clients, or departments — each workspace with its own boards, board order, and administrators. Boards can be moved or duplicated between workspaces.
 - **Shape the workflow**  
   Add, rename, drag to reorder, and remove lanes per board—only the import lane is fixed.
 - **Move tickets by dragging**  
@@ -115,6 +117,14 @@ Updating is `scripts/update.sh`, which pulls, takes a backup, and rebuilds in on
 
 ## Working with the board
 
+### Workspaces
+
+Workspaces group boards — one per team, client, or department. Every instance starts with a single workspace named **Workspace**, and as long as it is the only one, nothing about workspaces appears anywhere: the app looks and works exactly as it always has.
+
+Instance administrators create further workspaces from the **Workspaces** entry in the account menu. The moment a second one exists, a workspace switcher appears in the header next to the logo, with a settings icon beside it for the workspace's administrators. The workspace settings hold the name, the boards (create new ones, drag them into the order the board switcher offers them in), and the workspace members: a workspace **administrator** manages the workspace and opens boards in it — membership of a workspace grants nothing on its boards, since each board keeps its own members and roles.
+
+A board can be **moved** to another workspace and **duplicated** — into the same workspace or a different one — from **Board settings → Board**, above the danger zone. Moving keeps everything, members and credentials included, and only changes where the board hangs. Duplicating copies the structure (lanes, categories, labels, members) with an optional **Include tickets** switch; the App Store Connect key, webhooks, comments, and history always stay with the original.
+
 ### Boards
 
 Open-Bugster can run several boards side by side—typically one per app. The board name in the header becomes a dropdown as soon as a second board exists; the icon next to it opens the board settings and is shown to board administrators only, since the page is theirs to act on. A newly created board is selected right away and opens its settings so lanes and credentials can be set up.
@@ -172,8 +182,8 @@ Two levels, kept deliberately small.
 | Instance role | What it allows |
 | --- | --- |
 | **Owner** | The account seeded on first start. Like an administrator, but cannot be demoted, disabled, or deleted. |
-| **Administrator** | Manages accounts, creates boards, and has access to every board. |
-| **Member** | Sees only the boards they have been added to. |
+| **Administrator** | Manages accounts, creates workspaces, and has access to every workspace and board. |
+| **Member** | Sees only the boards they have been added to, and the workspaces around them. |
 
 | Board role | What it allows |
 | --- | --- |

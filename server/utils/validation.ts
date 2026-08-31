@@ -1,6 +1,6 @@
 import { createError } from 'h3'
 import { z } from 'zod'
-import { boardRoles, categoryColors, userRoles, userStatuses } from '../../shared/types/domain'
+import { boardRoles, categoryColors, userRoles, userStatuses, workspaceRoles } from '../../shared/types/domain'
 
 /** Email is the identity key, so it is normalised the same way everywhere it is accepted. */
 const emailSchema = z.email('A valid email address is required.').trim().toLowerCase().max(160)
@@ -55,7 +55,25 @@ export const ticketMoveSchema = z.object({
 })
 
 export const boardCreateSchema = z.object({
-  name: z.string().trim().min(1, 'A board name is required.').max(40)
+  name: z.string().trim().min(1, 'A board name is required.').max(40),
+  /** Omitted lands the board in the default workspace, so pre-workspace clients keep working. */
+  workspaceId: idSchema.optional()
+})
+
+export const workspaceCreateSchema = z.object({
+  name: z.string().trim().min(1, 'A workspace name is required.').max(40)
+})
+
+export const workspaceUpdateSchema = z.object({
+  name: z.string().trim().min(1, 'A workspace name is required.').max(40)
+}).partial()
+
+export const workspaceMemberSchema = z.object({
+  role: z.enum(workspaceRoles)
+})
+
+export const workspaceBoardOrderSchema = z.object({
+  boardIds: z.array(idSchema).min(1).max(100)
 })
 
 export const boardUpdateSchema = z.object({
