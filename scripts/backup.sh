@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 #
 # A consistent snapshot of everything that cannot be rebuilt from the repository: the
-# SQLite file with its WAL, the attachments directory, and the `.env` that holds
-# BUGSTER_SECRET_KEY. The last one matters more than it looks — without the original key
-# the stored App Store Connect keys stay encrypted even when the database is restored.
+# SQLite file with its WAL, the attachments directory, the generated secrets.json in the
+# volume, and — when it exists — the `.env`. The secret key matters more than it looks:
+# without the original BUGSTER_SECRET_KEY (in `.env` or secrets.json) the stored App
+# Store Connect keys stay encrypted even when the database is restored.
 #
 #   scripts/backup.sh [label]
 #
@@ -23,7 +24,12 @@ image=$(helper_image)
 name="$label-$(date +%Y-%m-%d-%H%M%S).tar.gz"
 
 mkdir -p "$BACKUP_DIR"
-[ -f .env ] || die ".env not found. It belongs in the archive — a backup without it cannot decrypt the stored App Store Connect keys."
+env_mount=()
+if [ -f .env ]; then
+  env_mount=(-v "$PWD/.env":/snapshot/env:ro)
+else
+  note "No .env found — archiving the data volume alone. Secrets generated on first start live in the volume and are included."
+fi
 
 # SQLite in WAL mode and a separate attachments directory cannot be copied consistently
 # while the application writes to them. Stopping costs a few seconds and removes the
@@ -39,11 +45,12 @@ trap restart_service EXIT
 
 # Mounting the volume and `.env` under one root lets a single tar pass produce an archive
 # holding `./data/…` and `./env`, with no intermediate copy of the attachments.
+# (The ${array[@]+…} expansion keeps `set -u` happy on the empty array under bash 3.2.)
 note "Writing $BACKUP_DIR/$name …"
 docker run --rm \
   --user "$(id -u):$(id -g)" \
   -v "$volume":/snapshot/data:ro \
-  -v "$PWD/.env":/snapshot/env:ro \
+  ${env_mount[@]+"${env_mount[@]}"} \
   -v "$PWD/$BACKUP_DIR":/out \
   "$image" tar czf "/out/$name" -C /snapshot .
 

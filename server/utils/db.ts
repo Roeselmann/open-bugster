@@ -9,6 +9,7 @@ import type {
 } from '../../shared/types/domain'
 import type { Actor, ActorChannel } from './actor'
 import { decryptSecret, encryptSecret, secretKeyAvailable } from './secret-box'
+import { hashStoredPassword } from './password'
 import { getServerConfig } from './config'
 
 let database: Database.Database | null = null
@@ -254,7 +255,10 @@ export function getDb() {
   ensureBoardSyncLimit(database)
   // Ahead of the comment-thread migration, which reads `tickets.author_email`.
   ensureTicketAuthor(database, configuredAdminAuthor())
-  ensureUsers(database, configuredOwnerSeed())
+  const seededOwner = ensureUsers(database, configuredOwnerSeed())
+  if (seededOwner && !process.env.APP_PASSWORD_HASH?.trim() && process.env.APP_ADMIN_PASSWORD?.trim()) {
+    console.info('[open-bugster] Owner account seeded from APP_ADMIN_PASSWORD. The variable is never read again — you can remove it now.')
+  }
   warnWhenNobodyCanSignIn(database)
   ensureTicketAssignee(database)
   ensureTicketCommentThread(database)
@@ -289,11 +293,29 @@ function configuredAdminAuthor(): AuthorSnapshot | null {
 }
 
 /**
+ * The bootstrap credential comes in one of two shapes: APP_PASSWORD_HASH for operators
+ * who never want the password on disk, and plain APP_ADMIN_PASSWORD for everyone else,
+ * hashed here at the moment of seeding. The hash wins when both are set, so a leftover
+ * plain password cannot silently replace a deliberately provided hash.
+ */
+function configuredOwnerPasswordHash(): string {
+  const hash = process.env.APP_PASSWORD_HASH?.trim() || ''
+  if (hash) return hash
+  const password = process.env.APP_ADMIN_PASSWORD?.trim() || ''
+  if (!password) return ''
+  if (password.length < 12) {
+    console.warn('[open-bugster] APP_ADMIN_PASSWORD has fewer than 12 characters and was ignored. Choose a longer password and restart.')
+    return ''
+  }
+  return hashStoredPassword(password)
+}
+
+/**
  * The bootstrap identity, read once on first start to seed the owner account. After that
  * the `users` table is the only source of truth and these variables are ignored.
  */
 function configuredOwnerSeed(): OwnerSeed | null {
-  const passwordHash = process.env.APP_PASSWORD_HASH?.trim() || ''
+  const passwordHash = configuredOwnerPasswordHash()
   if (!passwordHash) return null
   const username = process.env.APP_USERNAME?.trim() || 'admin'
   return {
@@ -315,15 +337,14 @@ function countAccountRows(db: Database.Database): number {
 }
 
 /**
- * A first start without APP_PASSWORD_HASH seeds no owner, and the login page then rejects
- * every attempt with the same deliberately vague message. Say so on the console rather
- * than leaving the operator to guess why their password does not work.
+ * A first start without a bootstrap credential seeds no owner, and the login page then
+ * rejects every attempt with the same deliberately vague message. Say so on the console
+ * rather than leaving the operator to guess why their password does not work.
  */
 function warnWhenNobodyCanSignIn(db: Database.Database) {
   if (countAccountRows(db) > 0) return
-  console.warn('[open-bugster] No account exists yet, so nobody can sign in: APP_PASSWORD_HASH is not set.')
-  console.warn('[open-bugster] Generate one with:  npm run password:hash -- "a-long-password"')
-  console.warn('[open-bugster] Put that APP_PASSWORD_HASH line and APP_ADMIN_EMAIL into .env, then restart.')
+  console.warn('[open-bugster] No account exists yet, so nobody can sign in: neither APP_ADMIN_PASSWORD nor APP_PASSWORD_HASH is set.')
+  console.warn('[open-bugster] Set APP_ADMIN_EMAIL and APP_ADMIN_PASSWORD (12+ characters) in .env or the environment, then restart.')
 }
 
 /**

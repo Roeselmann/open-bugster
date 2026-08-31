@@ -4,8 +4,18 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
+    # .env is optional: the machine secrets generate themselves into the data volume,
+    # so a first start needs nothing beyond the owner's identity, which can come
+    # straight from the shell:
+    #   APP_ADMIN_EMAIL=you@example.com APP_ADMIN_PASSWORD='a-long-password' docker compose up -d
     env_file:
-      - .env
+      - path: .env
+        required: false
+    environment:
+      APP_ADMIN_EMAIL: ${APP_ADMIN_EMAIL:-}
+      APP_ADMIN_FIRST_NAME: ${APP_ADMIN_FIRST_NAME:-}
+      APP_ADMIN_LAST_NAME: ${APP_ADMIN_LAST_NAME:-}
+      APP_ADMIN_PASSWORD: ${APP_ADMIN_PASSWORD:-}
     volumes:
       - bugster-data:/data
       # Only needed when upgrading an installation that configured TestFlight through

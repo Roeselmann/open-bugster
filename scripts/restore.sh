@@ -72,8 +72,9 @@ if [ -f "$staging/env" ]; then
     note "      Connect keys come back unreadable, re-run with --env."
   fi
 else
-  note "note: the archive carries no .env — make sure the BUGSTER_SECRET_KEY on disk is the one"
-  note "      this data was written with."
+  note "note: the archive carries no .env. That is fine when the secrets were generated on"
+  note "      first start — they live in the volume and were just restored with it. Otherwise"
+  note "      make sure the BUGSTER_SECRET_KEY on disk is the one this data was written with."
 fi
 
 note "Starting the stack …"

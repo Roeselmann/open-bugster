@@ -65,80 +65,51 @@ Open-Bugster is a lightweight, self-hosted Kanban board that is meant to be driv
 
 ## Setup
 
-Open-Bugster is one container and one data volume. From nothing to a working board is about five minutes.
+Open-Bugster is one container and one data volume. From nothing to a working board is one command and a couple of minutes.
 
 **You need** Docker on the machine that will host it, and—only if you want to import TestFlight feedback—an App Store Connect API key (see [App Store Connect](#app-store-connect) below). The board works fine without one.
 
-1. **Get the code and the configuration file.**
+1. **Get the code.**
 
    ```bash
    git clone https://github.com/Roeselmann/open-bugster.git
    cd open-bugster
-   cp .env.example .env
    ```
 
-2. **Hash your password.** Open-Bugster never stores a password in plain text, so `.env` holds a hash rather than the password itself.
+2. **Start it, saying who the first account is.** The email becomes your sign-in name and the owner of the instance; the password needs at least 12 characters.
 
    ```bash
-   npm run password:hash -- "your-secure-password"
+   APP_ADMIN_EMAIL=ada@example.com APP_ADMIN_PASSWORD='a-long-password' docker compose up --build -d
    ```
 
-   That needs Node.js 22 or newer on the host, but no `npm install`—the script uses nothing but Node's own crypto module. With Docker only, let the container do it instead (this builds the image first, so it takes a minute):
+   The first start creates the database, a default board, and your owner account—and generates the two machine secrets (the session-cookie key and the encryption key for stored App Store Connect keys) into the data volume, so there is nothing to generate or paste by hand. The bootstrap variables are read exactly this once; the password is hashed immediately and never stored in plain text.
 
-   ```bash
-   docker compose run --rm bugster npm run password:hash -- "your-secure-password"
-   ```
+3. **Sign in** at `http://<host>:3000` with that email and password.
 
-   Copy the whole `APP_PASSWORD_HASH='scrypt$…'` line it prints into `.env`, unchanged—the single quotes protect the `$` characters. Remember the password you typed; that is what you will sign in with.
+   From here on the database is the only source of truth: the bootstrap variables are never read again, and passwords are changed in the app. If you mistyped something and cannot get in, see [If nobody can sign in](#if-nobody-can-sign-in).
 
-3. **Generate the two secrets.** Run this twice and keep both values:
+4. **Set up the board.** Rename it, adjust its lanes, and—if you have an API key—enter the credentials under **Board settings → TestFlight**, press **Test connection**, then **TestFlight Sync** in the header.
 
-   ```bash
-   openssl rand -base64 32
-   ```
+5. **Invite your team.** **Users** in the account menu (top right) creates an account and shows a one-time link to pass on. Then add them to the board under **Board settings → Users**, as viewer, editor, or administrator.
 
-   One goes into `NUXT_SESSION_PASSWORD` (it signs the login cookie), the other into `BUGSTER_SECRET_KEY` (it encrypts the App Store Connect keys stored in the database).
+### Configuring through `.env` instead
 
-4. **Say who the first account is.** `APP_ADMIN_EMAIL` becomes your sign-in name and the owner of the instance. Your `.env` should now look like this:
+Everything above can also live in a file, which is the better home for the optional settings anyway:
 
-   ```dotenv
-   APP_USERNAME=admin
-   APP_ADMIN_FIRST_NAME=Ada
-   APP_ADMIN_LAST_NAME=Lovelace
-   APP_ADMIN_EMAIL=ada@example.com
-   APP_PASSWORD_HASH='scrypt$1f3c…$9ab2…'
+```bash
+cp .env.example .env
+```
 
-   NUXT_SESSION_PASSWORD=first-generated-value
-   NUXT_SESSION_COOKIE_SECURE=false
-   BUGSTER_SECRET_KEY=second-generated-value
+Fill in `APP_ADMIN_EMAIL`, `APP_ADMIN_PASSWORD`, and—if you like—the first and last name, then start with a plain `docker compose up --build -d`. Two substitutions are available for the cautious:
 
-   DATABASE_PATH=/data/open-bugster.sqlite
-   ATTACHMENTS_PATH=/data/attachments
-   ```
-
-   Keep the two paths as they are—they point inside the container. Leave `ASC_*` empty.
-
-5. **Start it.**
-
-   ```bash
-   docker compose up --build -d
-   ```
-
-   The first start creates the database, a default board, and your owner account.
-
-6. **Sign in** at `http://<host>:3000` with `APP_ADMIN_EMAIL` and the password from step 2.
-
-   From here on the database is the only source of truth: the variables in step 4 are never read again, and passwords are changed in the app. If you mistyped something and cannot get in, see [If nobody can sign in](#if-nobody-can-sign-in).
-
-7. **Set up the board.** Rename it, adjust its lanes, and—if you have an API key—enter the credentials under **Board settings → TestFlight**, press **Test connection**, then **TestFlight Sync** in the header.
-
-8. **Invite your team.** **Users** in the account menu (top right) creates an account and shows a one-time link to pass on. Then add them to the board under **Board settings → Users**, as viewer, editor, or administrator.
+- **No plain password, even once:** hash it yourself and set `APP_PASSWORD_HASH` instead of `APP_ADMIN_PASSWORD` (the hash wins if both are set). `npm run password:hash -- "your-secure-password"` prints the line to copy into `.env` unchanged—the single quotes protect the `$` characters. It needs Node.js 22 or newer but no `npm install`; with Docker only, `docker compose run --rm bugster npm run password:hash -- "your-secure-password"` does the same inside the container.
+- **Secrets under your own management:** set `NUXT_SESSION_PASSWORD` and `BUGSTER_SECRET_KEY` (generate each with `openssl rand -base64 32`). Whatever you set in the environment wins over the generated values in the volume; whatever you leave empty keeps generating itself.
 
 ### After the first start
 
 Behind an HTTPS reverse proxy, set `NUXT_SESSION_COOKIE_SECURE=true` in `.env` and restart.
 
-Data lives in the named volume `bugster-data`, mounted at `/data`. It survives restarts, image rebuilds, and `docker compose down`—but not `docker compose down -v`. Back it up together with `.env`: without the original `BUGSTER_SECRET_KEY` the stored App Store Connect keys cannot be decrypted again.
+Data lives in the named volume `bugster-data`, mounted at `/data`. It survives restarts, image rebuilds, and `docker compose down`—but not `docker compose down -v`. The generated secrets sit in `secrets.json` inside that same volume, so a volume backup is self-contained; if you keep a `.env`, back it up alongside. Without the original `BUGSTER_SECRET_KEY`—wherever it lives—the stored App Store Connect keys cannot be decrypted again.
 
 Updating is `scripts/update.sh`, which pulls, takes a backup, and rebuilds in one go; schema changes are applied automatically on start. See [Updating and backups](#updating-and-backups) for what that protects and what it cannot.
 
@@ -264,10 +235,10 @@ Name, email address, and password live under **Your profile** in the account men
 
 ### If nobody can sign in
 
-The owner is seeded from the bootstrap variables **only on the very first start**, and only when `APP_PASSWORD_HASH` is set. If it was missing, the database comes up with its default board but no account, and the login page rejects everything—the server log says so on every start:
+The owner is seeded from the bootstrap variables **only on the very first start**, and only when `APP_ADMIN_PASSWORD` (with at least 12 characters) or `APP_PASSWORD_HASH` is set. If both were missing, the database comes up with its default board but no account, and the login page rejects everything—the server log says so on every start:
 
 ```
-[open-bugster] No account exists yet, so nobody can sign in: APP_PASSWORD_HASH is not set.
+[open-bugster] No account exists yet, so nobody can sign in: neither APP_ADMIN_PASSWORD nor APP_PASSWORD_HASH is set.
 ```
 
 Because the seed never runs again once an account exists, a forgotten password cannot be fixed by editing `.env` either. Both cases are handled by the same command, run on the host that holds the database:
@@ -412,13 +383,9 @@ Open **Board settings → TestFlight**, enter issuer ID, key ID, and app ID, upl
 <img src="docs/images/screenshot-settings-apple-testflight.png">
 </p>
 
-Set `BUGSTER_SECRET_KEY` in `.env` to a random 32-byte value **before** uploading a key:
+The encryption key is `BUGSTER_SECRET_KEY`. By default it is generated on the first start and kept in `secrets.json` inside the data volume—there is nothing to do. To manage it yourself instead, set it in `.env` to a random 32-byte value (`openssl rand -base64 32`) **before** uploading a key; an environment value always wins over the generated one.
 
-```bash
-openssl rand -base64 32
-```
-
-If it is left empty, the encryption key is derived from `NUXT_SESSION_PASSWORD` instead. That keeps existing installations working, but changing the session password then makes every stored `.p8` unreadable and the keys have to be uploaded again.
+One legacy case remains: an installation that sets `NUXT_SESSION_PASSWORD` in `.env` but no `BUGSTER_SECRET_KEY` derives the encryption key from the session password, as older versions did. That keeps such installations working, but changing the session password then makes every stored `.p8` unreadable and the keys have to be uploaded again—the startup log warns about it.
 
 Never paste the key contents into `.env`, and never commit credentials or private keys.
 
@@ -469,11 +436,11 @@ scripts/restore.sh backups/<archive>.tar.gz   # put one back
 
 ### What survives an update
 
-Everything that matters lives in the named volume `bugster-data`, mounted at `/data`: the SQLite file with its write-ahead log, and the attachments directory beside it. The image holds no state at all, so `docker compose up --build -d` replaces the container and leaves the volume untouched. Restarts, rebuilds, `docker compose down`, and a reboot of the host are all harmless.
+Everything that matters lives in the named volume `bugster-data`, mounted at `/data`: the SQLite file with its write-ahead log, the attachments directory beside it, and `secrets.json` with the machine secrets generated on the first start. The image holds no state at all, so `docker compose up --build -d` replaces the container and leaves the volume untouched. Restarts, rebuilds, `docker compose down`, and a reboot of the host are all harmless.
 
-Alongside it sits `.env` on the host, read at runtime and deliberately kept out of the image. It carries `BUGSTER_SECRET_KEY`, which encrypts the App Store Connect key stored per board. A database restored without the matching `.env` opens fine, but every stored `.p8` stays unreadable—which is why `scripts/backup.sh` puts both in the same archive.
+Alongside it may sit `.env` on the host, read at runtime and deliberately kept out of the image. If it carries `BUGSTER_SECRET_KEY`—the key that encrypts the App Store Connect key stored per board—that value overrides the generated one, and a database restored without the matching `.env` opens fine but every stored `.p8` stays unreadable. That is why `scripts/backup.sh` puts the volume and `.env` in the same archive; with generated secrets the volume alone is already self-contained.
 
-Only three things actually destroy data, and all three have to be done on purpose: `docker compose down -v` or `docker volume rm`, losing `.env`, and restoring over a volume without a current archive.
+Only three things actually destroy data, and all three have to be done on purpose: `docker compose down -v` or `docker volume rm`, losing the `.env` that holds a self-managed `BUGSTER_SECRET_KEY`, and restoring over a volume without a current archive.
 
 ### Why the backup is not optional
 
@@ -514,10 +481,9 @@ Requirements: Node.js 22 or newer.
 ```bash
 npm install
 cp .env.example .env
-npm run password:hash -- "your-secure-password"
 ```
 
-Fill in `.env` as described in [Setup](#setup) steps 2 to 4. The paths there point at the Docker container, so set local ones instead:
+Fill in the `APP_ADMIN_*` variables as described in [Configuring through `.env` instead](#configuring-through-env-instead); the machine secrets generate themselves here too, into `secrets.json` next to the database. The paths in the example point at the Docker container, so set local ones instead:
 
 ```dotenv
 DATABASE_PATH=./data/local/open-bugster.sqlite
