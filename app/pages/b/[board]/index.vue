@@ -304,21 +304,14 @@ async function sync() {
             <input v-model="query" type="search" class="focus-ring surface h-11 w-full rounded-xl pl-10 pr-9 text-sm outline-none" placeholder="Search tickets">
             <button v-if="query" class="muted absolute right-2 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-lg hover:bg-[var(--panel-strong)]" aria-label="Clear search" @click="query = ''"><X :size="14" /></button>
           </div>
-          <div class="w-full sm:w-64">
-            <UiMultiCombobox
-              v-model="labelFilter"
-              :options="labelFilterOptions"
-              aria-label="Filter by labels"
-              placeholder="Filter by labels"
-              empty-text="No labels on this board yet."
-            />
-          </div>
-          <div class="min-w-44">
-            <UiSelect v-model="categoryFilter" :options="categoryFilterOptions" aria-label="Filter by category" />
-          </div>
-          <div class="min-w-48">
-            <UiSelect v-model="assigneeFilter" :options="assigneeFilterOptions" aria-label="Filter by assignee" />
-          </div>
+          <BoardFilterPane
+            v-model:labels="labelFilter"
+            v-model:category="categoryFilter"
+            v-model:assignee="assigneeFilter"
+            :label-options="labelFilterOptions"
+            :category-options="categoryFilterOptions"
+            :assignee-options="assigneeFilterOptions"
+          />
         </div>
       </div>
 
