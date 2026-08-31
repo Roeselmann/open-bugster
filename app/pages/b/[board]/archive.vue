@@ -36,7 +36,7 @@ async function restore(ticket: Ticket) {
 
 <template>
   <div v-if="board" class="min-h-screen">
-    <AppHeader :board-id="board.id" :syncing="false" :latest-run="null" archive-mode />
+    <AppHeader :board-id="board.id" archive-mode />
     <main class="mx-auto max-w-5xl px-4 py-8 sm:px-6">
       <NuxtLink :to="`/b/${board.id}`" class="focus-ring muted inline-flex items-center gap-1.5 rounded-lg text-sm font-semibold hover:text-[var(--ink)]">
         <ArrowLeft :size="15" /> Back to {{ board.name }}

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, ChevronDown, Plus, Settings2 } from '@lucide/vue'
+import { Check, ChevronDown, Plus, RefreshCcw, Settings2 } from '@lucide/vue'
 import {
   DialogClose,
   DialogContent,
@@ -16,10 +16,17 @@ import {
   DropdownMenuTrigger,
   VisuallyHidden,
 } from 'reka-ui'
-import type { BoardSummary } from '~~/shared/types/domain'
+import type { BoardSummary, SyncRun } from '~~/shared/types/domain'
 
-const props = defineProps<{ board: BoardSummary; boards: BoardSummary[] }>()
-const emit = defineEmits<{ created: [] }>()
+const props = withDefaults(defineProps<{
+  board: BoardSummary
+  boards: BoardSummary[]
+  syncing?: boolean
+  latestRun?: SyncRun | null
+  /** Importing spends the board's Apple credentials, so only its administrators are offered it. */
+  canSync?: boolean
+}>(), { syncing: false, latestRun: null, canSync: false })
+const emit = defineEmits<{ created: []; sync: [] }>()
 
 const { refresh: refreshBoards } = useBoards()
 const { instanceAdmin } = useAuth()
@@ -32,6 +39,20 @@ const createError = ref('')
 
 // A single board needs no menu — the heading stays a plain title until a second one exists.
 const hasChoice = computed(() => props.boards.length > 1)
+
+// A board without complete Apple credentials has nothing to sync — the button would only
+// lead to an error, so it waits until the integration settings are filled in.
+const showSync = computed(() => props.canSync && props.board.credentials.complete)
+
+function syncLabel(run: SyncRun | null) {
+  if (!run) return 'Not synced yet'
+  if (run.status === 'running') return 'Sync in progress'
+  const date = new Intl.DateTimeFormat('en', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(run.finishedAt || run.startedAt))
+  // Said in full, because a bare date beside a count reads as when the tickets arrived rather
+  // than when the board last looked.
+  const when = `last sync on ${date}`
+  return run.status === 'failed' ? `Error · ${when}` : `${run.importedCount} new · ${when}`
+}
 
 function openCreate() {
   newName.value = ''
@@ -114,6 +135,22 @@ async function createBoard() {
       >
         <Settings2 :size="17" />
       </NuxtLink>
+
+      <button
+        v-if="showSync"
+        class="focus-ring surface grid size-9 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]"
+        :disabled="syncing"
+        aria-label="TestFlight sync"
+        title="TestFlight sync"
+        @click="emit('sync')"
+      >
+        <RefreshCcw :size="17" :class="syncing ? 'animate-spin' : ''" />
+      </button>
+
+      <div v-if="showSync" class="muted hidden shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-[var(--line)] px-3 py-1.5 text-xs lg:flex">
+        <span class="size-1.5 rounded-full" :class="latestRun?.status === 'failed' ? 'bg-rose-500' : 'bg-emerald-500'" />
+        {{ syncLabel(latestRun) }}
+      </div>
 
       <button
         v-if="!hasChoice && instanceAdmin"

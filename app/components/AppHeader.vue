@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, Bug, LogOut, Moon, RefreshCcw, Sun, User, Users } from '@lucide/vue'
+import { Archive, Bug, LogOut, Moon, Sun, User, Users } from '@lucide/vue'
 import {
   DropdownMenuContent,
   DropdownMenuItem,
@@ -8,36 +8,19 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from 'reka-ui'
-import type { SyncRun } from '~~/shared/types/domain'
 
 const props = withDefaults(defineProps<{
   boardId?: string
-  syncing?: boolean
-  latestRun?: SyncRun | null
   archiveMode?: boolean
   /** The archive is a board administrator's view, so the way into it is theirs too. */
   canViewArchive?: boolean
-  /** Importing spends the board's Apple credentials, so only its administrators are offered it. */
-  canSync?: boolean
-}>(), { boardId: '', syncing: false, latestRun: null, archiveMode: false, canSync: true, canViewArchive: true })
-const emit = defineEmits<{ sync: [] }>()
+}>(), { boardId: '', archiveMode: false, canViewArchive: true })
 
 const { isDark, toggle } = useTheme()
 const { user, instanceAdmin, logout } = useAuth()
 
 // Board-less pages (profile, user administration) mount the same header.
 const home = computed(() => (props.boardId ? `/b/${props.boardId}` : '/'))
-const showBoardActions = computed(() => Boolean(props.boardId) && !props.archiveMode && props.canSync)
-
-function syncLabel(run: SyncRun | null) {
-  if (!run) return 'Not synced yet'
-  if (run.status === 'running') return 'Sync in progress'
-  const date = new Intl.DateTimeFormat('en', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(run.finishedAt || run.startedAt))
-  // Said in full, because a bare date beside a count reads as when the tickets arrived rather
-  // than when the board last looked.
-  const when = `last sync on ${date}`
-  return run.status === 'failed' ? `Error · ${when}` : `${run.importedCount} new · ${when}`
-}
 </script>
 
 <template>
@@ -53,11 +36,6 @@ function syncLabel(run: SyncRun | null) {
         </span>
       </NuxtLink>
 
-      <div v-if="showBoardActions" class="muted hidden items-center gap-2 rounded-full border border-[var(--line)] px-3 py-1.5 text-xs lg:flex">
-        <span class="size-1.5 rounded-full" :class="latestRun?.status === 'failed' ? 'bg-rose-500' : 'bg-emerald-500'" />
-        {{ syncLabel(latestRun) }}
-      </div>
-
       <NuxtLink
         v-if="boardId && (archiveMode || canViewArchive)"
         :to="archiveMode ? `/b/${boardId}` : `/b/${boardId}/archive`"
@@ -71,11 +49,6 @@ function syncLabel(run: SyncRun | null) {
         <Sun v-if="isDark" :size="18" />
         <Moon v-else :size="18" />
       </button>
-      <button v-if="showBoardActions" class="focus-ring hidden h-10 items-center gap-2 rounded-xl border border-[var(--line)] px-3.5 text-sm font-semibold transition hover:bg-[var(--panel-strong)] sm:flex" :disabled="syncing" @click="emit('sync')">
-        <RefreshCcw :size="16" :class="syncing ? 'animate-spin' : ''" />
-        <span>{{ syncing ? 'Syncing…' : 'TestFlight Sync' }}</span>
-      </button>
-
       <DropdownMenuRoot v-if="user">
         <DropdownMenuTrigger class="focus-ring rounded-full" :aria-label="`Account menu for ${displayName(user)}`">
           <UiAvatar :person="user" size="lg" />

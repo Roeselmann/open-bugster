@@ -24,7 +24,7 @@ const sections = computed(() => {
 
 <template>
   <div v-if="board" class="min-h-screen">
-    <AppHeader :board-id="board.id" :syncing="false" :latest-run="null" archive-mode />
+    <AppHeader :board-id="board.id" archive-mode />
 
     <main class="mx-auto max-w-4xl space-y-6 px-4 py-8 sm:px-6">
       <div>

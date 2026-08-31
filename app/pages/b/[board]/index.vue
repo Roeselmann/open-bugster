@@ -293,11 +293,11 @@ async function sync() {
 
 <template>
   <div v-if="board" class="min-h-screen">
-    <AppHeader :board-id="board.id" :syncing="syncing" :latest-run="syncData?.run || null" :can-sync="canModerate" :can-view-archive="canModerate" @sync="sync" />
+    <AppHeader :board-id="board.id" :can-view-archive="canModerate" />
 
     <main class="mx-auto max-w-[1800px] px-4 py-6 sm:px-6">
       <div class="mb-6 flex flex-col gap-4 md:flex-row md:items-end">
-        <BoardSwitcher :board="board" :boards="boards" />
+        <BoardSwitcher :board="board" :boards="boards" :syncing="syncing" :latest-run="syncData?.run || null" :can-sync="canModerate" @sync="sync" />
         <div class="flex flex-wrap gap-2 md:ml-auto md:justify-end">
           <div class="relative w-full sm:w-72">
             <Search :size="17" class="muted absolute left-3 top-1/2 -translate-y-1/2" />
