@@ -65,7 +65,8 @@ export const workspaceCreateSchema = z.object({
 })
 
 export const workspaceUpdateSchema = z.object({
-  name: z.string().trim().min(1, 'A workspace name is required.').max(40)
+  name: z.string().trim().min(1, 'A workspace name is required.').max(40),
+  description: z.string().trim().max(200, 'A workspace description is at most 200 characters.')
 }).partial()
 
 export const workspaceMemberSchema = z.object({

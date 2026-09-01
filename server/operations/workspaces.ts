@@ -35,10 +35,10 @@ export const workspaceCreate = defineOperation({
 
 export const workspaceUpdate = defineOperation({
   name: 'workspace.update',
-  summary: 'Rename a workspace',
+  summary: 'Change a workspace’s name or description',
   input: workspaceUpdateSchema.extend({ workspaceId: id }),
   requires: { scope: 'workspace', role: 'admin', workspaceId: workspaceOf },
-  audit: { targetType: 'workspace', targetId: input => input.workspaceId, changes: ['name'] },
+  audit: { targetType: 'workspace', targetId: input => input.workspaceId, changes: input => ({ fields: Object.keys(input).filter(key => key !== 'workspaceId').sort() }) },
   run: (ctx, input) => ({ workspace: orNotFound(updateWorkspace(input.workspaceId, input, boardViewer(ctx.account)), 'Workspace') })
 })
 

@@ -17,6 +17,7 @@ import {
   VisuallyHidden,
 } from 'reka-ui'
 import type { WorkspaceSummary } from '~~/shared/types/domain'
+import { DEFAULT_WORKSPACE_NAME } from '~~/shared/utils/constants'
 
 // The header mounts on board-less pages too, so the switcher loads its own list rather
 // than trusting any middleware to have done it. Cached per account; this rarely fetches.
@@ -32,6 +33,12 @@ const lastBoardId = useLastBoardId()
 // One workspace needs no switcher: the header looks exactly as it did before workspaces
 // existed, and the menu appears on its own the day a second one is created.
 const hasChoice = computed(() => workspaces.value.length > 1)
+
+// A lone workspace still shows its name — as a plain title, like the single-board case in
+// BoardSwitcher — once somebody has made it theirs: renamed it away from the seeded default
+// or given it a description. Untouched, the header stays exactly as before workspaces.
+const visible = computed(() => hasChoice.value
+  || Boolean(workspace.value && (workspace.value.description || workspace.value.name !== DEFAULT_WORKSPACE_NAME)))
 
 const createOpen = ref(false)
 const newName = ref('')
@@ -75,10 +82,12 @@ async function createWorkspace() {
 </script>
 
 <template>
-  <div v-if="hasChoice && workspace" class="flex min-w-0 items-center gap-1.5">
+  <div v-if="visible && workspace" class="flex min-w-0 flex-1 items-center gap-1.5">
     <span class="muted mx-1 select-none text-2xl font-light" aria-hidden="true">/</span>
 
-    <DropdownMenuRoot>
+    <span v-if="!hasChoice" class="truncate px-1 text-3xl font-bold tracking-[-.045em]">{{ workspace.name }}</span>
+
+    <DropdownMenuRoot v-else>
       <DropdownMenuTrigger
         class="focus-ring group flex min-w-0 items-center gap-2 rounded-xl px-1 text-left transition hover:bg-[var(--panel-strong)]"
         :aria-label="`Switch workspace, currently ${workspace.name}`"
@@ -123,6 +132,16 @@ async function createWorkspace() {
     >
       <Settings2 :size="17" />
     </NuxtLink>
+
+    <!-- Three lines at most, in the room the name leaves over: `flex-1` with a zero basis
+         means the name keeps its natural width and only the leftovers wrap here — without
+         it, a long description would squeeze the name down to a few letters. The title
+         attribute carries anything the clamp still cuts off. -->
+    <span
+      v-if="workspace.description"
+      class="muted hidden min-w-0 flex-1 px-1 text-sm lg:line-clamp-3"
+      :title="workspace.description"
+    >{{ workspace.description }}</span>
 
     <DialogRoot :open="createOpen" @update:open="value => !creating && (createOpen = value)">
       <DialogPortal>

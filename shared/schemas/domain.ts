@@ -151,6 +151,7 @@ export const boardCredentialsSchema = z.object({
 export const workspaceSchema = z.object({
   id: z.string(),
   name: z.string(),
+  description: z.string(),
   position: z.number().int(),
   createdAt: z.string()
 }).describe('The level above boards. Groups them; grants no board access by itself.')

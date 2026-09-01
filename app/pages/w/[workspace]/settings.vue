@@ -23,24 +23,33 @@ const lastBoardId = useLastBoardId()
 const lastWorkspaceId = useLastWorkspaceId()
 const { notice, notify, closeNotice } = useNotify()
 
-/* ── name ───────────────────────────────────────────────────────────────── */
+/* ── name and description ───────────────────────────────────────────────── */
 
 const name = ref('')
-watchEffect(() => { name.value = workspace.value?.name || '' })
-const savingName = ref(false)
+const description = ref('')
+watchEffect(() => {
+  if (!workspace.value) return
+  name.value = workspace.value.name
+  description.value = workspace.value.description
+})
+const savingDetails = ref(false)
+const unsavedDetails = computed(() => Boolean(workspace.value)
+  && (name.value.trim() !== workspace.value!.name || description.value.trim() !== workspace.value!.description))
 
-async function saveName() {
-  const value = name.value.trim()
-  if (!value || savingName.value || !workspace.value) return
-  savingName.value = true
+async function saveDetails() {
+  if (!name.value.trim() || !unsavedDetails.value || savingDetails.value || !workspace.value) return
+  savingDetails.value = true
   try {
-    await $fetch(`/api/workspaces/${workspaceId.value}`, { method: 'PATCH', body: { name: value } })
+    await $fetch(`/api/workspaces/${workspaceId.value}`, {
+      method: 'PATCH',
+      body: { name: name.value.trim(), description: description.value.trim() },
+    })
     await refreshWorkspaces()
-    notify('success', 'The workspace was renamed.')
+    notify('success', 'Workspace saved.')
   } catch (error) {
     notify('error', errorText(error))
   } finally {
-    savingName.value = false
+    savingDetails.value = false
   }
 }
 
@@ -411,18 +420,31 @@ async function deleteWorkspace() {
           <p class="muted text-[10px] font-bold uppercase tracking-[.14em]">Workspace</p>
           <h2 class="mt-0.5 text-lg font-bold">General</h2>
         </header>
-        <form class="flex flex-wrap items-end gap-3 px-5 py-4" @submit.prevent="saveName">
-          <div class="min-w-56 flex-1">
-            <label class="mb-2 block text-xs font-bold uppercase tracking-[.08em]" for="workspace-name">Name</label>
-            <input id="workspace-name" v-model="name" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none" maxlength="40">
+        <form class="px-5 py-4" @submit.prevent="saveDetails">
+          <label class="block">
+            <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Name</span>
+            <input v-model="name" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none" maxlength="40">
+          </label>
+          <label class="mt-4 block">
+            <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Description</span>
+            <textarea
+              v-model="description"
+              rows="2"
+              placeholder="What this workspace is for"
+              class="focus-ring surface-strong w-full resize-none rounded-xl px-3 py-2.5 text-sm outline-none"
+              maxlength="200"
+            />
+            <span class="muted mt-1.5 block text-xs">{{ description.trim().length }}/200 · leave it empty to show nothing next to the name.</span>
+          </label>
+          <div class="mt-4 flex justify-end">
+            <button
+              type="submit"
+              :disabled="savingDetails || !name.trim() || !unsavedDetails"
+              class="focus-ring h-11 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"
+            >
+              {{ savingDetails ? 'Saving…' : 'Save' }}
+            </button>
           </div>
-          <button
-            type="submit"
-            :disabled="savingName || !name.trim() || name.trim() === workspace.name"
-            class="focus-ring h-11 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"
-          >
-            {{ savingName ? 'Saving…' : 'Save' }}
-          </button>
         </form>
       </section>
 

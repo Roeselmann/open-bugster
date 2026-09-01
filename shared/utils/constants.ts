@@ -1,5 +1,11 @@
 import type { CategoryColor, TicketPriority } from '../types/domain'
 
+/**
+ * The name the first workspace is seeded with. The workspace switcher treats a lone
+ * workspace still carrying it (and no description) as untouched and stays hidden.
+ */
+export const DEFAULT_WORKSPACE_NAME = 'Workspace'
+
 export const PRIORITY_LABELS: Record<TicketPriority, string> = {
   low: 'Low',
   medium: 'Medium',

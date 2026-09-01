@@ -9,6 +9,7 @@ import type {
   Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
 } from '../../shared/types/domain'
 import type { Actor, ActorChannel } from './actor'
+import { DEFAULT_WORKSPACE_NAME } from '../../shared/utils/constants'
 import { decryptSecret, encryptSecret, secretKeyAvailable } from './secret-box'
 import { hashStoredPassword } from './password'
 import { getServerConfig } from './config'
@@ -278,6 +279,7 @@ export function getDb() {
   ensureWebhooks(database)
   ensureBoardMemberAutomation(database)
   ensureWorkspaces(database)
+  ensureWorkspaceDescription(database)
   database.exec(boardIndexes)
   database.exec(personIndexes)
   clearImportedDescriptions(database)
@@ -1558,6 +1560,7 @@ export function ensureWorkspaces(db: Database.Database) {
       CREATE TABLE IF NOT EXISTS workspaces (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
         position INTEGER NOT NULL,
         created_at TEXT NOT NULL
       );
@@ -1574,7 +1577,7 @@ export function ensureWorkspaces(db: Database.Database) {
   const count = (db.prepare('SELECT COUNT(*) AS value FROM workspaces').get() as { value: number }).value
   if (count === 0) {
     db.prepare('INSERT INTO workspaces (id, name, position, created_at) VALUES (?, ?, 0, ?)')
-      .run(randomUUID(), 'Workspace', new Date().toISOString())
+      .run(randomUUID(), DEFAULT_WORKSPACE_NAME, new Date().toISOString())
   }
   db.prepare('UPDATE boards SET workspace_id = (SELECT id FROM workspaces ORDER BY position, created_at LIMIT 1) WHERE workspace_id IS NULL').run()
   db.exec(`
@@ -1582,6 +1585,16 @@ export function ensureWorkspaces(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_workspace_members_user ON workspace_members(user_id);
   `)
   return migrated
+}
+
+/**
+ * Adds the line shown next to the workspace name in the header. Empty rather than null,
+ * for the same reason as the board description: the UI only asks whether it is blank.
+ */
+export function ensureWorkspaceDescription(db: Database.Database) {
+  if (tableColumns(db, 'workspaces').has('description')) return false
+  db.exec(`ALTER TABLE workspaces ADD COLUMN description TEXT NOT NULL DEFAULT ''`)
+  return true
 }
 
 export function ensureWebhooks(db: Database.Database) {
@@ -1629,7 +1642,7 @@ type BoardRow = {
   workspace_id: string
 }
 
-type WorkspaceRow = { id: string; name: string; position: number; created_at: string }
+type WorkspaceRow = { id: string; name: string; description: string; position: number; created_at: string }
 
 type LaneRow = { id: string; board_id: string; name: string; position: number; is_import: number }
 
@@ -1694,7 +1707,7 @@ export function boardAutomationAllowed(boardId: string, userId: string): boolean
 }
 
 function toWorkspace(row: WorkspaceRow): Workspace {
-  return { id: row.id, name: row.name, position: row.position, createdAt: row.created_at }
+  return { id: row.id, name: row.name, description: row.description, position: row.position, createdAt: row.created_at }
 }
 
 export function workspaceMembers(workspaceId: string): WorkspaceMember[] {
@@ -1790,11 +1803,13 @@ export function createWorkspace(name: string, creatorId: string | null = null): 
   return findWorkspaceSummary(id, creatorId ? { userId: creatorId, instanceAdmin: false } : null)!
 }
 
-export function updateWorkspace(id: string, input: { name?: string }, viewer?: BoardViewer | null): WorkspaceSummary | null {
+export function updateWorkspace(id: string, input: { name?: string; description?: string }, viewer?: BoardViewer | null): WorkspaceSummary | null {
   const db = getDb()
   const row = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id) as WorkspaceRow | undefined
   if (!row) return null
-  db.prepare('UPDATE workspaces SET name = ? WHERE id = ?').run(input.name ?? row.name, id)
+  // `??` keeps an omitted field as it was, while an empty string really clears it.
+  db.prepare('UPDATE workspaces SET name = ?, description = ? WHERE id = ?')
+    .run(input.name ?? row.name, input.description ?? row.description, id)
   return findWorkspaceSummary(id, viewer)
 }
 

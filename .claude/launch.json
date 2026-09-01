@@ -20,7 +20,7 @@
         "APP_ADMIN_EMAIL": "owner@example.com",
         "APP_ADMIN_FIRST_NAME": "Grace",
         "APP_ADMIN_LAST_NAME": "Hopper",
-        "APP_PASSWORD_HASH": "scrypt$d2931b23ce61be8bb4ff40477f177db9$7a48c78cc22cee2868d93d3f4afb1776f7788d5c96f984c88fd6fd5585fce7277123e5abd0618760efb18f80735e03224ae180266c13d585c6fdf484842d7e69"
+        "APP_PASSWORD_HASH": "scrypt$afe6546f7ed6d091ddf85ae5c2c39853$c1f77ed9bcbae0c14c3901cd4510a795457b94e0dbeb89507ee6313f82194730b2fd6bd94833ac98ef09597268b5aebeef96b7f54a3affa539ad1aafc8dd200b"
       }
     }
   ]

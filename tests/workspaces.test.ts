@@ -157,6 +157,17 @@ describe('workspaces', () => {
       await ops.run(ops.workspaceUpdate, actorOf('wsAdmin'), { workspaceId: defaultWorkspaceId, name: 'Workspace' })
     })
 
+    it('carries a workspace description that survives unrelated updates', async () => {
+      expect(db.findWorkspace(defaultWorkspaceId)!.description).toBe('')
+      const described = await ops.run(ops.workspaceUpdate, actorOf('wsAdmin'), { workspaceId: defaultWorkspaceId, description: 'Everything the studio ships' }) as { workspace: { description: string } }
+      expect(described.workspace.description).toBe('Everything the studio ships')
+      // A name-only update must not touch it — omitted means "keep", empty means "clear".
+      await ops.run(ops.workspaceUpdate, actorOf('wsAdmin'), { workspaceId: defaultWorkspaceId, name: 'Still described' })
+      expect(db.findWorkspace(defaultWorkspaceId)!.description).toBe('Everything the studio ships')
+      await ops.run(ops.workspaceUpdate, actorOf('wsAdmin'), { workspaceId: defaultWorkspaceId, name: 'Workspace', description: '' })
+      expect(db.findWorkspace(defaultWorkspaceId)!.description).toBe('')
+    })
+
     it('refuses to delete a workspace that still holds boards, and the last one', async () => {
       expect(await statusOf(ops.run(ops.workspaceDelete, actorOf('owner'), { workspaceId: defaultWorkspaceId }))).toBe(409)
       const doomed = db.createWorkspace('Doomed')

@@ -140,6 +140,8 @@ export interface BoardCredentials {
 export interface Workspace {
   id: string
   name: string
+  /** Shown next to the workspace name in the header. Empty when the workspace has none. */
+  description: string
   position: number
   createdAt: string
 }
