@@ -280,6 +280,9 @@ export function getDb() {
   ensureBoardMemberAutomation(database)
   ensureWorkspaces(database)
   ensureWorkspaceDescription(database)
+  // Not in `boardIndexes`: that block also runs inside `ensureBoards`, before an upgrading
+  // database has been given the ticket_activity table. Serves the board-wide digest query.
+  database.exec('CREATE INDEX IF NOT EXISTS idx_ticket_activity_created ON ticket_activity(created_at DESC)')
   database.exec(boardIndexes)
   database.exec(personIndexes)
   clearImportedDescriptions(database)
@@ -3132,28 +3135,45 @@ export function deleteComment(id: string): boolean {
   return getDb().prepare('DELETE FROM ticket_comments WHERE id = ?').run(id).changes > 0
 }
 
+type ActivityRow = { id: string; ticket_id: string; actor_id: string | null; agent_id: string | null; channel: ActorChannel; kind: ActivityKind; payload: string; created_at: string }
+
+function toActivityEntry(row: ActivityRow): TicketActivityEntry {
+  const payload = safeJson(row.payload)
+  // Person-valued keys are ids on disk; the reader wants people, and an id whose row is
+  // gone resolves to null rather than showing a stranger a raw uuid.
+  const payloadPeople: Record<string, Person | null> = {}
+  for (const key of personPayloadKeys[row.kind] || []) payloadPeople[key] = personById(payload[key])
+  return {
+    id: row.id,
+    ticketId: row.ticket_id,
+    actor: personById(row.actor_id),
+    // Provenance, not attribution: the actor still answers for the change.
+    agentId: row.agent_id,
+    channel: row.channel,
+    kind: row.kind,
+    payload,
+    payloadPeople,
+    createdAt: row.created_at,
+  }
+}
+
 export function listActivity(ticketId: string, limit = 100): TicketActivityEntry[] {
   const rows = getDb().prepare('SELECT * FROM ticket_activity WHERE ticket_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?')
-    .all(ticketId, limit) as Array<{ id: string; ticket_id: string; actor_id: string | null; agent_id: string | null; channel: ActorChannel; kind: ActivityKind; payload: string; created_at: string }>
-  return rows.map(row => {
-    const payload = safeJson(row.payload)
-    // Person-valued keys are ids on disk; the reader wants people, and an id whose row is
-    // gone resolves to null rather than showing a stranger a raw uuid.
-    const payloadPeople: Record<string, Person | null> = {}
-    for (const key of personPayloadKeys[row.kind] || []) payloadPeople[key] = personById(payload[key])
-    return {
-      id: row.id,
-      ticketId: row.ticket_id,
-      actor: personById(row.actor_id),
-      // Provenance, not attribution: the actor still answers for the change.
-      agentId: row.agent_id,
-      channel: row.channel,
-      kind: row.kind,
-      payload,
-      payloadPeople,
-      createdAt: row.created_at,
-    }
-  })
+    .all(ticketId, limit) as ActivityRow[]
+  return rows.map(toActivityEntry)
+}
+
+/** A whole board's recent history in one query, newest first — what a digest is made of. */
+export function listBoardActivity(boardId: string, options: { since?: string; limit?: number } = {}): Array<TicketActivityEntry & { ticketNumber: number; ticketTitle: string }> {
+  const rows = getDb().prepare(`
+    SELECT a.*, t.ticket_number, t.title
+    FROM ticket_activity a
+    JOIN tickets t ON t.id = a.ticket_id
+    WHERE t.board_id = ? AND a.created_at >= ?
+    ORDER BY a.created_at DESC, a.rowid DESC
+    LIMIT ?
+  `).all(boardId, options.since ?? '', options.limit ?? 50) as Array<ActivityRow & { ticket_number: number; title: string }>
+  return rows.map(row => ({ ...toActivityEntry(row), ticketNumber: row.ticket_number, ticketTitle: row.title }))
 }
 
 function safeJson(value: string): Record<string, string | null> {

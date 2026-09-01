@@ -9,11 +9,65 @@ import {
   MAX_ATTACHMENT_BASE64_LENGTH,
   validateManualAttachment
 } from '../utils/attachment-policy'
+import { AttachmentFetchError, fetchAttachmentSource } from '../utils/attachment-fetch'
 import { getServerConfig } from '../utils/config'
 import { createdId, defineOperation } from './types'
 import { orNotFound } from './run'
+import type { Ticket } from '~~/shared/types/domain'
 
 const attachmentId = z.string().trim().min(1).max(64)
+
+/**
+ * The same two rules the web upload holds to: an imported ticket belongs to its import, and
+ * an archived one has left the board.
+ */
+function assertAttachable(ticket: Ticket) {
+  if (ticket.source !== 'manual') {
+    throw createError({ statusCode: 403, statusMessage: 'Attachments can only be added to manual tickets.' })
+  }
+  if (ticket.archivedAt) {
+    throw createError({ statusCode: 409, statusMessage: 'Attachments cannot be added to archived tickets.' })
+  }
+}
+
+/**
+ * Validates the bytes and makes them a ticket attachment: policy check, file on disk, row in
+ * the database. The file is written first and unlinked again if the row fails, so the two
+ * cannot exist without one another.
+ */
+async function storeValidatedAttachment(ticketId: string, source: { filename: string; mimeType?: string; data: Buffer }) {
+  let file: ReturnType<typeof validateManualAttachment>
+  try {
+    file = validateManualAttachment(source)
+  } catch (error) {
+    if (error instanceof AttachmentPolicyError) throw createError({ statusCode: 422, statusMessage: error.message })
+    throw error
+  }
+
+  const directory = join(resolve(getServerConfig().attachmentsPath), ticketId)
+  await mkdir(directory, { recursive: true })
+  const storedName = `${randomUUID()}${file.extension}`
+  const path = join(directory, storedName)
+  // `wx` so a name collision fails rather than overwrites, however unlikely a UUID clash is.
+  await writeFile(path, source.data, { flag: 'wx', mode: 0o600 })
+
+  try {
+    const id = addAttachment(ticketId, 'file', file.filename, file.mimeType, source.data.length, join(ticketId, storedName))
+    return {
+      id,
+      kind: 'file' as const,
+      filename: file.filename,
+      mimeType: file.mimeType,
+      size: source.data.length,
+      url: `/api/v1/attachments/${id}`
+    }
+  } catch (error) {
+    // The row is what makes the file reachable. Without it the bytes are litter nobody
+    // will ever look for, so they go back out the way they came in.
+    await unlink(path).catch(() => undefined)
+    throw error
+  }
+}
 
 /**
  * What is known about one attachment, reached by its own id.
@@ -69,51 +123,43 @@ export const attachmentAdd = defineOperation({
   audit: { targetType: 'attachment', targetId: createdId('attachment'), changes: ['filename', 'mimeType'] },
   run: async (ctx, input) => {
     const ticket = ctx.ticket!
-    // The same two rules the web upload holds to: an imported ticket belongs to its import,
-    // and an archived one has left the board.
-    if (ticket.source !== 'manual') {
-      throw createError({ statusCode: 403, statusMessage: 'Attachments can only be added to manual tickets.' })
-    }
-    if (ticket.archivedAt) {
-      throw createError({ statusCode: 409, statusMessage: 'Attachments cannot be added to archived tickets.' })
-    }
-
+    assertAttachable(ticket)
+    // Decoding is lenient, so a body that was never base64 arrives as noise and is caught by
+    // the policy's signature check rather than trusted.
     const data = Buffer.from(input.content, 'base64')
-    let file: ReturnType<typeof validateManualAttachment>
+    return { attachment: await storeValidatedAttachment(ticket.id, { filename: input.filename, mimeType: input.mimeType, data }) }
+  }
+})
+
+/**
+ * The same write, fed by a download: the caller hands over a URL and the server fetches the
+ * file itself. This is the shape an AI agent needs — bytes must never travel through a
+ * model's context, a URL is a few tokens. The destination is screened and capped in
+ * `fetchAttachmentSource`; everything after the download is `attachment.add` exactly.
+ */
+export const attachmentAddFromUrl = defineOperation({
+  name: 'attachment.addFromUrl',
+  summary: 'Attach a file to a ticket by downloading it from a URL',
+  input: z.object({
+    ticketId: z.string().trim().min(1).max(64),
+    url: z.string().trim().min(1).max(2000)
+      .describe('The http(s) URL the server downloads the file from. Up to 25 MB.'),
+    filename: z.string().trim().min(1).max(180).optional()
+      .describe('Overrides the name taken from the URL — the extension decides which types are allowed.')
+  }),
+  requires: { scope: 'ticket', role: 'editor', ticketId: input => input.ticketId },
+  // The URL, unlike file content, is small and pure provenance — it belongs in the log.
+  audit: { targetType: 'attachment', targetId: createdId('attachment'), changes: ['filename', 'url'] },
+  run: async (ctx, input) => {
+    const ticket = ctx.ticket!
+    assertAttachable(ticket)
+    let source: Awaited<ReturnType<typeof fetchAttachmentSource>>
     try {
-      // The same policy the browser upload goes through — extension allowlist, size, and the
-      // file's own magic bytes. Decoding is lenient, so a body that was never base64 arrives
-      // here as noise and is caught by the signature check rather than trusted.
-      file = validateManualAttachment({ filename: input.filename, mimeType: input.mimeType, data })
+      source = await fetchAttachmentSource(input.url, input.filename)
     } catch (error) {
-      if (error instanceof AttachmentPolicyError) throw createError({ statusCode: 422, statusMessage: error.message })
+      if (error instanceof AttachmentFetchError) throw createError({ statusCode: 422, statusMessage: error.message })
       throw error
     }
-
-    const directory = join(resolve(getServerConfig().attachmentsPath), ticket.id)
-    await mkdir(directory, { recursive: true })
-    const storedName = `${randomUUID()}${file.extension}`
-    const path = join(directory, storedName)
-    // `wx` so a name collision fails rather than overwrites, however unlikely a UUID clash is.
-    await writeFile(path, data, { flag: 'wx', mode: 0o600 })
-
-    try {
-      const id = addAttachment(ticket.id, 'file', file.filename, file.mimeType, data.length, join(ticket.id, storedName))
-      return {
-        attachment: {
-          id,
-          kind: 'file' as const,
-          filename: file.filename,
-          mimeType: file.mimeType,
-          size: data.length,
-          url: `/api/v1/attachments/${id}`
-        }
-      }
-    } catch (error) {
-      // The row is what makes the file reachable. Without it the bytes are litter nobody
-      // will ever look for, so they go back out the way they came in.
-      await unlink(path).catch(() => undefined)
-      throw error
-    }
+    return { attachment: await storeValidatedAttachment(ticket.id, source) }
   }
 })

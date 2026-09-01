@@ -9,7 +9,9 @@ const passwordSchema = z.string().min(12, 'Use at least 12 characters.').max(512
 const labelSchema = z.string().trim().min(1).max(30)
 const todoSchema = z.object({
   text: z.string().trim().min(1).max(500),
-  completed: z.boolean()
+  // Defaulted for API and MCP callers, for whom "a new to-do" is the common case; the UI
+  // always sends the flag explicitly.
+  completed: z.boolean().default(false)
 })
 
 const idSchema = z.string().trim().min(1).max(64)

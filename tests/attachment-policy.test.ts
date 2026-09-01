@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AttachmentPolicyError, safeUploadFilename, validateManualAttachment } from '../server/utils/attachment-policy'
+import { AttachmentPolicyError, extensionForMime, hasAllowedExtension, safeUploadFilename, validateManualAttachment } from '../server/utils/attachment-policy'
 
 describe('manual attachment policy', () => {
   it('accepts supported images only when their signature is valid', () => {
@@ -20,5 +20,15 @@ describe('manual attachment policy', () => {
 
   it('normalizes uploaded display names', () => {
     expect(safeUploadFilename('../../Report\u0000.pdf')).toBe('Report.pdf')
+  })
+
+  it('names extensionless downloads from their content type', () => {
+    expect(extensionForMime('image/jpeg')).toBe('.jpg')
+    expect(extensionForMime('application/pdf; charset=binary')).toBe('.pdf')
+    // "Unspecified" and unknown both refuse to guess.
+    expect(extensionForMime('application/octet-stream')).toBeNull()
+    expect(extensionForMime('image/svg+xml')).toBeNull()
+    expect(hasAllowedExtension('shot.png')).toBe(true)
+    expect(hasAllowedExtension('file/12345')).toBe(false)
   })
 })

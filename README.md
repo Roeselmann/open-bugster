@@ -333,7 +333,11 @@ write accepts an `Idempotency-Key` so a retry replays the first response instead
 ### MCP, for AI agents
 
 `/mcp` speaks the Model Context Protocol over Streamable HTTP, with about a dozen tools shaped
-around what somebody actually asks for — searching a board, filing a ticket, commenting on one.
+around what somebody actually asks for — searching one board or every reachable one, filing a
+ticket with its to-do list, commenting, asking `whats_new` for everything that happened on a
+board since a timestamp, restoring what was archived by mistake, and attaching a file by URL:
+the agent hands over a link (a Telegram file URL, say) and the server downloads it itself, so
+no bytes ever travel through the model's context.
 
 ```json
 {
@@ -361,7 +365,8 @@ are retried five times on a widening backoff, and every attempt is visible in th
 
 Deliveries go to private addresses by default, since an n8n is usually on the same Docker network;
 set `WEBHOOK_ALLOW_PRIVATE=false` for public destinations only. The cloud metadata range is
-refused either way.
+refused either way. The same switch and the same screening govern the URLs the server downloads
+attachments from (`POST /tickets/{id}/attachments/from-url` and the MCP `add_attachment` tool).
 
 ### The audit trail
 

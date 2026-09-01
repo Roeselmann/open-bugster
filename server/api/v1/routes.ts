@@ -90,6 +90,10 @@ export const v1Routes: readonly V1Route[] = [
     method: 'POST', path: '/tickets/{ticketId}/attachments', operation: ops.attachmentAdd, status: 201,
     response: z.object({ attachment: attachmentSchema })
   },
+  {
+    method: 'POST', path: '/tickets/{ticketId}/attachments/from-url', operation: ops.attachmentAddFromUrl, status: 201,
+    response: z.object({ attachment: attachmentSchema })
+  },
 
   // Comments
   { method: 'GET', path: '/tickets/{ticketId}/comments', operation: ops.commentList, response: z.object({ comments: z.array(ticketCommentSchema) }) },

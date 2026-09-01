@@ -39,6 +39,13 @@ function nameOf(person: { firstName: string; lastName: string } | null): string 
   return `${person.firstName} ${person.lastName}`.trim() || null
 }
 
+/** An activity payload with its person-valued ids swapped for names a model can repeat. */
+function activityDetail(entry: TicketActivityEntry): Record<string, string | null> {
+  const detail: Record<string, string | null> = { ...entry.payload }
+  for (const [key, person] of Object.entries(entry.payloadPeople)) detail[key] = nameOf(person)
+  return detail
+}
+
 /** Every tool answers with JSON text, which is what a model reads best. */
 function reply(payload: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }] }
@@ -121,23 +128,34 @@ export function registerTools(server: McpServer, actor: Actor) {
   server.registerTool('search_tickets', {
     title: 'Search tickets',
     description:
-      'Find tickets on a board. Text matches the title and description. Every filter is optional '
-      + 'and they combine. Returns a short form of each ticket — call get_ticket for the whole one. '
+      'Find tickets on one board — or across every board this token can reach when boardId is '
+      + 'omitted. Text matches the title and description. Every filter is optional and they '
+      + 'combine. Returns a short form of each ticket — call get_ticket for the whole one. '
       + 'Search before creating, so an existing report gets a comment instead of a duplicate.',
     inputSchema: {
-      boardId: z.string(),
+      boardId: z.string().optional().describe('Omit to search every board this token can reach.'),
       text: z.string().optional().describe('Matched case-insensitively against title and description.'),
       laneId: z.string().optional(),
       priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
       label: z.string().optional(),
       assigneeId: z.string().optional().describe('Use "unassigned" for tickets nobody holds.'),
-      archived: z.boolean().optional().describe('Archived tickets are visible to board admins only.'),
+      archived: z.boolean().optional().describe('Archived tickets are visible to board admins only, and only with a boardId.'),
       limit: z.number().int().min(1).max(100).optional().describe('Defaults to 25.')
     }
   }, async (input) => {
-    const { tickets } = await call<{ tickets: Ticket[] }>(ops.ticketList, { boardId: input.boardId, archived: input.archived ?? false })
+    // The archive stays board-scoped: it is an administrator's view of one board, not a
+    // haystack to sweep across the instance.
+    if (!input.boardId && input.archived) {
+      throw createError({ statusCode: 400, statusMessage: 'Searching the archive needs a boardId.' })
+    }
+    const boardIds = input.boardId
+      ? [input.boardId]
+      : (await call<{ boards: BoardSummary[] }>(ops.boardList, {})).boards.map(board => board.id)
+    const perBoard = await Promise.all(boardIds.map(boardId =>
+      call<{ tickets: Ticket[] }>(ops.ticketList, { boardId, archived: input.archived ?? false }).then(result => result.tickets)
+    ))
     const text = input.text?.toLowerCase()
-    const matched = tickets.filter((ticket) => {
+    const matched = perBoard.flat().filter((ticket) => {
       if (text && !`${ticket.title} ${ticket.description}`.toLowerCase().includes(text)) return false
       if (input.laneId && ticket.laneId !== input.laneId) return false
       if (input.priority && ticket.priority !== input.priority) return false
@@ -150,7 +168,7 @@ export function registerTools(server: McpServer, actor: Actor) {
     return reply({
       total: matched.length,
       returned: Math.min(limit, matched.length),
-      tickets: matched.slice(0, limit).map(slim)
+      tickets: matched.slice(0, limit).map(ticket => ({ ...slim(ticket), boardId: ticket.boardId }))
     })
   })
 
@@ -226,7 +244,9 @@ export function registerTools(server: McpServer, actor: Actor) {
       assigneeId: z.string().optional().describe('Must be a member of this board.'),
       dueDate: z.string().optional().describe('YYYY-MM-DD.'),
       labels: z.array(z.string()).max(12).optional(),
-      categoryName: z.string().optional()
+      categoryName: z.string().optional(),
+      todos: z.array(z.object({ text: z.string().min(1).max(500), completed: z.boolean().default(false) })).max(100).optional()
+        .describe('The ticket’s initial to-do list, in order.')
     }
   }, async (input) => {
     const { ticket } = await call<{ ticket: Ticket }>(ops.ticketCreate, input)
@@ -244,7 +264,9 @@ export function registerTools(server: McpServer, actor: Actor) {
       assigneeId: z.string().nullable().optional(),
       dueDate: z.string().nullable().optional(),
       labels: z.array(z.string()).max(12).optional(),
-      categoryName: z.string().nullable().optional()
+      categoryName: z.string().nullable().optional(),
+      todos: z.array(z.object({ text: z.string().min(1).max(500), completed: z.boolean().default(false) })).max(100).optional()
+        .describe('Replaces the whole to-do list — read the ticket first and send every item back, changed and unchanged alike. Omit the field to leave the list alone.')
     }
   }, async (input) => {
     const { ticket } = await call<{ ticket: Ticket }>(ops.ticketUpdate, input)
@@ -289,5 +311,66 @@ export function registerTools(server: McpServer, actor: Actor) {
   }, async ({ boardId }) => {
     const { lanes } = await call<{ lanes: LaneSummary[] }>(ops.laneList, { boardId })
     return reply(lanes.map(lane => ({ id: lane.id, name: lane.name, ticketCount: lane.ticketCount, isImport: lane.isImport })))
+  })
+
+  server.registerTool('whats_new', {
+    title: 'What changed on a board',
+    description:
+      'The board’s recent history in one call, newest first: tickets created, imported, moved, '
+      + 'commented on, (un)assigned, reprioritised, archived and restored. Give `since` to pick '
+      + 'up where you left off; it defaults to the last seven days. Edits to a ticket’s title, '
+      + 'description or labels leave no trace here — this reads the same history get_ticket shows.',
+    inputSchema: {
+      boardId: z.string().describe('From list_boards.'),
+      since: z.string().optional().describe('ISO timestamp; defaults to seven days ago.'),
+      limit: z.number().int().min(1).max(200).optional().describe('Defaults to 50.')
+    }
+  }, async ({ boardId, since, limit }) => {
+    const from = since ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+    const { activity } = await call<{ activity: Array<TicketActivityEntry & { ticketNumber: number; ticketTitle: string }> }>(
+      ops.boardActivity, { boardId, since: from, limit: limit ?? 50 }
+    )
+    return reply({
+      since: from,
+      entries: activity.map(entry => ({
+        ticket: { id: entry.ticketId, number: entry.ticketNumber, title: entry.ticketTitle },
+        kind: entry.kind,
+        by: nameOf(entry.actor),
+        via: entry.agentId,
+        at: entry.createdAt,
+        detail: activityDetail(entry)
+      }))
+    })
+  })
+
+  server.registerTool('add_attachment', {
+    title: 'Add an attachment',
+    description:
+      'Attach a file to a ticket by URL: the server downloads it itself, so pass a link — a '
+      + 'Telegram file URL, a CI artifact, a log on a paste service — rather than pushing bytes '
+      + 'through context. Up to 25 MB; images, PDF, text and Office types. The filename decides '
+      + 'the allowed type — give one when the URL does not already end in it.',
+    inputSchema: {
+      ticketId: z.string(),
+      url: z.string().describe('The http(s) URL to download. Fetched once, without following redirects.'),
+      filename: z.string().max(180).optional().describe('Overrides the name taken from the URL, extension included.')
+    }
+  }, async ({ ticketId, url, filename }) => {
+    const { attachment } = await call<{ attachment: { id: string; filename: string; mimeType: string; size: number; url: string } }>(
+      ops.attachmentAddFromUrl, { ticketId, url, filename }
+    )
+    return reply(attachment)
+  })
+
+  server.registerTool('restore_ticket', {
+    title: 'Restore a ticket',
+    description:
+      'Put an archived ticket back on the board — the undo of archive_ticket. Restoring reaches '
+      + 'into the archive, so it takes a board administrator. The ticket returns to the lane it '
+      + 'was archived from, or to the board’s default lane when that one is gone.',
+    inputSchema: { ticketId: z.string() }
+  }, async ({ ticketId }) => {
+    const { ticket } = await call<{ ticket: Ticket }>(ops.ticketRestore, { ticketId })
+    return reply({ id: ticket.id, laneId: ticket.laneId })
   })
 }

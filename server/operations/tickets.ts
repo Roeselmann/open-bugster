@@ -2,8 +2,8 @@ import { createError } from 'h3'
 import { z } from 'zod'
 import { boardMemberIds } from '../utils/access'
 import {
-  archiveTicket, createTicket, listActivity, listTickets, listTicketsPage, moveTicket,
-  personById, restoreTicket, ticketIdByNumber, updateTicket
+  archiveTicket, createTicket, listActivity, listBoardActivity, listTickets, listTicketsPage,
+  moveTicket, personById, restoreTicket, ticketIdByNumber, updateTicket
 } from '../utils/db'
 import { importedTicketUpdateSchema, ticketCreateSchema, ticketMoveSchema, ticketUpdateSchema } from '../utils/validation'
 import { createdId, defineOperation } from './types'
@@ -77,6 +77,23 @@ export const ticketActivity = defineOperation({
   requires: { scope: 'ticket', role: 'viewer', ticketId: input => input.ticketId },
   audit: false,
   run: (_ctx, input) => ({ activity: listActivity(input.ticketId) })
+})
+
+/**
+ * The same history, board-wide: everything that happened on any of the board's tickets since
+ * a timestamp, newest first. What a digest — "what changed while I was away?" — is made of.
+ */
+export const boardActivity = defineOperation({
+  name: 'board.activity',
+  summary: 'Read what changed on a board',
+  input: z.object({
+    boardId: z.string().trim().min(1).max(64),
+    since: z.string().trim().max(40).optional().describe('ISO timestamp; omitted means no lower bound.'),
+    limit: z.number().int().min(1).max(200).default(50)
+  }),
+  requires: { scope: 'board', role: 'viewer', boardId: input => input.boardId },
+  audit: false,
+  run: (_ctx, input) => ({ activity: listBoardActivity(input.boardId, { since: input.since, limit: input.limit }) })
 })
 
 export const ticketCreate = defineOperation({

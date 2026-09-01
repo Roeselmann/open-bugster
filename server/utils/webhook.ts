@@ -75,7 +75,7 @@ export async function assertDeliverable(rawUrl: string): Promise<URL> {
     throw new WebhookUrlError('That is not a valid URL.')
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    throw new WebhookUrlError('A webhook URL has to be http or https.')
+    throw new WebhookUrlError('The URL has to be http or https.')
   }
   if (url.username || url.password) {
     throw new WebhookUrlError('Credentials in the URL are not accepted; use the signature instead.')

@@ -44,6 +44,21 @@ const rules: Record<string, AttachmentRule> = {
 
 export class AttachmentPolicyError extends Error {}
 
+/** The canonical extension for a mime type, for files that arrive named without one. */
+export function extensionForMime(mimeType: string | undefined): string | null {
+  const value = mimeType?.split(';')[0]?.trim().toLowerCase()
+  if (!value || value === 'application/octet-stream') return null
+  for (const [extension, rule] of Object.entries(rules)) {
+    if (rule.mimeTypes.includes(value)) return extension
+  }
+  return null
+}
+
+/** Whether the name already ends in an extension the policy knows. */
+export function hasAllowedExtension(filename: string): boolean {
+  return Boolean(rules[extname(safeUploadFilename(filename)).toLowerCase()])
+}
+
 export function safeUploadFilename(value: string) {
   const cleaned = basename(value).replace(/[\u0000-\u001f\u007f]/g, '').trim()
   return (cleaned || 'attachment').slice(0, 180)

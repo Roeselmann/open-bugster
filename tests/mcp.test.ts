@@ -1,6 +1,8 @@
-import { beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
+import { createServer, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -82,7 +84,8 @@ describe('the MCP tool surface', () => {
     it('names tools for the task rather than the endpoint', () => {
       expect([...tools.keys()]).toEqual(expect.arrayContaining([
         'whoami', 'list_boards', 'board_overview', 'search_tickets', 'get_ticket',
-        'create_ticket', 'update_ticket', 'move_ticket', 'comment_on_ticket', 'archive_ticket'
+        'create_ticket', 'update_ticket', 'move_ticket', 'comment_on_ticket', 'archive_ticket',
+        'whats_new', 'add_attachment', 'restore_ticket'
       ]))
       // Nothing named after an operation, and no administration.
       for (const name of tools.keys()) {
@@ -134,7 +137,7 @@ describe('the MCP tool surface', () => {
       expect(found.total).toBe(1)
       const entry = found.tickets[0]
       expect(Object.keys(entry).sort()).toEqual(
-        ['assignee', 'category', 'commentCount', 'dueDate', 'id', 'labels', 'laneId', 'number', 'priority', 'title']
+        ['assignee', 'boardId', 'category', 'commentCount', 'dueDate', 'id', 'labels', 'laneId', 'number', 'priority', 'title']
       )
       // The three fields that make a list expensive are exactly the ones left out.
       expect(entry).not.toHaveProperty('description')
@@ -182,6 +185,17 @@ describe('the MCP tool surface', () => {
       expect((await call('search_tickets', { boardId, laneId: otherLaneId })).total).toBe(0)
       expect((await call('search_tickets', { boardId, assigneeId: 'unassigned' })).total).toBe(6)
     })
+
+    it('searches across every reachable board when no board is named', async () => {
+      const second = db.createBoard('Second search board')
+      await call('create_ticket', { boardId, laneId, title: 'Needle here' })
+      await call('create_ticket', { boardId: second.id, title: 'Needle there' })
+      const found = await call('search_tickets', { text: 'needle' })
+      expect(found.total).toBe(2)
+      expect(new Set(found.tickets.map((ticket: { boardId: string }) => ticket.boardId)).size).toBe(2)
+      // The archive stays one board's view.
+      await expect(call('search_tickets', { archived: true })).rejects.toMatchObject({ statusCode: 400 })
+    })
   })
 
   describe('writing', () => {
@@ -214,6 +228,95 @@ describe('the MCP tool surface', () => {
       expect(updated.title).toBe('After')
       expect(updated.priority).toBe('low')
       expect(updated.labels).toEqual(['keep'])
+    })
+
+    it('writes to-dos as a whole list, and omitting the field leaves them alone', async () => {
+      const created = await call('create_ticket', {
+        boardId, laneId, title: 'With chores', todos: [{ text: 'One' }, { text: 'Two', completed: true }]
+      })
+      let full = await call('get_ticket', { ticketId: created.id })
+      expect(full.todos.map((todo: { text: string; completed: boolean }) => [todo.text, todo.completed]))
+        .toEqual([['One', false], ['Two', true]])
+      await call('update_ticket', { ticketId: created.id, title: 'Chores renamed' })
+      full = await call('get_ticket', { ticketId: created.id })
+      expect(full.todos).toHaveLength(2)
+      // The list is replaced wholesale: what is not sent back is gone.
+      await call('update_ticket', { ticketId: created.id, todos: [{ text: 'Two', completed: true }] })
+      full = await call('get_ticket', { ticketId: created.id })
+      expect(full.todos.map((todo: { text: string }) => todo.text)).toEqual(['Two'])
+    })
+  })
+
+  describe('the digest and the undo', () => {
+    it('summarises a board since a timestamp', async () => {
+      const created = await call('create_ticket', { boardId, laneId, title: 'Digest fodder' })
+      await call('comment_on_ticket', { ticketId: created.id, body: 'Noted.' })
+      const digest = await call('whats_new', { boardId })
+      const kinds = digest.entries
+        .filter((entry: { ticket: { id: string } }) => entry.ticket.id === created.id)
+        .map((entry: { kind: string }) => entry.kind)
+      expect(kinds).toContain('created')
+      expect(kinds).toContain('commented')
+      expect(digest.entries[0]).toMatchObject({
+        ticket: { id: expect.any(String), number: expect.any(Number), title: expect.any(String) },
+        by: 'Grace Hopper',
+        via: 'Claude Desktop'
+      })
+      // The future holds nothing yet.
+      const later = await call('whats_new', { boardId, since: '2999-01-01T00:00:00.000Z' })
+      expect(later.entries).toEqual([])
+    })
+
+    it('restores what archive_ticket took off the board', async () => {
+      const created = await call('create_ticket', { boardId, laneId, title: 'Back again' })
+      await call('archive_ticket', { ticketId: created.id })
+      const restored = await call('restore_ticket', { ticketId: created.id })
+      expect(restored.laneId).toBe(laneId)
+      expect((await call('search_tickets', { boardId, text: 'Back again' })).total).toBe(1)
+    })
+  })
+
+  describe('attachments by URL', () => {
+    // The eight PNG magic bytes and a little noise — enough to pass the signature check.
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
+    let fixture: Server
+    let origin = ''
+
+    beforeAll(async () => {
+      fixture = createServer((request, response) => {
+        if (request.url === '/shot.png' || request.url === '/mystery') {
+          response.writeHead(200, { 'content-type': 'image/png' })
+          response.end(png)
+        } else {
+          response.writeHead(404)
+          response.end()
+        }
+      })
+      await new Promise<void>(resolve => fixture.listen(0, '127.0.0.1', resolve))
+      origin = `http://127.0.0.1:${(fixture.address() as AddressInfo).port}`
+    })
+
+    afterAll(() => new Promise<void>(resolve => { fixture.close(() => resolve()) }))
+
+    it('downloads the file and hangs it on the ticket', async () => {
+      const created = await call('create_ticket', { boardId, laneId, title: 'With a screenshot' })
+      const attachment = await call('add_attachment', { ticketId: created.id, url: `${origin}/shot.png` })
+      expect(attachment).toMatchObject({ filename: 'shot.png', mimeType: 'image/png', size: png.length })
+      const full = await call('get_ticket', { ticketId: created.id })
+      expect(full.attachments).toHaveLength(1)
+      expect(full.attachments[0].url).toBe(`/api/v1/attachments/${attachment.id}`)
+    })
+
+    it('names an extensionless URL from its content type', async () => {
+      const created = await call('create_ticket', { boardId, laneId, title: 'Telegram-style path' })
+      const attachment = await call('add_attachment', { ticketId: created.id, url: `${origin}/mystery` })
+      expect(attachment.filename).toBe('mystery.png')
+    })
+
+    it('reports a failed download in plain words', async () => {
+      const created = await call('create_ticket', { boardId, laneId, title: 'No file here' })
+      await expect(call('add_attachment', { ticketId: created.id, url: `${origin}/gone.png` }))
+        .rejects.toMatchObject({ statusCode: 422, statusMessage: 'The URL answered 404.' })
     })
   })
 
