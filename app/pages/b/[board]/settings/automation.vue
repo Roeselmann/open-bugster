@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, Copy, Plus, TriangleAlert, Webhook } from '@lucide/vue'
+import { Check, Copy, History, Pause, Pencil, Play, Plus, Trash2, TriangleAlert, Webhook, X } from '@lucide/vue'
 
 interface WebhookRecord {
   id: string
@@ -158,6 +158,17 @@ async function copySecret() {
 
 const timeFormat = new Intl.DateTimeFormat('en', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
 const when = (value: string | null) => (value ? timeFormat.format(new Date(value)) : '—')
+
+/** One place that decides how a webhook's state is announced, so every row reads the same. */
+function status(hook: WebhookRecord) {
+  if (hook.enabled) {
+    return { label: 'Active', title: 'Deliveries are being sent.', badge: 'bg-emerald-500/10 text-emerald-600', dot: 'bg-emerald-500' }
+  }
+  if (hook.disabledAt) {
+    return { label: 'Switched off', title: 'Switched off automatically after repeated delivery failures. Resume it to try again.', badge: 'bg-rose-500/10 text-rose-600', dot: 'bg-rose-500' }
+  }
+  return { label: 'Paused', title: 'Paused by hand. Nothing is sent until it is resumed.', badge: 'bg-amber-500/10 text-amber-600', dot: 'bg-amber-500' }
+}
 </script>
 
 <template>
@@ -223,24 +234,54 @@ const when = (value: string | null) => (value ? timeFormat.format(new Date(value
 
         <div v-if="!loading" class="space-y-2 border-t border-[var(--line)] pt-4">
           <div v-for="hook in hooks" :key="hook.id" class="surface-strong rounded-xl px-3 py-2.5">
-            <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-              <span class="min-w-0 flex-1 truncate font-mono text-xs" :title="hook.url">{{ hook.url }}</span>
-              <span v-if="hook.description" class="muted text-xs">{{ hook.description }}</span>
-              <span v-if="!hook.enabled" class="rounded-md bg-rose-500/10 px-2 py-0.5 text-xs font-semibold text-rose-600">
-                {{ hook.disabledAt ? 'switched off after repeated failures' : 'paused' }}
-              </span>
-              <button type="button" class="focus-ring muted rounded-lg px-2 py-1 text-xs font-semibold hover:text-[var(--ink)]" @click="edit(hook)">
-                {{ editing === hook.id ? 'Cancel' : 'Edit' }}
-              </button>
-              <button type="button" class="focus-ring muted rounded-lg px-2 py-1 text-xs font-semibold hover:text-[var(--ink)]" @click="showDeliveries(hook)">
-                {{ openDeliveries === hook.id ? 'Hide attempts' : 'Attempts' }}
-              </button>
-              <button type="button" class="focus-ring muted rounded-lg px-2 py-1 text-xs font-semibold hover:text-[var(--ink)]" @click="setEnabled(hook, !hook.enabled)">
-                {{ hook.enabled ? 'Pause' : 'Resume' }}
-              </button>
-              <button type="button" class="focus-ring rounded-lg px-2 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-500/10" @click="remove(hook)">
-                Remove
-              </button>
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
+              <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-0.5">
+                <span
+                  class="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-semibold"
+                  :class="status(hook).badge"
+                  :title="status(hook).title"
+                >
+                  <span class="size-1.5 rounded-full" :class="status(hook).dot" aria-hidden="true" />
+                  {{ status(hook).label }}
+                </span>
+                <span class="min-w-0 max-w-full truncate font-mono text-xs" :title="hook.url">{{ hook.url }}</span>
+                <span v-if="hook.description" class="muted min-w-0 truncate text-xs">{{ hook.description }}</span>
+              </div>
+              <div class="flex items-center gap-1" role="group" aria-label="Webhook actions">
+                <button
+                  type="button"
+                  class="focus-ring flex h-7 items-center gap-1 rounded-lg border border-[var(--line)] px-2 text-[11px] font-semibold transition hover:bg-[var(--accent-soft)]"
+                  @click="edit(hook)"
+                >
+                  <component :is="editing === hook.id ? X : Pencil" :size="12" aria-hidden="true" />
+                  {{ editing === hook.id ? 'Cancel' : 'Edit' }}
+                </button>
+                <button
+                  type="button"
+                  class="focus-ring flex h-7 items-center gap-1 rounded-lg border border-[var(--line)] px-2 text-[11px] font-semibold transition hover:bg-[var(--accent-soft)]"
+                  :class="openDeliveries === hook.id && 'bg-[var(--accent-soft)]'"
+                  :aria-expanded="openDeliveries === hook.id"
+                  @click="showDeliveries(hook)"
+                >
+                  <History :size="12" aria-hidden="true" /> Attempts
+                </button>
+                <button
+                  type="button"
+                  class="focus-ring flex h-7 items-center gap-1 rounded-lg border border-[var(--line)] px-2 text-[11px] font-semibold transition hover:bg-[var(--accent-soft)]"
+                  @click="setEnabled(hook, !hook.enabled)"
+                >
+                  <component :is="hook.enabled ? Pause : Play" :size="12" aria-hidden="true" />
+                  {{ hook.enabled ? 'Pause' : 'Resume' }}
+                </button>
+                <span class="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
+                <button
+                  type="button"
+                  class="focus-ring flex h-7 items-center gap-1 rounded-lg border border-rose-500/30 px-2 text-[11px] font-semibold text-rose-600 transition hover:bg-rose-500/10"
+                  @click="remove(hook)"
+                >
+                  <Trash2 :size="12" aria-hidden="true" /> Remove
+                </button>
+              </div>
             </div>
             <!-- While editing, the checkboxes below say the same thing. -->
             <p v-if="editing !== hook.id" class="muted mt-1 text-[11px]">
