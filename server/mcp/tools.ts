@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { run, type AnyOperation } from '~~/server/operations'
 import * as ops from '~~/server/operations'
 import type { Actor } from '~~/server/utils/actor'
-import type { BoardSummary, LaneSummary, Ticket, TicketActivityEntry, TicketComment } from '~~/shared/types/domain'
+import type { BoardSummary, LaneSummary, Ticket, TicketActivityEntry, TicketComment, WorkspaceSummary } from '~~/shared/types/domain'
 
 /**
  * The agent-facing surface.
@@ -67,19 +67,27 @@ export function registerTools(server: McpServer, actor: Actor) {
 
   server.registerTool('list_boards', {
     title: 'List boards',
-    description: 'Every board this token can see, with its lanes and how many tickets are on it. Start here — every other tool needs a board or a ticket id.',
+    description: 'Every board this token can see, with its lanes and how many tickets are on it, plus the workspaces the boards are grouped into. Start here — every other tool needs a board or a ticket id.',
     inputSchema: {}
   }, async () => {
-    const { boards } = await call<{ boards: BoardSummary[] }>(ops.boardList, {})
-    return reply(boards.map(board => ({
-      id: board.id,
-      workspaceId: board.workspaceId,
-      name: board.name,
-      description: board.description,
-      yourRole: board.role,
-      ticketCount: board.ticketCount,
-      lanes: board.lanes.map(lane => ({ id: lane.id, name: lane.name, ticketCount: lane.ticketCount, isImport: lane.isImport }))
-    })))
+    const [{ boards }, { workspaces }] = await Promise.all([
+      call<{ boards: BoardSummary[] }>(ops.boardList, {}),
+      call<{ workspaces: WorkspaceSummary[] }>(ops.workspaceList, {})
+    ])
+    return reply({
+      // Name and description up front rather than a bare workspaceId on each board: what a
+      // workspace is for is exactly the context an agent lacks when it picks a board.
+      workspaces: workspaces.map(workspace => ({ id: workspace.id, name: workspace.name, description: workspace.description })),
+      boards: boards.map(board => ({
+        id: board.id,
+        workspaceId: board.workspaceId,
+        name: board.name,
+        description: board.description,
+        yourRole: board.role,
+        ticketCount: board.ticketCount,
+        lanes: board.lanes.map(lane => ({ id: lane.id, name: lane.name, ticketCount: lane.ticketCount, isImport: lane.isImport }))
+      }))
+    })
   })
 
   server.registerTool('board_overview', {
@@ -90,14 +98,16 @@ export function registerTools(server: McpServer, actor: Actor) {
       + 'ones that actually exist.',
     inputSchema: { boardId: z.string().describe('From list_boards.') }
   }, async ({ boardId }) => {
-    const [{ board }, { labels }, { categories }] = await Promise.all([
+    const [{ board }, { labels }, { categories }, { workspaces }] = await Promise.all([
       call<{ board: BoardSummary }>(ops.boardGet, { boardId }),
       call<{ labels: Array<{ name: string; ticketCount: number }> }>(ops.labelList, { boardId }),
-      call<{ categories: Array<{ name: string; color: string; ticketCount: number }> }>(ops.categoryList, { boardId })
+      call<{ categories: Array<{ name: string; color: string; ticketCount: number }> }>(ops.categoryList, { boardId }),
+      call<{ workspaces: WorkspaceSummary[] }>(ops.workspaceList, {})
     ])
+    const home = workspaces.find(workspace => workspace.id === board.workspaceId)
     return reply({
       id: board.id,
-      workspaceId: board.workspaceId,
+      workspace: { id: board.workspaceId, name: home?.name ?? null, description: home?.description ?? null },
       name: board.name,
       description: board.description,
       yourRole: board.role,

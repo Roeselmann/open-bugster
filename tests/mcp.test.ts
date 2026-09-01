@@ -102,17 +102,19 @@ describe('the MCP tool surface', () => {
       })
     })
 
-    it('lists boards with the lane ids every other tool needs', async () => {
-      const boards = await call('list_boards')
+    it('lists boards with the lane ids every other tool needs, and the workspaces around them', async () => {
+      const { boards, workspaces } = await call('list_boards')
       expect(boards[0]).toMatchObject({ id: boardId, name: expect.any(String), yourRole: 'admin' })
       expect(boards[0].lanes.map((lane: { name: string }) => lane.name)).toContain('Backlog')
+      expect(workspaces[0]).toMatchObject({ id: boards[0].workspaceId, name: expect.any(String), description: expect.any(String) })
     })
 
-    it('orients on a board in one call', async () => {
+    it('orients on a board in one call, workspace context included', async () => {
       const overview = await call('board_overview', { boardId })
       expect(Object.keys(overview).sort()).toEqual(
-        ['categories', 'description', 'id', 'labels', 'lanes', 'members', 'name', 'workspaceId', 'yourRole']
+        ['categories', 'description', 'id', 'labels', 'lanes', 'members', 'name', 'workspace', 'yourRole']
       )
+      expect(overview.workspace).toMatchObject({ id: expect.any(String), name: expect.any(String) })
     })
   })
 
