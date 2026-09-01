@@ -10,6 +10,26 @@ type Candidate = { id: string; email: string; firstName: string; lastName: strin
 const canManage = computed(() => props.board.role === 'admin')
 const members = computed(() => props.board.members)
 
+const { user, instanceAdmin } = useAuth()
+
+const boardRoleLabel: Record<BoardRole, string> = { viewer: 'a viewer', editor: 'an editor', admin: 'an administrator' }
+
+/**
+ * Where the viewer's own access actually comes from, spelled out. For an instance
+ * administrator the membership rows below are not the grant, and saying so here is what
+ * keeps their own row — present, demoted, or missing — from looking like a contradiction.
+ */
+const ownAccess = computed(() => {
+  const ownRow = members.value.find(member => member.userId === user.value?.id)
+  if (instanceAdmin.value) {
+    const instanceRole = user.value?.role === 'owner' ? 'the instance owner' : 'an instance administrator'
+    return ownRow
+      ? `You are ${instanceRole}: you hold administrator access on this board regardless of your own row below.`
+      : `You are ${instanceRole}: you hold administrator access on this board without being a member of it.`
+  }
+  return `You are ${boardRoleLabel[props.board.role]} of this board through your membership below.`
+})
+
 const roleOptions = [
   { value: 'viewer', label: 'Viewer' },
   { value: 'editor', label: 'Editor' },
@@ -120,6 +140,7 @@ async function removeMember(member: BoardMember) {
         somebody may work this board through the API or an agent, at their own role and no further.
         Administrators always may.
       </p>
+      <p class="mt-2 text-sm font-medium">{{ ownAccess }}</p>
     </header>
 
     <ul v-if="members.length" class="divide-y divide-[var(--line)]">

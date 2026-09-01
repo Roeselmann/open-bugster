@@ -259,6 +259,25 @@ const roleOptions = [
   { value: 'admin', label: 'Administrator' },
 ]
 
+const { user, instanceAdmin } = useAuth()
+
+/**
+ * Where the viewer's own access actually comes from, spelled out. An instance administrator
+ * holds every workspace without a membership row, and saying so here is what keeps their own
+ * row — present, demoted, or missing — from looking like a contradiction. Anybody else on
+ * this page is here as a workspace administrator, because the middleware admits no less.
+ */
+const ownAccess = computed(() => {
+  if (instanceAdmin.value) {
+    const instanceRole = user.value?.role === 'owner' ? 'the instance owner' : 'an instance administrator'
+    const ownRow = workspace.value?.members.find(member => member.userId === user.value?.id)
+    return ownRow
+      ? `You are ${instanceRole}: you administer this workspace regardless of your own row below.`
+      : `You are ${instanceRole}: you administer this workspace without being a member of it.`
+  }
+  return 'You are an administrator of this workspace through your membership below.'
+})
+
 const candidates = ref<Candidate[]>([])
 const selectedCandidate = ref('')
 const selectedRole = ref<WorkspaceRole>('member')
@@ -325,8 +344,6 @@ async function removeMember(member: WorkspaceMember) {
 }
 
 /* ── other workspaces ───────────────────────────────────────────────────── */
-
-const { instanceAdmin } = useAuth()
 
 // The switcher's own "New workspace" item only exists once there are two — the very first
 // second workspace has to be creatable from here.
@@ -489,6 +506,7 @@ async function deleteWorkspace() {
             workspace grants nothing on its boards — each board keeps its own members. Instance
             administrators always have access.
           </p>
+          <p class="mt-2 text-sm font-medium">{{ ownAccess }}</p>
         </header>
         <ul v-if="workspace.members.length" class="divide-y divide-[var(--line)]">
           <li v-for="member in workspace.members" :key="member.userId" class="flex flex-wrap items-center gap-3 px-5 py-3.5">
