@@ -351,7 +351,10 @@ no bytes ever travel through the model's context.
 ```
 
 An agent's reach is exactly its token's reach, and everything it does is recorded against the
-person or service the token belongs to.
+person or service the token belongs to. Every tool declares its MCP annotations (read-only,
+destructive, open-world), so a cautious client can gate approvals correctly — how the surface
+is shaped, the two permission layers, and what connecting the first real agent taught us is
+written up in [docs/mcp-server.md](docs/mcp-server.md).
 
 ### Webhooks
 
