@@ -14,7 +14,12 @@ import { join } from 'node:path'
  */
 interface RegisteredTool {
   name: string
-  config: { title?: string; description?: string; inputSchema?: Record<string, unknown> }
+  config: {
+    title?: string
+    description?: string
+    annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; openWorldHint?: boolean }
+    inputSchema?: Record<string, unknown>
+  }
   handler: (args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text: string }> }>
 }
 
@@ -78,6 +83,19 @@ describe('the MCP tool surface', () => {
         expect(tool.config.description, tool.name).toBeTruthy()
         expect(tool.config.description!.length, tool.name).toBeGreaterThan(60)
         expect(tool.config.title, tool.name).toBeTruthy()
+      }
+    })
+
+    it('tells clients which tools only read, so no approval gate lands on a lookup', () => {
+      // The spec's default is "assume the worst": a tool without annotations counts as
+      // write-capable and destructive, and cautious clients gate it behind an approval.
+      const reads = ['whoami', 'list_boards', 'board_overview', 'search_tickets', 'get_ticket', 'list_lanes', 'whats_new']
+      for (const tool of tools.values()) {
+        expect(tool.config.annotations?.readOnlyHint, tool.name).toBe(reads.includes(tool.name))
+      }
+      // The URL fetch is the one tool that reaches outside this instance.
+      for (const tool of tools.values()) {
+        expect(tool.config.annotations?.openWorldHint, tool.name).toBe(tool.name === 'add_attachment')
       }
     })
 

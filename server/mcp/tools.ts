@@ -51,6 +51,13 @@ function reply(payload: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }] }
 }
 
+/**
+ * A cautious client gates on these hints, and the spec's default is "assume the worst" — a
+ * tool without them counts as write-capable and destructive, so a read like whats_new would
+ * sit behind the same approval as a delete. Declared on every tool for that reason.
+ */
+const readsOnly = { readOnlyHint: true, openWorldHint: false }
+
 export function registerTools(server: McpServer, actor: Actor) {
   // `AnyOperation` for the same reason the registry uses it: `ZodType` is invariant, so a
   // parameter typed `Operation<unknown>` rejects every concrete operation.
@@ -62,6 +69,7 @@ export function registerTools(server: McpServer, actor: Actor) {
       'The principal this token acts for, the agent label it carries, and what its scopes permit. '
       + 'Worth calling first when a write is unexpectedly refused: a token is a ceiling on what its '
       + 'principal can do, so being denied usually means the scopes are narrower than the person.',
+    annotations: readsOnly,
     inputSchema: {}
   }, async () => reply({
     principalId: actor.principalId,
@@ -75,6 +83,7 @@ export function registerTools(server: McpServer, actor: Actor) {
   server.registerTool('list_boards', {
     title: 'List boards',
     description: 'Every board this token can see, with its lanes and how many tickets are on it, plus the workspaces the boards are grouped into. Start here — every other tool needs a board or a ticket id.',
+    annotations: readsOnly,
     inputSchema: {}
   }, async () => {
     const [{ boards }, { workspaces }] = await Promise.all([
@@ -103,6 +112,7 @@ export function registerTools(server: McpServer, actor: Actor) {
       'One call to orient on a board: its lanes with counts, who is on it, and its labels and '
       + 'categories. Use this before creating or moving anything, so lane and label names are the '
       + 'ones that actually exist.',
+    annotations: readsOnly,
     inputSchema: { boardId: z.string().describe('From list_boards.') }
   }, async ({ boardId }) => {
     const [{ board }, { labels }, { categories }, { workspaces }] = await Promise.all([
@@ -132,6 +142,7 @@ export function registerTools(server: McpServer, actor: Actor) {
       + 'omitted. Text matches the title and description. Every filter is optional and they '
       + 'combine. Returns a short form of each ticket — call get_ticket for the whole one. '
       + 'Search before creating, so an existing report gets a comment instead of a duplicate.',
+    annotations: readsOnly,
     inputSchema: {
       boardId: z.string().optional().describe('Omit to search every board this token can reach.'),
       text: z.string().optional().describe('Matched case-insensitively against title and description.'),
@@ -179,6 +190,7 @@ export function registerTools(server: McpServer, actor: Actor) {
       + 'history. Takes either an id or the number the ticket is known by, so someone asking '
       + 'about "ticket 42" costs one call and no board. The only tool that returns everything, '
       + 'so prefer search_tickets when scanning.',
+    annotations: readsOnly,
     inputSchema: {
       ticketId: z.string().optional().describe('From search_tickets. Give this or ticketNumber.'),
       ticketNumber: z.number().int().positive().optional()
@@ -235,6 +247,7 @@ export function registerTools(server: McpServer, actor: Actor) {
       'File a new ticket. Search first — a duplicate is worse than a comment on the existing one. '
       + 'Labels are created on demand; a lane must already exist, so take its id from board_overview. '
       + 'The ticket is attributed to the principal this token acts for.',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     inputSchema: {
       boardId: z.string(),
       title: z.string().max(160),
@@ -256,6 +269,8 @@ export function registerTools(server: McpServer, actor: Actor) {
   server.registerTool('update_ticket', {
     title: 'Update a ticket',
     description: 'Change fields on an existing ticket. Only the fields given are touched; everything omitted is left alone.',
+    // Destructive in the hint's sense: what a field held before is overwritten, not appended to.
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     inputSchema: {
       ticketId: z.string(),
       title: z.string().max(160).optional(),
@@ -276,6 +291,7 @@ export function registerTools(server: McpServer, actor: Actor) {
   server.registerTool('move_ticket', {
     title: 'Move a ticket',
     description: 'Move a ticket to a lane, and optionally to a position within it. Lane ids come from board_overview.',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: {
       ticketId: z.string(),
       laneId: z.string(),
@@ -289,6 +305,7 @@ export function registerTools(server: McpServer, actor: Actor) {
   server.registerTool('comment_on_ticket', {
     title: 'Comment on a ticket',
     description: 'Add a comment to a ticket’s thread. Prefer this to editing the description when adding a finding, so the ticket keeps its history.',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     inputSchema: { ticketId: z.string(), body: z.string().min(1).max(10000) }
   }, async ({ ticketId, body }) => {
     const { comment } = await call<{ comment: TicketComment }>(ops.commentAdd, { ticketId, body })
@@ -298,6 +315,8 @@ export function registerTools(server: McpServer, actor: Actor) {
   server.registerTool('archive_ticket', {
     title: 'Archive a ticket',
     description: 'Take a ticket off the board. Nothing is deleted — a board admin can restore it — but it stops being visible to everyone else.',
+    // Not destructive by its own account: nothing is lost, and restore_ticket is the way back.
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: { ticketId: z.string() }
   }, async ({ ticketId }) => {
     const { ticket } = await call<{ ticket: Ticket }>(ops.ticketArchive, { ticketId })
@@ -307,6 +326,7 @@ export function registerTools(server: McpServer, actor: Actor) {
   server.registerTool('list_lanes', {
     title: 'List lanes',
     description: 'The lanes of a board with their ids and ticket counts. board_overview returns these too; this is the cheaper call when that is all you need.',
+    annotations: readsOnly,
     inputSchema: { boardId: z.string() }
   }, async ({ boardId }) => {
     const { lanes } = await call<{ lanes: LaneSummary[] }>(ops.laneList, { boardId })
@@ -320,6 +340,7 @@ export function registerTools(server: McpServer, actor: Actor) {
       + 'commented on, (un)assigned, reprioritised, archived and restored. Give `since` to pick '
       + 'up where you left off; it defaults to the last seven days. Edits to a ticket’s title, '
       + 'description or labels leave no trace here — this reads the same history get_ticket shows.',
+    annotations: readsOnly,
     inputSchema: {
       boardId: z.string().describe('From list_boards.'),
       since: z.string().optional().describe('ISO timestamp; defaults to seven days ago.'),
@@ -350,6 +371,8 @@ export function registerTools(server: McpServer, actor: Actor) {
       + 'Telegram file URL, a CI artifact, a log on a paste service — rather than pushing bytes '
       + 'through context. Up to 25 MB; images, PDF, text and Office types. The filename decides '
       + 'the allowed type — give one when the URL does not already end in it.',
+    // The one tool that reaches outside this instance: it fetches the caller's URL.
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     inputSchema: {
       ticketId: z.string(),
       url: z.string().describe('The http(s) URL to download. Fetched once, without following redirects.'),
@@ -368,6 +391,7 @@ export function registerTools(server: McpServer, actor: Actor) {
       'Put an archived ticket back on the board — the undo of archive_ticket. Restoring reaches '
       + 'into the archive, so it takes a board administrator. The ticket returns to the lane it '
       + 'was archived from, or to the board’s default lane when that one is gone.',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: { ticketId: z.string() }
   }, async ({ ticketId }) => {
     const { ticket } = await call<{ ticket: Ticket }>(ops.ticketRestore, { ticketId })
