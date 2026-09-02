@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { run, type AnyOperation } from '~~/server/operations'
 import * as ops from '~~/server/operations'
 import type { Actor } from '~~/server/utils/actor'
-import type { BoardSummary, LaneSummary, Ticket, TicketActivityEntry, TicketComment, WorkspaceSummary } from '~~/shared/types/domain'
+import type { BoardSummary, LaneSummary, Ticket, TicketActivityEntry, TicketComment, TicketTypeSummary, WorkspaceSummary } from '~~/shared/types/domain'
 
 /**
  * The agent-facing surface.
@@ -29,6 +29,7 @@ function slim(ticket: Ticket) {
     assignee: nameOf(ticket.assignee),
     labels: ticket.labels.map(label => label.name),
     category: ticket.category?.name ?? null,
+    type: ticket.type?.name ?? null,
     dueDate: ticket.dueDate,
     commentCount: ticket.commentCount
   }
@@ -109,16 +110,17 @@ export function registerTools(server: McpServer, actor: Actor) {
   server.registerTool('board_overview', {
     title: 'Board overview',
     description:
-      'One call to orient on a board: its lanes with counts, who is on it, and its labels and '
-      + 'categories. Use this before creating or moving anything, so lane and label names are the '
-      + 'ones that actually exist.',
+      'One call to orient on a board: its lanes with counts, who is on it, its labels and '
+      + 'categories, and the ticket types of its workspace. Use this before creating or moving '
+      + 'anything, so lane and label names and type ids are the ones that actually exist.',
     annotations: readsOnly,
     inputSchema: { boardId: z.string().describe('From list_boards.') }
   }, async ({ boardId }) => {
-    const [{ board }, { labels }, { categories }, { workspaces }] = await Promise.all([
+    const [{ board }, { labels }, { categories }, { types }, { workspaces }] = await Promise.all([
       call<{ board: BoardSummary }>(ops.boardGet, { boardId }),
       call<{ labels: Array<{ name: string; ticketCount: number }> }>(ops.labelList, { boardId }),
       call<{ categories: Array<{ name: string; color: string; ticketCount: number }> }>(ops.categoryList, { boardId }),
+      call<{ types: TicketTypeSummary[] }>(ops.ticketTypeList, { boardId }),
       call<{ workspaces: WorkspaceSummary[] }>(ops.workspaceList, {})
     ])
     const home = workspaces.find(workspace => workspace.id === board.workspaceId)
@@ -131,7 +133,8 @@ export function registerTools(server: McpServer, actor: Actor) {
       lanes: board.lanes.map(lane => ({ id: lane.id, name: lane.name, ticketCount: lane.ticketCount, isImport: lane.isImport })),
       members: board.members.map(member => ({ id: member.userId, name: `${member.firstName} ${member.lastName}`.trim(), role: member.role })),
       labels: labels.map(label => label.name),
-      categories: categories.map(category => category.name)
+      categories: categories.map(category => category.name),
+      ticketTypes: types.map(type => ({ id: type.id, name: type.name }))
     })
   })
 
@@ -258,6 +261,7 @@ export function registerTools(server: McpServer, actor: Actor) {
       dueDate: z.string().optional().describe('YYYY-MM-DD.'),
       labels: z.array(z.string()).max(12).optional(),
       categoryName: z.string().optional(),
+      typeId: z.string().optional().describe('A ticket type id from board_overview.ticketTypes. Omit for an untyped ticket.'),
       todos: z.array(z.object({ text: z.string().min(1).max(500), completed: z.boolean().default(false) })).max(100).optional()
         .describe('The ticket’s initial to-do list, in order.')
     }
@@ -280,6 +284,7 @@ export function registerTools(server: McpServer, actor: Actor) {
       dueDate: z.string().nullable().optional(),
       labels: z.array(z.string()).max(12).optional(),
       categoryName: z.string().nullable().optional(),
+      typeId: z.string().nullable().optional().describe('A ticket type id from board_overview.ticketTypes; null removes the type.'),
       todos: z.array(z.object({ text: z.string().min(1).max(500), completed: z.boolean().default(false) })).max(100).optional()
         .describe('Replaces the whole to-do list — read the ticket first and send every item back, changed and unchanged alike. Omit the field to leave the list alone.')
     }

@@ -18,7 +18,7 @@ search is `search_tickets` without a `boardId` rather than a second search tool.
 |---|---|---|
 | `whoami` | The principal, agent label, and scopes behind this token | read-only |
 | `list_boards` | Boards with lanes and counts, plus the workspaces around them | read-only |
-| `board_overview` | One board: lanes, members, labels, categories, its workspace | read-only |
+| `board_overview` | One board: lanes, members, labels, categories, ticket types, its workspace | read-only |
 | `search_tickets` | Filtered slim listing; instance-wide when `boardId` is omitted | read-only |
 | `get_ticket` | Everything about one ticket, by id or ticket number | read-only |
 | `list_lanes` | Just the lanes, when the overview would be overkill | read-only |

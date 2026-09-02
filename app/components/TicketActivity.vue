@@ -28,6 +28,7 @@ const sentences: Record<ActivityKind, (entry: TicketActivityEntry) => string> = 
   author: entry => (entry.payload.to ? `attributed it to ${personName(entry, 'to')}` : 'removed the attribution'),
   priority: entry => `changed the priority from ${entry.payload.from} to ${entry.payload.to}`,
   due_date: entry => (entry.payload.to ? `set the due date to ${entry.payload.to}` : 'removed the due date'),
+  type: entry => (entry.payload.to ? `set the type to ${entry.payload.to}` : 'removed the type'),
   archived: () => 'archived it',
   restored: entry => `restored it to ${entry.payload.lane || 'the board'}`,
   commented: () => 'wrote a comment',

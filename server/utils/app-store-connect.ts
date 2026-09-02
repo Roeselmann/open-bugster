@@ -113,6 +113,7 @@ async function importType(params: {
   cutoff: Date
   limit: number
   autoAuthor: boolean
+  importTypeId: string | null
   attachmentsPath: string
 }) {
   const resource = params.type === 'screenshot' ? 'betaFeedbackScreenshotSubmissions' : 'betaFeedbackCrashSubmissions'
@@ -158,6 +159,7 @@ async function importType(params: {
           comment,
           testerEmail: text(attributes.email),
           autoAuthor: params.autoAuthor,
+          typeId: params.importTypeId,
           deviceModel,
           osVersion: text(attributes.osVersion),
           locale: text(attributes.locale),
@@ -199,6 +201,7 @@ export async function syncTestFlight(config: {
   privateKeyPem: string | null
   syncLimit: number
   autoAuthor: boolean
+  importTypeId: string | null
   attachmentsPath: string
 }) {
   if (syncingBoards.has(config.boardId)) throw new AppleApiError(409, 'A TestFlight sync is already in progress for this board.')
@@ -224,6 +227,7 @@ export async function syncTestFlight(config: {
         cutoff,
         limit: config.syncLimit,
         autoAuthor: config.autoAuthor,
+        importTypeId: config.importTypeId,
         attachmentsPath: config.attachmentsPath
       })
       imported += result.imported

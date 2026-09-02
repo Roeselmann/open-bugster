@@ -11,7 +11,7 @@ import {
   CategoryNameTakenError, LaneDeleteError, boardMembers, boardRoleFor, countBoardAdmins, countBoards,
   createBoard, createComment, createLane, defaultWorkspaceId, deleteBoard, deleteCategory, deleteComment, deleteLane, duplicateBoard, findBoard, findBoardSummary,
   boardSyncCredentials, clearBoardPrivateKey, findCategory, findLane, importLaneFor, latestSyncRun, listBoards, listCategories, listComments, listLabels, listLanes,
-  listUsers, moveBoardToWorkspace, personById, removeBoardMember, reorderLanes, setBoardMember, setBoardPrivateKey, updateBoard, updateCategory, updateComment, updateLane
+  listUsers, moveBoardToWorkspace, personById, removeBoardMember, reorderLanes, setBoardMember, setBoardPrivateKey, ticketTypeBelongsToBoard, updateBoard, updateCategory, updateComment, updateLane
 } from '../utils/db'
 import {
   boardCreateSchema, boardMemberSchema, boardUpdateSchema, categoryUpdateSchema, commentSaveSchema, connectionTestSchema,
@@ -73,6 +73,9 @@ export const boardUpdate = defineOperation({
   audit: { targetType: 'board', targetId: input => input.boardId, changes: input => ({ fields: Object.keys(input).filter(key => key !== 'boardId').sort() }) },
   run: (ctx, input) => {
     const { boardId, ...fields } = input
+    if (fields.importTypeId && !ticketTypeBelongsToBoard(fields.importTypeId, boardId)) {
+      throw createError({ statusCode: 422, statusMessage: 'A ticket type must belong to this board’s workspace.' })
+    }
     return { board: orNotFound(updateBoard(boardId, fields, boardViewer(ctx.account)), 'Board') }
   }
 })
@@ -168,6 +171,7 @@ export const importRun = defineOperation({
           privateKeyPem: credentials.privateKeyPem,
           syncLimit: credentials.syncLimit,
           autoAuthor: credentials.autoAuthor,
+          importTypeId: credentials.importTypeId,
           attachmentsPath: getServerConfig().attachmentsPath
         })
       }

@@ -133,9 +133,11 @@ describe('the MCP tool surface', () => {
     it('orients on a board in one call, workspace context included', async () => {
       const overview = await call('board_overview', { boardId })
       expect(Object.keys(overview).sort()).toEqual(
-        ['categories', 'description', 'id', 'labels', 'lanes', 'members', 'name', 'workspace', 'yourRole']
+        ['categories', 'description', 'id', 'labels', 'lanes', 'members', 'name', 'ticketTypes', 'workspace', 'yourRole']
       )
       expect(overview.workspace).toMatchObject({ id: expect.any(String), name: expect.any(String) })
+      // Ids, not just names: a type is chosen by id when a ticket is filed.
+      expect(overview.ticketTypes).toEqual(expect.arrayContaining([{ id: expect.any(String), name: 'Email' }]))
     })
   })
 
@@ -150,12 +152,22 @@ describe('the MCP tool surface', () => {
       ticketId = created.id
     })
 
+    it('files a ticket with a type from the overview, and can take it off again', async () => {
+      const overview = await call('board_overview', { boardId })
+      const email = overview.ticketTypes.find((type: { name: string }) => type.name === 'Email')
+      const created = await call('create_ticket', { boardId, laneId, title: 'Newsletter draft', typeId: email.id })
+      expect(created.type).toBe('Email')
+      const cleared = await call('update_ticket', { ticketId: created.id, typeId: null })
+      expect(cleared.type).toBeNull()
+      await call('archive_ticket', { ticketId: created.id })
+    })
+
     it('keeps a searched ticket short', async () => {
       const found = await call('search_tickets', { boardId, text: 'crash' })
       expect(found.total).toBe(1)
       const entry = found.tickets[0]
       expect(Object.keys(entry).sort()).toEqual(
-        ['assignee', 'boardId', 'category', 'commentCount', 'dueDate', 'id', 'labels', 'laneId', 'number', 'priority', 'title']
+        ['assignee', 'boardId', 'category', 'commentCount', 'dueDate', 'id', 'labels', 'laneId', 'number', 'priority', 'title', 'type']
       )
       // The three fields that make a list expensive are exactly the ones left out.
       expect(entry).not.toHaveProperty('description')

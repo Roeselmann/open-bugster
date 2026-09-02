@@ -10,22 +10,26 @@ interface FilterOption {
 defineProps<{
   labelOptions: FilterOption[]
   categoryOptions: FilterOption[]
+  typeOptions: FilterOption[]
   assigneeOptions: FilterOption[]
 }>()
 
 const labels = defineModel<string[]>('labels', { required: true })
 const category = defineModel<string>('category', { required: true })
+const type = defineModel<string>('type', { required: true })
 const assignee = defineModel<string>('assignee', { required: true })
 
 const activeCount = computed(() =>
   labels.value.length
   + (category.value !== 'all' ? 1 : 0)
+  + (type.value !== 'all' ? 1 : 0)
   + (assignee.value !== 'all' ? 1 : 0),
 )
 
 function clear() {
   labels.value = []
   category.value = 'all'
+  type.value = 'all'
   assignee.value = 'all'
 }
 </script>
@@ -68,6 +72,10 @@ function clear() {
           <div>
             <label class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Category</label>
             <UiSelect v-model="category" :options="categoryOptions" aria-label="Filter by category" />
+          </div>
+          <div>
+            <label class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Type</label>
+            <UiSelect v-model="type" :options="typeOptions" aria-label="Filter by type" />
           </div>
           <div>
             <label class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Assignee</label>

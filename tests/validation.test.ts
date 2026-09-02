@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { boardUpdateSchema, connectionTestSchema, importedTicketUpdateSchema, ticketCreateSchema, ticketMoveSchema, ticketUpdateSchema } from '../server/utils/validation'
+import { boardUpdateSchema, connectionTestSchema, importedTicketUpdateSchema, ticketCreateSchema, ticketMoveSchema, ticketTypeCreateSchema, ticketUpdateSchema } from '../server/utils/validation'
 
 describe('ticket validation', () => {
   it('normalizes a valid manual ticket', () => {
@@ -19,6 +19,13 @@ describe('ticket validation', () => {
 
   it('requires a board when creating a ticket', () => {
     expect(ticketCreateSchema.safeParse({ title: 'Ticket' }).success).toBe(false)
+  })
+
+  it('takes a type by id, or none at all', () => {
+    expect(ticketCreateSchema.parse({ boardId: 'board-1', title: 'Ticket' })).not.toHaveProperty('typeId')
+    expect(ticketCreateSchema.parse({ boardId: 'board-1', title: 'Ticket', typeId: null }).typeId).toBeNull()
+    expect(ticketCreateSchema.parse({ boardId: 'board-1', title: 'Ticket', typeId: ' type-1 ' }).typeId).toBe('type-1')
+    expect(ticketUpdateSchema.parse({ typeId: null })).toEqual({ typeId: null })
   })
 
   it('normalizes optional category names', () => {
@@ -82,6 +89,13 @@ describe('ticket validation', () => {
     expect(boardUpdateSchema.safeParse({ autoAuthor: 'yes' }).success).toBe(false)
   })
 
+  it('takes the import type by id, or clears it with null', () => {
+    expect(boardUpdateSchema.parse({ importTypeId: ' type-1 ' })).toEqual({ importTypeId: 'type-1' })
+    expect(boardUpdateSchema.parse({ importTypeId: null })).toEqual({ importTypeId: null })
+    expect(boardUpdateSchema.parse({ name: 'Radio app' })).not.toHaveProperty('importTypeId')
+    expect(boardUpdateSchema.safeParse({ importTypeId: '' }).success).toBe(false)
+  })
+
   it('takes the credentials of a connection test from the request', () => {
     expect(connectionTestSchema.parse({ issuerId: '  issuer  ', keyId: 'KEY123', appId: '42' }))
       .toEqual({ issuerId: 'issuer', keyId: 'KEY123', appId: '42' })
@@ -90,5 +104,33 @@ describe('ticket validation', () => {
     // The private key is never accepted from the client.
     expect(connectionTestSchema.parse({ privateKey: 'secret' })).toEqual({})
     expect(connectionTestSchema.safeParse({ appId: 'x'.repeat(121) }).success).toBe(false)
+  })
+})
+
+describe('ticket type validation', () => {
+  const png = `data:image/png;base64,${Buffer.from('not really a png').toString('base64')}`
+
+  it('defaults a new type to a neutral lucide ticket', () => {
+    expect(ticketTypeCreateSchema.parse({ name: '  Email ' })).toEqual({ name: 'Email', color: 'neutral', icon: { kind: 'lucide', name: 'Ticket' } })
+  })
+
+  it('accepts a curated lucide icon or a small PNG, and nothing else', () => {
+    expect(ticketTypeCreateSchema.safeParse({ name: 'Email', icon: { kind: 'lucide', name: 'Mail' } }).success).toBe(true)
+    expect(ticketTypeCreateSchema.safeParse({ name: 'Email', icon: { kind: 'lucide', name: 'NotAnIcon' } }).success).toBe(false)
+    expect(ticketTypeCreateSchema.safeParse({ name: 'Email', icon: { kind: 'image', dataUrl: png } }).success).toBe(true)
+    expect(ticketTypeCreateSchema.safeParse({ name: 'Email', icon: { kind: 'image', dataUrl: png.replace('image/png', 'image/jpeg') } }).success).toBe(false)
+    expect(ticketTypeCreateSchema.safeParse({ name: 'Email', icon: { kind: 'image', dataUrl: 'https://example.com/icon.png' } }).success).toBe(false)
+  })
+
+  it('caps an uploaded icon at 64 KB', () => {
+    const huge = `data:image/png;base64,${'A'.repeat(64 * 1024)}`
+    expect(ticketTypeCreateSchema.safeParse({ name: 'Email', icon: { kind: 'image', dataUrl: huge } }).success).toBe(false)
+  })
+
+  it('bounds the name and the colour', () => {
+    expect(ticketTypeCreateSchema.safeParse({ name: '   ' }).success).toBe(false)
+    expect(ticketTypeCreateSchema.safeParse({ name: 'x'.repeat(31) }).success).toBe(false)
+    expect(ticketTypeCreateSchema.safeParse({ name: 'Email', color: 'chartreuse' }).success).toBe(false)
+    expect(ticketTypeCreateSchema.parse({ name: 'Plain', color: 'none' }).color).toBe('none')
   })
 })

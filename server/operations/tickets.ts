@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { boardMemberIds } from '../utils/access'
 import {
   archiveTicket, createTicket, listActivity, listBoardActivity, listTickets, listTicketsPage,
-  moveTicket, personById, restoreTicket, ticketIdByNumber, updateTicket
+  moveTicket, personById, restoreTicket, ticketIdByNumber, ticketTypeBelongsToBoard, updateTicket
 } from '../utils/db'
 import { importedTicketUpdateSchema, ticketCreateSchema, ticketMoveSchema, ticketUpdateSchema } from '../utils/validation'
 import { createdId, defineOperation } from './types'
@@ -101,12 +101,13 @@ export const ticketCreate = defineOperation({
   summary: 'File a new ticket',
   input: ticketCreateSchema,
   requires: { scope: 'board', role: 'editor', boardId: input => input.boardId },
-  audit: { targetType: 'ticket', targetId: createdId('ticket'), changes: ['title', 'priority', 'assigneeId', 'laneId'] },
+  audit: { targetType: 'ticket', targetId: createdId('ticket'), changes: ['title', 'priority', 'assigneeId', 'laneId', 'typeId'] },
   run: (ctx, input) => {
     const { boardId, ...rest } = input
     if (rest.assigneeId && !boardMemberIds(boardId).has(rest.assigneeId)) {
       throw createError({ statusCode: 422, statusMessage: 'A ticket can only be assigned to a member of this board.' })
     }
+    if (rest.typeId && !ticketTypeBelongsToBoard(rest.typeId, boardId)) throw foreignType()
     // The author answers for the ticket, the actor for the write. Identical from the browser,
     // and different the moment a service identity files on somebody's behalf.
     const ticket = createTicket(boardId, rest, personById(ctx.actor.principalId), ctx.actor)
@@ -139,6 +140,7 @@ export const ticketUpdate = defineOperation({
     if (fields.assigneeId && fields.assigneeId !== ticket.assignee?.id && !members.has(fields.assigneeId)) {
       throw createError({ statusCode: 422, statusMessage: 'A ticket can only be assigned to a member of this board.' })
     }
+    if (fields.typeId && fields.typeId !== ticket.type?.id && !ticketTypeBelongsToBoard(fields.typeId, ticket.boardId)) throw foreignType()
     if ('authorId' in fields && (fields.authorId ?? null) !== (ticket.author?.id ?? null)) {
       // Attribution is a claim about who reported something, so it stays with the board's
       // admins rather than anyone who may edit the ticket.
@@ -178,6 +180,11 @@ export const ticketRestore = defineOperation({
   audit: { targetType: 'ticket', targetId: input => input.ticketId },
   run: (ctx, input) => ({ ticket: orNotFound(restoreTicket(input.ticketId, ctx.actor), 'Ticket') })
 })
+
+/** Types are a workspace's vocabulary; a ticket only speaks the one its board is in. */
+function foreignType() {
+  return createError({ statusCode: 422, statusMessage: 'A ticket type must belong to this board’s workspace.' })
+}
 
 function omit<T extends Record<string, unknown>>(value: T, key: string): Record<string, unknown> {
   const { [key]: _dropped, ...rest } = value

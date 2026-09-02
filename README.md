@@ -26,8 +26,10 @@ Open-Bugster is a lightweight, self-hosted Kanban board that is meant to be driv
   A comment thread per ticket instead of one shared note, with a history of moves, assignments and priority changes.
 - **Organize with categories and labels**  
   One colored category per ticket, plus as many labels as needed. Labels are suggested while typing and created on the fly.
+- **Say what kind of thing a ticket is**  
+  Ticket types — "Email", "Social Post", "Todo", "Idea", or whatever a workspace defines — each with a colour that tints the card and an icon in its corner, picked from a built-in set or uploaded as an image. Types belong to the workspace, so every board in it shares them; a ticket may also have none.
 - **Filter and search**  
-  Filter by labels, category, or assignee—including everything still unassigned—and search titles, descriptions, to-dos, authors, assignees, build numbers, and ticket numbers.
+  Filter by labels, category, type, or assignee—including everything still unassigned or untyped—and search titles, descriptions, to-dos, authors, assignees, build numbers, and ticket numbers.
 - **Attach files directly**  
   Add screenshots, documents, and other files to the relevant ticket.
 - **Manage to-do lists**  

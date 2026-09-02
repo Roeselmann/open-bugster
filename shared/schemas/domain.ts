@@ -1,12 +1,13 @@
 import { z } from 'zod'
 import {
   activityChannels, activityKinds, boardRoles, categoryColors, ticketPriorities, ticketSources,
-  userRoles, userStatuses, workspaceRoles
+  ticketTypeColors, ticketTypeIconNames, userRoles, userStatuses, workspaceRoles
 } from '../types/domain'
 import type {
   AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardSummary, Category,
   CategorySummary, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket,
-  TicketActivityEntry, TicketComment, TicketTodo, Workspace, WorkspaceMember, WorkspaceSummary
+  TicketActivityEntry, TicketComment, TicketTodo, TicketType, TicketTypeIcon, TicketTypeSummary,
+  Workspace, WorkspaceMember, WorkspaceSummary
 } from '../types/domain'
 
 /**
@@ -38,6 +39,22 @@ export const categorySchema = z.object({
   color: z.enum(categoryColors)
 })
 export const categorySummarySchema = categorySchema.extend({ ticketCount: z.number().int() })
+
+export const ticketTypeIconSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('lucide'), name: z.enum(ticketTypeIconNames) }),
+  z.object({ kind: z.literal('image'), dataUrl: z.string().describe('A small square PNG, inline.') })
+]).describe('A lucide icon by name, or an uploaded square image.')
+
+export const ticketTypeSchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  name: z.string(),
+  color: z.enum(ticketTypeColors).describe('Doubles as the card background on the board; `none` leaves the card as it is.'),
+  icon: ticketTypeIconSchema,
+  position: z.number().int(),
+  createdAt: z.string()
+}).describe('What kind of thing a ticket is. Owned by the workspace; a ticket may have none.')
+export const ticketTypeSummarySchema = ticketTypeSchema.extend({ ticketCount: z.number().int() })
 
 export const attachmentSchema = z.object({
   id: z.string(),
@@ -88,6 +105,7 @@ export const ticketSchema = z.object({
   assignee: personSchema.nullable(),
   commentCount: z.number().int(),
   category: categorySchema.nullable(),
+  type: ticketTypeSchema.nullable(),
   labels: z.array(labelSchema),
   feedback: appleFeedbackSchema.nullable(),
   attachments: z.array(attachmentSchema),
@@ -180,6 +198,7 @@ export const boardSchema = z.object({
   position: z.number().int(),
   syncLimit: z.number().int(),
   autoAuthor: z.boolean(),
+  importTypeId: z.string().nullable().describe('The ticket type every TestFlight import lands with; null leaves them untyped.'),
   createdAt: z.string()
 })
 
@@ -233,6 +252,9 @@ const named: Record<string, z.ZodType> = {
   LabelSummary: labelSummarySchema,
   Category: categorySchema,
   CategorySummary: categorySummarySchema,
+  TicketTypeIcon: ticketTypeIconSchema,
+  TicketType: ticketTypeSchema,
+  TicketTypeSummary: ticketTypeSummarySchema,
   Attachment: attachmentSchema,
   TicketTodo: ticketTodoSchema,
   AppleFeedback: appleFeedbackSchema,
@@ -274,6 +296,9 @@ export type SchemasMatchDomain = [
   Expect<Equal<z.infer<typeof labelSummarySchema>, LabelSummary>>,
   Expect<Equal<z.infer<typeof categorySchema>, Category>>,
   Expect<Equal<z.infer<typeof categorySummarySchema>, CategorySummary>>,
+  Expect<Equal<z.infer<typeof ticketTypeIconSchema>, TicketTypeIcon>>,
+  Expect<Equal<z.infer<typeof ticketTypeSchema>, TicketType>>,
+  Expect<Equal<z.infer<typeof ticketTypeSummarySchema>, TicketTypeSummary>>,
   Expect<Equal<z.infer<typeof attachmentSchema>, Attachment>>,
   Expect<Equal<z.infer<typeof ticketTodoSchema>, TicketTodo>>,
   Expect<Equal<z.infer<typeof appleFeedbackSchema>, AppleFeedback>>,

@@ -4,7 +4,7 @@ import type { AnyOperation } from '~~/server/operations'
 import {
   boardSummarySchema, categorySummarySchema, laneSummarySchema, labelSummarySchema,
   attachmentSchema, boardMemberSchema, personSchema, syncRunSchema, ticketActivitySchema,
-  ticketCommentSchema, ticketSchema, workspaceSummarySchema
+  ticketCommentSchema, ticketSchema, ticketTypeSummarySchema, workspaceSummarySchema
 } from '~~/shared/schemas/domain'
 
 export interface V1Route {
@@ -41,6 +41,8 @@ export const v1Routes: readonly V1Route[] = [
   // Read-only here for now: managing workspaces stays with the UI, for the same reason user
   // administration does. A token learns which workspace each board belongs to and no more.
   { method: 'GET', path: '/workspaces', operation: ops.workspaceList, response: z.object({ workspaces: z.array(workspaceSummarySchema) }) },
+  // The vocabulary a ticket's `typeId` draws from. Managing the types stays with the UI too.
+  { method: 'GET', path: '/workspaces/{workspaceId}/ticket-types', operation: ops.ticketTypeList, response: z.object({ types: z.array(ticketTypeSummarySchema) }) },
 
   // Boards
   { method: 'GET', path: '/boards', operation: ops.boardList, response: z.object({ boards: z.array(boardSummarySchema) }) },

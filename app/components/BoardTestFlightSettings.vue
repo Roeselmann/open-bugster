@@ -1,11 +1,19 @@
 <script setup lang="ts">
-import { CircleCheck, CircleX, KeyRound, LoaderCircle, PlugZap, Save, Trash2, Upload } from '@lucide/vue'
-import type { BoardSummary, TestFlightConnection } from '~~/shared/types/domain'
+import { CircleCheck, CircleX, KeyRound, LoaderCircle, PlugZap, Save, Shapes, Trash2, Upload } from '@lucide/vue'
+import type { BoardSummary, TestFlightConnection, TicketTypeSummary } from '~~/shared/types/domain'
 
 const props = defineProps<{ board: BoardSummary }>()
 const emit = defineEmits<{ changed: []; notify: [type: 'success' | 'error', text: string] }>()
 
-const form = reactive({ issuerId: '', keyId: '', appId: '', syncLimit: 100, autoAuthor: true })
+// reka-ui refuses an empty select value, so "no type" needs a sentinel no uuid can collide with.
+const NO_TYPE = 'none'
+const form = reactive({ issuerId: '', keyId: '', appId: '', syncLimit: 100, autoAuthor: true, importTypeId: NO_TYPE })
+
+const boardId = computed(() => props.board.id)
+const { data: typeData } = await useFetch<{ types: TicketTypeSummary[] }>('/api/ticket-types', { query: { boardId }, watch: [boardId] })
+const ticketTypes = computed(() => typeData.value?.types || [])
+const typeOptions = computed(() => [{ value: NO_TYPE, label: 'No type' }, ...ticketTypes.value.map(type => ({ value: type.id, label: type.name }))])
+const selectedType = computed(() => ticketTypes.value.find(type => type.id === form.importTypeId) || null)
 const saving = ref(false)
 const uploading = ref(false)
 const removingKey = ref(false)
@@ -19,6 +27,7 @@ watchEffect(() => {
   form.appId = props.board.credentials.appId
   form.syncLimit = props.board.syncLimit
   form.autoAuthor = props.board.autoAuthor
+  form.importTypeId = props.board.importTypeId || NO_TYPE
 })
 
 // A stale "connected" badge next to edited credentials would be misleading.
@@ -38,6 +47,7 @@ const unsaved = computed(() => {
     || form.appId.trim() !== saved.appId
     || Number(form.syncLimit) !== props.board.syncLimit
     || form.autoAuthor !== props.board.autoAuthor
+    || (form.importTypeId === NO_TYPE ? null : form.importTypeId) !== props.board.importTypeId
 })
 
 const dateFormatter = new Intl.DateTimeFormat('en', { day: '2-digit', month: 'short', year: 'numeric' })
@@ -67,7 +77,10 @@ async function testConnection() {
 async function save() {
   saving.value = true
   try {
-    await $fetch(`/api/boards/${props.board.id}`, { method: 'PATCH', body: { ...form, syncLimit: Number(form.syncLimit) } })
+    await $fetch(`/api/boards/${props.board.id}`, {
+      method: 'PATCH',
+      body: { ...form, syncLimit: Number(form.syncLimit), importTypeId: form.importTypeId === NO_TYPE ? null : form.importTypeId },
+    })
     emit('changed')
     emit('notify', 'success', 'TestFlight settings saved.')
   } catch (error) {
@@ -185,6 +198,24 @@ async function removeKey() {
           </span>
         </span>
       </label>
+
+      <div class="block max-w-xs">
+        <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Shapes :size="14" /> Type for imported tickets</span>
+        <div class="flex items-center gap-2">
+          <TicketTypeBadge v-if="selectedType" :type="selectedType" untitled />
+          <div class="min-w-0 flex-1">
+            <UiSelect
+              :model-value="form.importTypeId"
+              :options="typeOptions"
+              aria-label="Type for imported tickets"
+              @update:model-value="form.importTypeId = $event"
+            />
+          </div>
+        </div>
+        <span class="muted mt-2 block text-[11px] leading-relaxed">
+          Every screenshot and crash the sync brings in gets this type. Applies to future imports only; tickets already on the board keep theirs. If the type is deleted later, imports simply arrive untyped.
+        </span>
+      </div>
 
       <div class="flex flex-wrap items-center gap-3">
         <p v-if="board.credentials.complete" class="flex items-center gap-1.5 text-sm font-semibold text-emerald-600">

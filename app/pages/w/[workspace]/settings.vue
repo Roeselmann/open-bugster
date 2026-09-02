@@ -519,6 +519,8 @@ async function deleteWorkspace() {
         </form>
       </section>
 
+      <WorkspaceTicketTypeSettings :workspace-id="workspaceId" @notify="notify" />
+
       <section class="surface rounded-2xl">
         <header class="border-b border-[var(--line)] px-5 py-4">
           <p class="muted text-[10px] font-bold uppercase tracking-[.14em]">Access</p>

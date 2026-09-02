@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, Calendar, Check, Download, FileText, GripVertical, Image, ListTodo, MessageSquare, Paperclip, Plus, Save, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { Archive, Calendar, Check, Download, FileText, GripVertical, Image, ListTodo, MessageSquare, Paperclip, Plus, Save, Shapes, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogClose,
   DialogContent,
@@ -10,13 +10,13 @@ import {
   DialogTitle,
   VisuallyHidden,
 } from 'reka-ui'
-import type { Attachment, BoardMember, Category, LabelSummary, Lane, Ticket, TicketPriority, TicketTodoInput } from '~~/shared/types/domain'
+import type { Attachment, BoardMember, Category, LabelSummary, Lane, Ticket, TicketPriority, TicketTodoInput, TicketType } from '~~/shared/types/domain'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 
-const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; saving?: boolean; deletingAttachmentId?: string | null }>(), { canEdit: true })
+const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; deletingAttachmentId?: string | null }>(), { canEdit: true })
 const emit = defineEmits<{
   close: []
-  save: [payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; todos: TicketTodoInput[]; attachments: File[] }]
+  save: [payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; typeId?: string | null; todos: TicketTodoInput[]; attachments: File[] }]
   commented: []
   notify: [type: 'success' | 'error', text: string]
   move: [ticket: Ticket, laneId: string]
@@ -24,7 +24,7 @@ const emit = defineEmits<{
   removeAttachment: [attachment: Attachment]
 }>()
 
-const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '' })
+const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '', typeId: 'none' })
 interface EditableTodo extends TicketTodoInput { key: string }
 const todos = ref<EditableTodo[]>([])
 let todoSequence = 0
@@ -80,6 +80,10 @@ const imageAttachments = computed(() => props.ticket?.attachments.filter(attachm
 const laneOptions = computed(() => props.lanes.map(lane => ({ value: lane.id, label: lane.name })))
 const priorityOptions = Object.entries(PRIORITY_LABELS).map(([value, label]) => ({ value, label }))
 const categoryOptions = computed(() => (props.categories || []).map(category => category.name))
+// Same sentinel trick as `UNASSIGNED`: "no type" needs a value the select can hold.
+const NO_TYPE = 'none'
+const typeOptions = computed(() => [{ value: NO_TYPE, label: 'No type' }, ...(props.ticketTypes || []).map(type => ({ value: type.id, label: type.name }))])
+const selectedType = computed(() => (props.ticketTypes || []).find(type => type.id === form.typeId) || null)
 // The picker works on names here: an unknown one is created when the ticket is saved.
 const labelOptions = computed(() => (props.labels || []).map(label => ({ value: label.name, label: label.name })))
 
@@ -96,6 +100,7 @@ watch(() => props.ticket, (ticket, previous) => {
   commentsOpen.value = (ticket?.commentCount || 0) > 0
   form.labels = ticket?.labels.map(label => label.name) || []
   form.categoryName = ticket?.category?.name || ''
+  form.typeId = ticket?.type?.id || NO_TYPE
   todos.value = (ticket?.todos || []).map(todo => ({ key: `todo-${++todoSequence}`, text: todo.text, completed: todo.completed }))
 }, { immediate: true })
 
@@ -108,7 +113,7 @@ function submit() {
   const manualFields = isManual.value ? { buildNumber: form.buildNumber.trim() || null } : {}
   // Sent only by somebody allowed to set it — the API rejects it from anyone else.
   const authorFields = canAttribute.value ? { authorId: form.authorId === UNASSIGNED ? null : form.authorId } : {}
-  emit('save', { ...shared, ...manualFields, ...authorFields, title: form.title.trim(), description: form.description, priority: form.priority, dueDate: form.dueDate || null, labels: [...form.labels], categoryName: form.categoryName.trim() || null })
+  emit('save', { ...shared, ...manualFields, ...authorFields, title: form.title.trim(), description: form.description, priority: form.priority, dueDate: form.dueDate || null, labels: [...form.labels], categoryName: form.categoryName.trim() || null, typeId: form.typeId === NO_TYPE ? null : form.typeId })
 }
 
 function focusTodo(key: string) {
@@ -463,6 +468,22 @@ function focusTitle(event: Event) {
                 @update:model-value="form.authorId = $event"
               />
               <p class="muted mt-2 text-xs">Who really reported this. Imports name their tester automatically when that person already has an account.</p>
+            </div>
+
+            <div class="block">
+              <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Shapes :size="14" /> Type</span>
+              <div class="flex items-center gap-2">
+                <TicketTypeBadge v-if="selectedType" :type="selectedType" untitled />
+                <div class="min-w-0 flex-1">
+                  <UiSelect
+                    :model-value="form.typeId"
+                    :options="typeOptions"
+                    aria-label="Type"
+                    @update:model-value="form.typeId = $event"
+                  />
+                </div>
+              </div>
+              <span class="muted mt-1.5 block text-[11px]">Optional · Types are set up in the workspace settings.</span>
             </div>
 
             <div class="grid gap-4 sm:grid-cols-2">

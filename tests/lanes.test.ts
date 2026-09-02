@@ -125,6 +125,19 @@ describe('boards and lanes', () => {
     expect(db.updateBoard(board.id, { name: 'Limits renamed' })?.syncLimit).toBe(25)
   })
 
+  it('remembers which type its imports land with, and lets it go again', () => {
+    const board = db.createBoard('Typed imports')
+    // Imports land as plain tickets until somebody says otherwise.
+    const plain = db.listTicketTypes(board.workspaceId).find(type => type.name === 'Ticket')!
+    expect(board.importTypeId).toBe(plain.id)
+    const email = db.listTicketTypes(board.workspaceId).find(type => type.name === 'Email')!
+    expect(db.updateBoard(board.id, { importTypeId: email.id })?.importTypeId).toBe(email.id)
+    expect(db.boardSyncCredentials(board.id)?.importTypeId).toBe(email.id)
+    // An unrelated update must not reset it; an explicit null clears it.
+    expect(db.updateBoard(board.id, { name: 'Still typed' })?.importTypeId).toBe(email.id)
+    expect(db.updateBoard(board.id, { importTypeId: null })?.importTypeId).toBeNull()
+  })
+
   it('carries a board description that survives unrelated updates', () => {
     const board = db.createBoard('Described')
     // A board starts without one, so the header has nothing to render until it is set.

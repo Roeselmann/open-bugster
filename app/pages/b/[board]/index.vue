@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { RefreshCcw, Search, X } from '@lucide/vue'
-import type { Attachment, CategorySummary, LabelSummary, SyncRun, Ticket, TicketPriority, TicketTodoInput } from '~~/shared/types/domain'
+import type { Attachment, CategorySummary, LabelSummary, SyncRun, Ticket, TicketPriority, TicketTodoInput, TicketTypeSummary } from '~~/shared/types/domain'
 
 type PendingConfirmation =
   | { kind: 'archive-ticket'; ticket: Ticket }
@@ -52,8 +52,16 @@ const { data: labelData, refresh: refreshLabels } = await useFetch<{ labels: Lab
 const labels = computed(() => labelData.value?.labels || [])
 const labelFilterOptions = computed(() => labels.value.map(label => ({ value: label.id, label: label.name })))
 
+// The workspace's vocabulary, reached through the board so a board-only member gets it too.
+const { data: typeData } = await useFetch<{ types: TicketTypeSummary[] }>('/api/ticket-types', {
+  query: { boardId },
+  watch: [boardId],
+})
+const ticketTypes = computed(() => typeData.value?.types || [])
+
 const query = ref('')
 const categoryFilter = ref('all')
+const typeFilter = ref('all')
 const labelFilter = ref<string[]>([])
 const selected = ref<Ticket | null>(null)
 const editorOpen = ref(false)
@@ -74,6 +82,7 @@ const assigneeFilter = ref('all')
 watch(boardId, () => {
   query.value = ''
   categoryFilter.value = 'all'
+  typeFilter.value = 'all'
   labelFilter.value = []
   assigneeFilter.value = 'all'
   editorOpen.value = false
@@ -108,6 +117,17 @@ const categoryFilterOptions = computed(() => [
   ...categories.value.map(category => ({ value: category.id, label: category.name })),
 ])
 
+const typeFilterOptions = computed(() => [
+  { value: 'all', label: 'All types' },
+  { value: 'untyped', label: 'Untyped' },
+  ...ticketTypes.value.map(type => ({ value: type.id, label: type.name })),
+])
+
+// A type deleted in the workspace settings must not leave a filter that matches nothing.
+watch(typeFilterOptions, (options) => {
+  if (!options.some(option => option.value === typeFilter.value)) typeFilter.value = 'all'
+})
+
 const confirmationCopy = computed(() => {
   const action = confirmation.value
   if (!action) return { title: '', description: '', confirmLabel: '' }
@@ -134,6 +154,8 @@ const filteredTickets = computed(() => {
   return tickets.value.filter((ticket) => {
     const matchesCategory = categoryFilter.value === 'all'
       || (categoryFilter.value === 'uncategorized' ? !ticket.category : ticket.category?.id === categoryFilter.value)
+    const matchesType = typeFilter.value === 'all'
+      || (typeFilter.value === 'untyped' ? !ticket.type : ticket.type?.id === typeFilter.value)
     // A ticket qualifies when it carries any of the picked labels.
     const matchesLabels = !labelFilter.value.length
       || ticket.labels.some(label => labelFilter.value.includes(label.id))
@@ -154,10 +176,11 @@ const filteredTickets = computed(() => {
       ticket.assignee?.lastName || '',
       ticket.assignee?.email || '',
       ticket.buildNumber || '',
+      ticket.type?.name || '',
       ...ticket.todos.map(todo => todo.text),
       ...ticket.labels.map(label => label.name),
     ].some(value => value.toLocaleLowerCase('en').includes(term))
-    return matchesCategory && matchesLabels && matchesAssignee && matchesText
+    return matchesCategory && matchesType && matchesLabels && matchesAssignee && matchesText
   })
 })
 
@@ -176,7 +199,7 @@ function openTicket(ticket: Ticket) {
   editorOpen.value = true
 }
 
-async function saveTicket(payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; todos: TicketTodoInput[]; attachments: File[] }) {
+async function saveTicket(payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; typeId?: string | null; todos: TicketTodoInput[]; attachments: File[] }) {
   saving.value = true
   const wasEdit = Boolean(selected.value)
   try {
@@ -316,9 +339,11 @@ async function sync() {
           <BoardFilterPane
             v-model:labels="labelFilter"
             v-model:category="categoryFilter"
+            v-model:type="typeFilter"
             v-model:assignee="assigneeFilter"
             :label-options="labelFilterOptions"
             :category-options="categoryFilterOptions"
+            :type-options="typeFilterOptions"
             :assignee-options="assigneeFilterOptions"
           />
         </div>
@@ -334,7 +359,7 @@ async function sync() {
       <div v-else class="scrollbar-thin overflow-x-auto"><KanbanBoard :board-id="board.id" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" @open="openTicket" @move="moveTicket" @create="newTicket" /></div>
     </main>
 
-    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :saving="saving" :deleting-attachment-id="deletingAttachmentId" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @commented="refresh()" @notify="notify" />
+    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :deleting-attachment-id="deletingAttachmentId" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @commented="refresh()" @notify="notify" />
 
     <UiConfirmDialog
       v-if="confirmation"

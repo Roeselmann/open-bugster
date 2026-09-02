@@ -5,6 +5,18 @@ export const userRoles = ['owner', 'admin', 'member'] as const
 export const userStatuses = ['invited', 'active', 'disabled'] as const
 export const boardRoles = ['admin', 'editor', 'viewer'] as const
 export const workspaceRoles = ['admin', 'member'] as const
+/** The category tones, plus `none`: a type that leaves the card in its ordinary colour. */
+export const ticketTypeColors = ['none', ...categoryColors] as const
+
+/**
+ * The lucide icons a ticket type may pick from. A curated set rather than the whole library:
+ * the client imports each one by name, so the list is also what keeps the bundle small.
+ */
+export const ticketTypeIconNames = [
+  'Ticket', 'Mail', 'Megaphone', 'ListTodo', 'Bug', 'Lightbulb', 'Calendar', 'FileText', 'Image', 'Video',
+  'Code', 'Star', 'Flag', 'Bell', 'Rocket', 'Heart', 'MessageSquare', 'Phone', 'Globe', 'ShoppingCart',
+  'Wrench', 'Zap', 'BookOpen', 'Camera', 'Presentation', 'Newspaper', 'Palette', 'Music', 'Mic', 'Users'
+] as const
 
 export type TicketPriority = typeof ticketPriorities[number]
 export type TicketSource = typeof ticketSources[number]
@@ -13,6 +25,32 @@ export type UserRole = typeof userRoles[number]
 export type UserStatus = typeof userStatuses[number]
 export type BoardRole = typeof boardRoles[number]
 export type WorkspaceRole = typeof workspaceRoles[number]
+export type TicketTypeIconName = typeof ticketTypeIconNames[number]
+export type TicketTypeColor = typeof ticketTypeColors[number]
+
+/** Either a name from the curated lucide set, or a small square image the user uploaded. */
+export type TicketTypeIcon =
+  | { kind: 'lucide'; name: TicketTypeIconName }
+  | { kind: 'image'; dataUrl: string }
+
+/**
+ * What kind of thing a ticket is — "Email", "Social post", "Todo". Owned by the workspace so
+ * every board in it speaks the same vocabulary. A ticket may have none.
+ */
+export interface TicketType {
+  id: string
+  workspaceId: string
+  name: string
+  /** Doubles as the card background on the board; `none` leaves the card as it is. */
+  color: TicketTypeColor
+  icon: TicketTypeIcon
+  position: number
+  createdAt: string
+}
+
+export interface TicketTypeSummary extends TicketType {
+  ticketCount: number
+}
 
 /**
  * Someone referenced by a ticket, comment, or activity entry. Everybody gets a row in
@@ -87,7 +125,7 @@ export interface TicketComment {
   updatedAt: string
 }
 
-export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'due_date', 'archived', 'restored', 'commented'] as const
+export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'due_date', 'type', 'archived', 'restored', 'commented'] as const
 export type ActivityKind = typeof activityKinds[number]
 
 /** How a change reached the server. Everything written before agents existed reads `web`. */
@@ -179,6 +217,8 @@ export interface Board {
   syncLimit: number
   /** Whether an import whose tester has an account records that account as the author. */
   autoAuthor: boolean
+  /** The ticket type every TestFlight import lands with; null leaves imports untyped. */
+  importTypeId: string | null
   createdAt: string
 }
 
@@ -271,6 +311,7 @@ export interface Ticket {
   assignee: Person | null
   commentCount: number
   category: Category | null
+  type: TicketType | null
   labels: Label[]
   feedback: AppleFeedback | null
   attachments: Attachment[]

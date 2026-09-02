@@ -5,11 +5,11 @@ import { randomUUID } from 'node:crypto'
 import type {
   ActivityKind, AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardRole, BoardSummary, Category, CategoryColor,
   CategorySummary, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
-  TicketPriority, TicketSource, TicketTodo, TicketTodoInput, UserAccount, UserBoardMembership, UserRole, UserStatus,
-  Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
+  TicketPriority, TicketSource, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeSummary,
+  UserAccount, UserBoardMembership, UserRole, UserStatus, Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
 } from '../../shared/types/domain'
 import type { Actor, ActorChannel } from './actor'
-import { DEFAULT_WORKSPACE_NAME } from '../../shared/utils/constants'
+import { DEFAULT_TICKET_TYPES, DEFAULT_WORKSPACE_NAME } from '../../shared/utils/constants'
 import { decryptSecret, encryptSecret, secretKeyAvailable } from './secret-box'
 import { hashStoredPassword } from './password'
 import { getServerConfig } from './config'
@@ -204,6 +204,9 @@ CREATE INDEX IF NOT EXISTS idx_ticket_labels_label ON ticket_labels(label_id);
 /** How many of the newest feedback submissions a sync looks at, per feedback type. */
 export const DEFAULT_SYNC_LIMIT = 100
 
+/** The type a board's imports land with unless somebody picks another: the plain "Ticket". */
+export const DEFAULT_IMPORT_TYPE_NAME = 'Ticket'
+
 /** The lane set every board starts with. The first entry is the canonical import lane. */
 const defaultLanes: Array<{ name: string; isImport: boolean }> = [
   { name: 'Import', isImport: true },
@@ -280,6 +283,9 @@ export function getDb() {
   ensureBoardMemberAutomation(database)
   ensureWorkspaces(database)
   ensureWorkspaceDescription(database)
+  ensureTicketTypes(database)
+  // After `ensureTicketTypes`: the column references the table that migration creates.
+  ensureBoardImportType(database)
   // Not in `boardIndexes`: that block also runs inside `ensureBoards`, before an upgrading
   // database has been given the ticket_activity table. Serves the board-wide digest query.
   database.exec('CREATE INDEX IF NOT EXISTS idx_ticket_activity_created ON ticket_activity(created_at DESC)')
@@ -1022,6 +1028,25 @@ export function ensureBoardAutoAuthor(db: Database.Database) {
  * Adds the line shown under the board title. Empty rather than null, so every board has a
  * description and the UI only has to ask whether it is blank.
  */
+/**
+ * The type a board's TestFlight imports land with. Nullable: gone with the type itself.
+ * Every board starts on its workspace's "Ticket" type — on upgrade day the existing boards
+ * are pointed at it once, the same way `createBoard` does for a new one.
+ */
+export function ensureBoardImportType(db: Database.Database) {
+  if (tableColumns(db, 'boards').has('import_type_id')) return false
+  db.exec('ALTER TABLE boards ADD COLUMN import_type_id TEXT REFERENCES ticket_types(id) ON DELETE SET NULL')
+  db.prepare(`UPDATE boards SET import_type_id = (${DEFAULT_IMPORT_TYPE_SQL}) WHERE import_type_id IS NULL`).run()
+  return true
+}
+
+/** The "Ticket" type of a board's workspace, or NULL where the workspace has none. */
+const DEFAULT_IMPORT_TYPE_SQL = `
+  SELECT tt.id FROM ticket_types tt
+  WHERE tt.workspace_id = boards.workspace_id AND tt.name = '${DEFAULT_IMPORT_TYPE_NAME}' COLLATE NOCASE
+  ORDER BY tt.position LIMIT 1
+`
+
 export function ensureBoardDescription(db: Database.Database) {
   if (tableColumns(db, 'boards').has('description')) return false
   db.exec(`ALTER TABLE boards ADD COLUMN description TEXT NOT NULL DEFAULT ''`)
@@ -1600,6 +1625,48 @@ export function ensureWorkspaceDescription(db: Database.Database) {
   return true
 }
 
+/**
+ * Ticket types: a workspace-owned vocabulary for what kind of thing a ticket is, and a
+ * nullable pointer from each ticket. Mirrors `ensureWorkspaces`: the column on `tickets` is
+ * what tells an upgrading database from one that has been here before, and every workspace
+ * that exists at that moment gets the default set once — never again, so a workspace that
+ * deletes "Todo" does not find it back after a restart.
+ */
+export function ensureTicketTypes(db: Database.Database) {
+  const migrated = !tableColumns(db, 'tickets').has('type_id')
+  if (migrated) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS ticket_types (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        name TEXT NOT NULL COLLATE NOCASE,
+        color TEXT NOT NULL DEFAULT 'neutral',
+        icon_kind TEXT NOT NULL CHECK (icon_kind IN ('lucide', 'image')),
+        icon_value TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      ALTER TABLE tickets ADD COLUMN type_id TEXT REFERENCES ticket_types(id) ON DELETE SET NULL;
+    `)
+    for (const { id } of db.prepare('SELECT id FROM workspaces').all() as Array<{ id: string }>) seedDefaultTicketTypes(db, id)
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ticket_types_workspace_name ON ticket_types(workspace_id, name COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_ticket_types_workspace ON ticket_types(workspace_id, position);
+    CREATE INDEX IF NOT EXISTS idx_tickets_type ON tickets(type_id);
+  `)
+  return migrated
+}
+
+function seedDefaultTicketTypes(db: Database.Database, workspaceId: string) {
+  const insert = db.prepare('INSERT INTO ticket_types (id, workspace_id, name, color, icon_kind, icon_value, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+  const now = new Date().toISOString()
+  DEFAULT_TICKET_TYPES.forEach((type, position) => {
+    const [kind, value] = iconColumns(type.icon)
+    insert.run(randomUUID(), workspaceId, type.name, type.color, kind, value, position, now)
+  })
+}
+
 export function ensureWebhooks(db: Database.Database) {
   const existed = Boolean(db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'webhooks'").get())
   db.exec(`
@@ -1639,7 +1706,7 @@ type BoardRow = {
   id: string; name: string; description: string; position: number
   asc_issuer_id: string; asc_key_id: string; asc_app_id: string
   asc_private_key: string | null; asc_key_filename: string | null; asc_key_uploaded_at: string | null
-  sync_limit: number; auto_author: number; created_at: string
+  sync_limit: number; auto_author: number; import_type_id: string | null; created_at: string
   // Nullable in the column (SQLite cannot add NOT NULL after the fact), never null in
   // practice: `ensureWorkspaces` adopts every orphan on start.
   workspace_id: string
@@ -1653,11 +1720,32 @@ type TicketRow = {
   id: string; ticket_number: number; board_id: string; lane_id: string; title: string; description: string
   position: number; priority: TicketPriority; due_date: string | null; build_number: string | null
   source: TicketSource; external_id: string | null; created_at: string; updated_at: string; archived_at: string | null
-  category_id: string | null; author_id: string | null; assignee_id: string | null
+  category_id: string | null; author_id: string | null; assignee_id: string | null; type_id: string | null
+}
+
+type TicketTypeRow = {
+  id: string; workspace_id: string; name: string; color: TicketTypeColor
+  icon_kind: TicketTypeIcon['kind']; icon_value: string; position: number; created_at: string
+}
+
+function toTicketType(row: TicketTypeRow): TicketType {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    name: row.name,
+    color: row.color,
+    icon: row.icon_kind === 'image' ? { kind: 'image', dataUrl: row.icon_value } : { kind: 'lucide', name: row.icon_value as TicketTypeIconName },
+    position: row.position,
+    createdAt: row.created_at
+  }
+}
+
+function iconColumns(icon: TicketTypeIcon): [TicketTypeIcon['kind'], string] {
+  return icon.kind === 'image' ? ['image', icon.dataUrl] : ['lucide', icon.name]
 }
 
 function toBoard(row: BoardRow): Board {
-  return { id: row.id, workspaceId: row.workspace_id, name: row.name, description: row.description, position: row.position, syncLimit: row.sync_limit, autoAuthor: Boolean(row.auto_author), createdAt: row.created_at }
+  return { id: row.id, workspaceId: row.workspace_id, name: row.name, description: row.description, position: row.position, syncLimit: row.sync_limit, autoAuthor: Boolean(row.auto_author), importTypeId: row.import_type_id ?? null, createdAt: row.created_at }
 }
 
 function toCredentials(row: BoardRow): BoardCredentials {
@@ -1802,6 +1890,7 @@ export function createWorkspace(name: string, creatorId: string | null = null): 
     if (creatorId) {
       db.prepare("INSERT INTO workspace_members (workspace_id, user_id, role, added_at) VALUES (?, ?, 'admin', ?)").run(id, creatorId, now)
     }
+    seedDefaultTicketTypes(db, id)
   })()
   return findWorkspaceSummary(id, creatorId ? { userId: creatorId, instanceAdmin: false } : null)!
 }
@@ -1842,8 +1931,38 @@ export function moveBoardToWorkspace(boardId: string, workspaceId: string, viewe
   db.transaction(() => {
     const position = (db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM boards WHERE workspace_id = ?').get(workspaceId) as { position: number }).position
     db.prepare('UPDATE boards SET workspace_id = ?, position = ? WHERE id = ?').run(workspaceId, position, boardId)
+    retargetTicketTypes(db, boardId, workspaceId)
+    retargetImportType(db, boardId, workspaceId)
   })()
   return findBoardSummary(boardId, viewer)
+}
+
+/** The board's own import type follows the same rule as its tickets' types. */
+function retargetImportType(db: Database.Database, boardId: string, workspaceId: string) {
+  db.prepare(`
+    UPDATE boards SET import_type_id = (
+      SELECT target.id FROM ticket_types target
+      JOIN ticket_types source ON source.name = target.name COLLATE NOCASE
+      WHERE source.id = boards.import_type_id AND target.workspace_id = ?
+    )
+    WHERE id = ? AND import_type_id IS NOT NULL
+  `).run(workspaceId, boardId)
+}
+
+/**
+ * Points a board's tickets at the types of the workspace it now lives in, matched by name;
+ * a type the new workspace does not know becomes "no type". Types belong to a workspace, so
+ * a ticket must never keep naming one from a workspace its board has left.
+ */
+function retargetTicketTypes(db: Database.Database, boardId: string, workspaceId: string) {
+  db.prepare(`
+    UPDATE tickets SET type_id = (
+      SELECT target.id FROM ticket_types target
+      JOIN ticket_types source ON source.name = target.name COLLATE NOCASE
+      WHERE source.id = tickets.type_id AND target.workspace_id = ?
+    )
+    WHERE board_id = ? AND type_id IS NOT NULL
+  `).run(workspaceId, boardId)
 }
 
 export interface BoardDuplicateOptions {
@@ -1880,8 +1999,9 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
   const attachmentCopies: AttachmentCopy[] = []
   db.transaction(() => {
     const position = (db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM boards WHERE workspace_id = ?').get(options.workspaceId) as { position: number }).position
-    db.prepare('INSERT INTO boards (id, workspace_id, name, description, position, sync_limit, auto_author, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, options.workspaceId, options.name, source.description, position, source.sync_limit, source.auto_author, now)
+    db.prepare('INSERT INTO boards (id, workspace_id, name, description, position, sync_limit, auto_author, import_type_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, options.workspaceId, options.name, source.description, position, source.sync_limit, source.auto_author, source.import_type_id ?? null, now)
+    if (options.workspaceId !== source.workspace_id) retargetImportType(db, id, options.workspaceId)
 
     const laneIds = new Map<string, string>()
     for (const lane of db.prepare('SELECT * FROM lanes WHERE board_id = ? ORDER BY position').all(sourceId) as LaneRow[]) {
@@ -1920,8 +2040,8 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
       // once — the per-row MAX subquery `createTicket` uses would rescan for every ticket.
       let nextNumber = (db.prepare('SELECT COALESCE(MAX(ticket_number), 0) AS value FROM tickets').get() as { value: number }).value
       const insertTicket = db.prepare(`
-        INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, source, external_id, created_at, updated_at, archived_at, author_id, assignee_id, category_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, source, external_id, created_at, updated_at, archived_at, author_id, assignee_id, category_id, type_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       const labelsOf = db.prepare('SELECT label_id FROM ticket_labels WHERE ticket_id = ?')
       const attachLabel = db.prepare('INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)')
@@ -1942,7 +2062,8 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
           ticketId, nextNumber, id, laneIds.get(ticket.lane_id)!, ticket.title, ticket.description,
           ticket.position, ticket.priority, ticket.due_date, ticket.build_number, ticket.source,
           ticket.external_id, ticket.created_at, ticket.updated_at, ticket.archived_at,
-          ticket.author_id, ticket.assignee_id, ticket.category_id ? categoryIds.get(ticket.category_id) ?? null : null
+          ticket.author_id, ticket.assignee_id, ticket.category_id ? categoryIds.get(ticket.category_id) ?? null : null,
+          ticket.type_id
         )
         for (const row of labelsOf.all(ticket.id) as Array<{ label_id: string }>) {
           const labelId = labelIds.get(row.label_id)
@@ -1969,6 +2090,8 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
           attachmentCopies.push({ from: attachment.relative_path, to: relativePath })
         }
       }
+      // Copied verbatim above; a copy landing in another workspace speaks that workspace's types.
+      if (options.workspaceId !== source.workspace_id) retargetTicketTypes(db, id, options.workspaceId)
     }
   })()
   return {
@@ -2060,6 +2183,7 @@ export function createBoard(name: string, creatorId: string | null = null, works
   const position = (db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM boards WHERE workspace_id = ?').get(workspace) as { position: number }).position
   db.transaction(() => {
     db.prepare('INSERT INTO boards (id, workspace_id, name, position, created_at) VALUES (?, ?, ?, ?, ?)').run(id, workspace, name, position, now)
+    db.prepare(`UPDATE boards SET import_type_id = (${DEFAULT_IMPORT_TYPE_SQL}) WHERE id = ?`).run(id)
     const insertLane = db.prepare('INSERT INTO lanes (id, board_id, name, position, is_import) VALUES (?, ?, ?, ?, ?)')
     newBoardLanes.forEach((lane, lanePosition) => insertLane.run(randomUUID(), id, lane.name, lanePosition, lane.isImport ? 1 : 0))
     if (creatorId) {
@@ -2077,13 +2201,15 @@ export interface BoardUpdateInput {
   appId?: string
   syncLimit?: number
   autoAuthor?: boolean
+  /** Omitted leaves it alone; null clears it. */
+  importTypeId?: string | null
 }
 
 export function updateBoard(id: string, input: BoardUpdateInput, viewer?: BoardViewer | null): BoardSummary | null {
   const db = getDb()
   const row = db.prepare('SELECT * FROM boards WHERE id = ?').get(id) as BoardRow | undefined
   if (!row) return null
-  db.prepare('UPDATE boards SET name = ?, description = ?, asc_issuer_id = ?, asc_key_id = ?, asc_app_id = ?, sync_limit = ?, auto_author = ? WHERE id = ?').run(
+  db.prepare('UPDATE boards SET name = ?, description = ?, asc_issuer_id = ?, asc_key_id = ?, asc_app_id = ?, sync_limit = ?, auto_author = ?, import_type_id = ? WHERE id = ?').run(
     input.name ?? row.name,
     input.description ?? row.description,
     input.issuerId ?? row.asc_issuer_id,
@@ -2091,6 +2217,7 @@ export function updateBoard(id: string, input: BoardUpdateInput, viewer?: BoardV
     input.appId ?? row.asc_app_id,
     input.syncLimit ?? row.sync_limit,
     input.autoAuthor === undefined ? row.auto_author : Number(input.autoAuthor),
+    input.importTypeId === undefined ? row.import_type_id : input.importTypeId,
     id
   )
   return findBoardSummary(id, viewer)
@@ -2121,7 +2248,7 @@ export function clearBoardPrivateKey(id: string, viewer?: BoardViewer | null): B
 }
 
 /** Server-only: decrypts the stored key. Never expose the result over the API. */
-export function boardSyncCredentials(id: string): { issuerId: string; keyId: string; appId: string; privateKeyPem: string | null; syncLimit: number; autoAuthor: boolean } | null {
+export function boardSyncCredentials(id: string): { issuerId: string; keyId: string; appId: string; privateKeyPem: string | null; syncLimit: number; autoAuthor: boolean; importTypeId: string | null } | null {
   const row = getDb().prepare('SELECT * FROM boards WHERE id = ?').get(id) as BoardRow | undefined
   if (!row) return null
   return {
@@ -2130,7 +2257,8 @@ export function boardSyncCredentials(id: string): { issuerId: string; keyId: str
     appId: row.asc_app_id,
     privateKeyPem: row.asc_private_key ? decryptSecret(row.asc_private_key) : null,
     syncLimit: row.sync_limit,
-    autoAuthor: Boolean(row.auto_author)
+    autoAuthor: Boolean(row.auto_author),
+    importTypeId: row.import_type_id ?? null
   }
 }
 
@@ -2241,6 +2369,7 @@ function hydrateTicket(row: TicketRow): Ticket {
   const category = row.category_id
     ? db.prepare('SELECT id, name, color FROM categories WHERE id = ?').get(row.category_id) as Category | undefined
     : undefined
+  const type = row.type_id ? findTicketType(row.type_id) : null
   const labels = db.prepare(`SELECT l.id, l.name FROM labels l JOIN ticket_labels tl ON tl.label_id = l.id WHERE tl.ticket_id = ? ORDER BY l.name`).all(row.id) as Label[]
   const feedbackRow = db.prepare('SELECT * FROM apple_feedback WHERE ticket_id = ?').get(row.id) as Record<string, string | null> | undefined
   const attachmentRows = db.prepare('SELECT id, kind, filename, mime_type, size FROM attachments WHERE ticket_id = ? ORDER BY created_at').all(row.id) as Array<{ id: string; kind: Attachment['kind']; filename: string; mime_type: string; size: number }>
@@ -2293,6 +2422,7 @@ function hydrateTicket(row: TicketRow): Ticket {
     assignee: personById(row.assignee_id),
     commentCount,
     category: category || null,
+    type,
     labels,
     feedback,
     attachments,
@@ -2395,6 +2525,95 @@ export function deleteCategory(id: string) {
   return getDb().prepare('DELETE FROM categories WHERE id = ?').run(id).changes > 0
 }
 
+/* ── ticket types ───────────────────────────────────────────────────────── */
+
+export function listTicketTypes(workspaceId: string): TicketTypeSummary[] {
+  const rows = getDb().prepare(`
+    SELECT tt.*, COUNT(t.id) AS ticket_count
+    FROM ticket_types tt
+    LEFT JOIN tickets t ON t.type_id = tt.id
+    WHERE tt.workspace_id = ?
+    GROUP BY tt.id
+    ORDER BY tt.position, tt.created_at
+  `).all(workspaceId) as Array<TicketTypeRow & { ticket_count: number }>
+  return rows.map(row => ({ ...toTicketType(row), ticketCount: row.ticket_count }))
+}
+
+export function findTicketType(id: string): TicketType | null {
+  const row = getDb().prepare('SELECT * FROM ticket_types WHERE id = ?').get(id) as TicketTypeRow | undefined
+  return row ? toTicketType(row) : null
+}
+
+export class TicketTypeNameTakenError extends Error {
+  constructor(message: string) {
+    super(message)
+  }
+}
+
+export interface TicketTypeInput {
+  name: string
+  color: TicketTypeColor
+  icon: TicketTypeIcon
+}
+
+export function createTicketType(workspaceId: string, input: TicketTypeInput): TicketType | null {
+  const db = getDb()
+  if (!findWorkspace(workspaceId)) return null
+  const name = input.name.trim()
+  if (db.prepare('SELECT 1 FROM ticket_types WHERE workspace_id = ? AND name = ? COLLATE NOCASE').get(workspaceId, name)) {
+    throw new TicketTypeNameTakenError(`This workspace already has a type named “${name}”.`)
+  }
+  const id = randomUUID()
+  const position = (db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM ticket_types WHERE workspace_id = ?').get(workspaceId) as { position: number }).position
+  const [kind, value] = iconColumns(input.icon)
+  db.prepare('INSERT INTO ticket_types (id, workspace_id, name, color, icon_kind, icon_value, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, workspaceId, name, input.color, kind, value, position, new Date().toISOString())
+  return findTicketType(id)
+}
+
+/** One call for name, colour and icon, so changing one cannot lose another. */
+export function updateTicketType(id: string, input: Partial<TicketTypeInput>): TicketType | null {
+  const db = getDb()
+  const existing = findTicketType(id)
+  if (!existing) return null
+  const name = input.name?.trim() || existing.name
+  const clash = db.prepare('SELECT id FROM ticket_types WHERE workspace_id = ? AND name = ? COLLATE NOCASE AND id <> ?')
+    .get(existing.workspaceId, name, id) as { id: string } | undefined
+  if (clash) throw new TicketTypeNameTakenError(`This workspace already has a type named “${name}”.`)
+  const [kind, value] = iconColumns(input.icon ?? existing.icon)
+  db.prepare('UPDATE ticket_types SET name = ?, color = ?, icon_kind = ?, icon_value = ? WHERE id = ?')
+    .run(name, input.color ?? existing.color, kind, value, id)
+  return findTicketType(id)
+}
+
+/** Tickets of the type fall back to "no type" — the column is `ON DELETE SET NULL`. */
+export function deleteTicketType(id: string): boolean {
+  return getDb().prepare('DELETE FROM ticket_types WHERE id = ?').run(id).changes > 0
+}
+
+/** Same contract as `reorderLanes`: every type of the workspace exactly once, or nothing. */
+export function reorderTicketTypes(workspaceId: string, orderedIds: string[]): TicketTypeSummary[] | null {
+  const db = getDb()
+  const existing = listTicketTypes(workspaceId)
+  if (!existing.length) return null
+  const known = new Set(existing.map(type => type.id))
+  if (orderedIds.length !== known.size || orderedIds.some(id => !known.has(id))) return null
+  const update = db.prepare('UPDATE ticket_types SET position = ? WHERE id = ? AND workspace_id = ?')
+  db.transaction(() => orderedIds.forEach((id, position) => update.run(position, id, workspaceId)))()
+  return listTicketTypes(workspaceId)
+}
+
+/**
+ * Whether a type may be put on a ticket of this board — i.e. it belongs to the board's
+ * workspace. Tickets carry no workspace column, so the database cannot say this by itself.
+ */
+export function ticketTypeBelongsToBoard(typeId: string, boardId: string): boolean {
+  return Boolean(getDb().prepare(`
+    SELECT 1 FROM ticket_types tt JOIN boards b ON b.workspace_id = tt.workspace_id
+    WHERE tt.id = ? AND b.id = ?
+  `).get(typeId, boardId))
+}
+
 function resolveCategoryId(boardId: string, name: string | null | undefined): string | null {
   const cleanName = name?.trim()
   if (!cleanName) return null
@@ -2478,6 +2697,8 @@ export interface TicketInput {
   labels?: string[]
   laneId?: string
   categoryName?: string | null
+  /** A type of the board's workspace; the caller has checked that. Null or omitted: untyped. */
+  typeId?: string | null
   todos?: TicketTodoInput[]
   assigneeId?: string | null
   /** Admin-only: who a ticket is attributed to, independent of who is editing it. */
@@ -2509,16 +2730,17 @@ export function createTicket(boardId: string, input: TicketInput, author: Person
   const position = nextPosition(lane.id)
   db.transaction(() => {
     const categoryId = resolveCategoryId(boardId, input.categoryName)
-    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, source, created_at, updated_at, author_id, assignee_id, category_id)
-      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?)`).run(
+    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, source, created_at, updated_at, author_id, assignee_id, category_id, type_id)
+      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?)`).run(
       id, boardId, lane.id, input.title, input.description || '', position, input.priority || 'medium',
       input.dueDate || null, input.buildNumber || null, now, now,
-      author?.id || null, input.assigneeId || null, categoryId
+      author?.id || null, input.assigneeId || null, categoryId, input.typeId || null
     )
     setTicketLabels(id, boardId, input.labels || [])
     setTicketTodos(id, input.todos || [])
     recordActivity(id, actor, 'created', { lane: lane.name })
     if (input.assigneeId) recordActivity(id, actor, 'assigned', { to: input.assigneeId })
+    if (input.typeId) recordActivity(id, actor, 'type', { from: null, to: findTicketType(input.typeId)?.name ?? null })
   })()
   return findTicket(id)!
 }
@@ -2531,9 +2753,10 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
   const dueDate = input.dueDate === undefined ? existing.dueDate : input.dueDate || null
   const assigneeId = input.assigneeId === undefined ? existing.assignee?.id || null : input.assigneeId || null
   const authorId = input.authorId === undefined ? existing.author?.id || null : input.authorId || null
+  const typeId = input.typeId === undefined ? existing.type?.id || null : input.typeId || null
   getDb().transaction(() => {
     const categoryId = input.categoryName === undefined ? existing.category?.id || null : resolveCategoryId(existing.boardId, input.categoryName)
-    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, due_date = ?, build_number = ?, assignee_id = ?, author_id = ?, category_id = ?, updated_at = ? WHERE id = ?`).run(
+    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, due_date = ?, build_number = ?, assignee_id = ?, author_id = ?, category_id = ?, type_id = ?, updated_at = ? WHERE id = ?`).run(
       input.title ?? existing.title,
       input.description ?? existing.description,
       priority,
@@ -2542,6 +2765,7 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
       assigneeId,
       authorId,
       categoryId,
+      typeId,
       now,
       id
     )
@@ -2554,6 +2778,10 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
     }
     if (authorId !== (existing.author?.id || null)) {
       recordActivity(id, actor, 'author', { from: existing.author?.id || null, to: authorId })
+    }
+    if (typeId !== (existing.type?.id || null)) {
+      // Names rather than ids: a type may be deleted later, and the history should still read.
+      recordActivity(id, actor, 'type', { from: existing.type?.name ?? null, to: typeId ? findTicketType(typeId)?.name ?? null : null })
     }
   })()
   return findTicket(id)
@@ -2664,6 +2892,8 @@ export interface ImportedTicketInput {
   raw: unknown
   /** Whether a tester who already has an account is recorded as the ticket's author. */
   autoAuthor?: boolean
+  /** The board's import type. An id that no longer exists is treated as none. */
+  typeId?: string | null
 }
 
 export function insertImportedTicket(input: ImportedTicketInput): Ticket {
@@ -2676,11 +2906,15 @@ export function insertImportedTicket(input: ImportedTicketInput): Ticket {
   // author, and only while the board asks for it.
   const testerId = input.testerEmail ? upsertContactByEmail(input.testerEmail) : null
   const authorId = input.autoAuthor !== false && personById(testerId)?.isAccount ? testerId : null
+  // Resolved rather than trusted: a sync reads the board's settings once and may still be
+  // running when somebody deletes the type. An import must never fail over a type; it
+  // simply arrives untyped, exactly as the board would be configured a moment later.
+  const type = input.typeId ? findTicketType(input.typeId) : null
   db.transaction(() => {
-    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, source, external_id, created_at, updated_at, author_id)
-      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)`).run(
+    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, source, external_id, created_at, updated_at, author_id, type_id)
+      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, input.boardId, input.laneId, input.title, position, input.type === 'crash' ? 'high' : 'medium',
-      input.type === 'crash' ? 'testflight_crash' : 'testflight_screenshot', input.externalId, now, now, authorId
+      input.type === 'crash' ? 'testflight_crash' : 'testflight_screenshot', input.externalId, now, now, authorId, type?.id ?? null
     )
     db.prepare(`INSERT INTO apple_feedback (ticket_id, feedback_type, comment, tester_id, device_model, os_version, locale, build_id, build_version, build_bundle_id, source_created_at, raw_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
@@ -2690,6 +2924,7 @@ export function insertImportedTicket(input: ImportedTicketInput): Ticket {
     setTicketLabels(id, input.boardId, ['TestFlight', input.type === 'crash' ? 'Crash' : 'Screenshot'])
     // No actor: the ticket came from Apple, not from anyone signed in here.
     recordActivity(id, null, 'created', { source: input.type })
+    if (type) recordActivity(id, null, 'type', { from: null, to: type.name })
   })()
   return findTicket(id)!
 }
