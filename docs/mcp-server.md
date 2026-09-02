@@ -1,10 +1,25 @@
 # The MCP server
 
-*Reference · last revised 2026-09-01, as of v1.1.1 · code: `server/mcp/tools.ts`, `server/routes/mcp.ts`*
+`/mcp` speaks the Model Context Protocol over Streamable HTTP, authenticated with the same bearer tokens as the REST v1 API. An agent such as Claude, Cursor, or a self-built one can search a board, file tickets, comment, and ask what changed, reaching exactly as far as its token does and recorded under the person or service the token belongs to. This document records how the surface is shaped, the two permission layers a client meets, and what we learned the day a real agent connected.
 
-`/mcp` speaks the Model Context Protocol over Streamable HTTP, authenticated with the same
-bearer tokens as the REST v1 API. This document records how the surface is shaped, the two
-permission layers a client meets, and what we learned the day a real agent connected.
+## Using it
+
+Mint a token under **Your profile → Integrations** (see [api.md](api.md) for scopes, board pinning, and the integration permission), then point the client at the endpoint:
+
+```json
+{
+  "mcpServers": {
+    "open-bugster": {
+      "url": "https://bugs.example.com/mcp",
+      "headers": { "Authorization": "Bearer bgs_…" }
+    }
+  }
+}
+```
+
+The tools are shaped around what somebody actually asks for: searching one board or every reachable one, filing a ticket with its to-do list, commenting, asking `whats_new` for everything that happened on a board since a timestamp, restoring what was archived by mistake, and attaching a file by URL. For that last one the agent hands over a link (a Telegram file URL, say) and the server downloads it itself, so no bytes ever travel through the model's context.
+
+The **What an agent can do** panel under **Your profile → Integrations** lists the tools of the running build. An agent's actions appear in ticket histories and the audit log as *via <agent label>*, beside the person who answers for it.
 
 ## The surface: fourteen tools, on purpose
 
@@ -18,7 +33,7 @@ search is `search_tickets` without a `boardId` rather than a second search tool.
 |---|---|---|
 | `whoami` | The principal, agent label, and scopes behind this token | read-only |
 | `list_boards` | Boards with lanes and counts, plus the workspaces around them | read-only |
-| `board_overview` | One board: lanes, members, labels, categories, ticket types, its workspace | read-only |
+| `board_overview` | One board: lanes, members, labels, categories, its workspace | read-only |
 | `search_tickets` | Filtered slim listing; instance-wide when `boardId` is omitted | read-only |
 | `get_ticket` | Everything about one ticket, by id or ticket number | read-only |
 | `list_lanes` | Just the lanes, when the overview would be overkill | read-only |
@@ -105,3 +120,30 @@ The **What an agent can do** panel under Profile → Integrations is generated b
 `server/api/mcp-info.get.ts`, which registers the real tools against a collector — it cannot
 drift from the actual surface. If the panel and this document disagree with a connected
 client's view, the client is on an older build or a cached list.
+
+## Code map
+
+| File | What lives there |
+|---|---|
+| [server/mcp/tools.ts](../server/mcp/tools.ts) | `registerTools`: every tool, its Zod input, its annotations, and the `slim()` projection tickets are listed with. Each tool calls operations through `run()`. |
+| [server/routes/mcp.ts](../server/routes/mcp.ts) | The Streamable HTTP transport and the bearer authentication of `/mcp`. |
+| [server/api/mcp-info.get.ts](../server/api/mcp-info.get.ts) | The tool list for the profile panel, collected from the real registration. |
+| [server/middleware/auth.ts](../server/middleware/auth.ts) | Accepts bearer tokens on `/mcp*`; builds the `Actor` with channel `mcp`. |
+| [server/utils/attachment-fetch.ts](../server/utils/attachment-fetch.ts) | The server-side download behind `add_attachment`. |
+| `app/components/McpConnection.vue`, `app/pages/profile/integrations.vue` | The connection snippet and the **What an agent can do** panel. |
+
+## Surfaces
+
+Every tool is a thin shape over one or more operations: `whoami` reads the actor; `list_boards` and `board_overview` use `board.list`, `board.get`, `lane.list`, `member.list`, `category.list`, `label.list`; `search_tickets` and `get_ticket` use `ticket.list`, `ticket.get`, `ticket.getByNumber`; `whats_new` uses `board.activity`; the write tools map to `ticket.create`, `ticket.update`, `ticket.move`, `comment.add`, `ticket.archive`, `ticket.restore`, `attachment.addFromUrl`. Because they go through `run()`, every call is audited and fires webhooks like any other.
+
+## Tests
+
+- `tests/mcp.test.ts`: the tool cap, titles and descriptions, the exact read-only and open-world split, the naming rules, and each tool's behaviour against a stub server.
+- `tests/token.test.ts`, `tests/access.test.ts`: the scope ceiling the tools inherit.
+
+## Configuration
+
+| Variable | Purpose |
+|---|---|
+| `WEBHOOK_ALLOW_PRIVATE` | Also governs which URLs `add_attachment` may download from. |
+| `API_RATE_LIMIT` | The per-credential budget shared with the REST surface. |
