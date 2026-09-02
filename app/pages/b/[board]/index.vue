@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { RefreshCcw, Search, X } from '@lucide/vue'
 import type { Attachment, CategorySummary, LabelSummary, SyncRun, Ticket, TicketPriority, TicketTodoInput, TicketTypeSummary } from '~~/shared/types/domain'
+import { TICKET_TYPES_KEY } from '~/utils/ticketTypes'
 
 type PendingConfirmation =
   | { kind: 'archive-ticket'; ticket: Ticket }
@@ -58,6 +59,8 @@ const { data: typeData } = await useFetch<{ types: TicketTypeSummary[] }>('/api/
   watch: [boardId],
 })
 const ticketTypes = computed(() => typeData.value?.types || [])
+// Cards carry their type without the image; the badge finds it here by id.
+provide(TICKET_TYPES_KEY, ticketTypes)
 
 const query = ref('')
 const categoryFilter = ref('all')

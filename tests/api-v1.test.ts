@@ -135,7 +135,7 @@ describe('the v1 surface', () => {
     it('publishes named types rather than __schema0', () => {
       expect(JSON.stringify(spec)).not.toContain('__schema')
       expect(Object.keys(spec.components.schemas)).toEqual(
-        expect.arrayContaining(['Ticket', 'Person', 'BoardSummary', 'TicketComment', 'Problem', 'TicketType', 'TicketTypeIcon'])
+        expect.arrayContaining(['Ticket', 'Person', 'BoardSummary', 'TicketComment', 'Problem', 'TicketTypeSummary', 'TicketTypeIcon', 'TicketTypeRef'])
       )
     })
 

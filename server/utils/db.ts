@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import type {
   ActivityKind, AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardRole, BoardSummary, Category, CategoryColor,
   CategorySummary, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
-  TicketPriority, TicketSource, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeSummary,
+  TicketPriority, TicketSource, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary,
   UserAccount, UserBoardMembership, UserRole, UserStatus, Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
 } from '../../shared/types/domain'
 import type { Actor, ActorChannel } from './actor'
@@ -1740,6 +1740,11 @@ function toTicketType(row: TicketTypeRow): TicketType {
   }
 }
 
+/** What a ticket carries of its type — everything but the image bytes. */
+function toTicketTypeRef(type: TicketType): TicketTypeRef {
+  return { id: type.id, name: type.name, color: type.color, icon: type.icon.kind === 'image' ? { kind: 'image' } : type.icon }
+}
+
 function iconColumns(icon: TicketTypeIcon): [TicketTypeIcon['kind'], string] {
   return icon.kind === 'image' ? ['image', icon.dataUrl] : ['lucide', icon.name]
 }
@@ -2369,7 +2374,8 @@ function hydrateTicket(row: TicketRow): Ticket {
   const category = row.category_id
     ? db.prepare('SELECT id, name, color FROM categories WHERE id = ?').get(row.category_id) as Category | undefined
     : undefined
-  const type = row.type_id ? findTicketType(row.type_id) : null
+  const fullType = row.type_id ? findTicketType(row.type_id) : null
+  const type = fullType ? toTicketTypeRef(fullType) : null
   const labels = db.prepare(`SELECT l.id, l.name FROM labels l JOIN ticket_labels tl ON tl.label_id = l.id WHERE tl.ticket_id = ? ORDER BY l.name`).all(row.id) as Label[]
   const feedbackRow = db.prepare('SELECT * FROM apple_feedback WHERE ticket_id = ?').get(row.id) as Record<string, string | null> | undefined
   const attachmentRows = db.prepare('SELECT id, kind, filename, mime_type, size FROM attachments WHERE ticket_id = ? ORDER BY created_at').all(row.id) as Array<{ id: string; kind: Attachment['kind']; filename: string; mime_type: string; size: number }>

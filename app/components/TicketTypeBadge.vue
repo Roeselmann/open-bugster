@@ -1,10 +1,15 @@
 <script setup lang="ts">
-import type { TicketType } from '~~/shared/types/domain'
+import type { TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconRef } from '~~/shared/types/domain'
 import { CATEGORY_TONE_CLASSES } from '~~/shared/utils/constants'
 import { TICKET_TYPE_ICON_COMPONENTS } from '~/utils/ticketTypeIcons'
+import { TICKET_TYPES_KEY } from '~/utils/ticketTypes'
 
 const props = withDefaults(defineProps<{
-  type: Pick<TicketType, 'name' | 'color' | 'icon'>
+  /**
+   * A full type, the slim reference a ticket carries (its image is then looked up by id), or
+   * an unsaved draft from the settings form, which has no id yet.
+   */
+  type: { id?: string; name: string; color: TicketTypeColor; icon: TicketTypeIcon | TicketTypeIconRef }
   /** `md` is the card's; `sm` fits a settings row or a select option. */
   size?: 'sm' | 'md'
   /** Without it the badge names the type on hover, which a list beside the name does not need. */
@@ -15,6 +20,16 @@ const props = withDefaults(defineProps<{
    */
   inverted?: boolean
 }>(), { size: 'md', untitled: false, inverted: false })
+
+// A ticket's type reference leaves the image bytes out; the page that lists tickets provides
+// the workspace's full types, and the badge finds the picture there by id.
+const providedTypes = inject(TICKET_TYPES_KEY, ref<TicketType[]>([]))
+const imageUrl = computed(() => {
+  if (props.type.icon.kind !== 'image') return null
+  if ('dataUrl' in props.type.icon) return props.type.icon.dataUrl
+  const full = props.type.id ? providedTypes.value.find(type => type.id === props.type.id) : undefined
+  return full?.icon.kind === 'image' ? full.icon.dataUrl : null
+})
 
 const sizing = computed(() => (props.size === 'sm' ? 'size-6' : 'size-8'))
 
@@ -45,7 +60,7 @@ const iconSize = computed(() => (props.size === 'sm' ? 13 : 16))
     :aria-label="untitled ? undefined : `Type: ${type.name}`"
     :aria-hidden="untitled ? 'true' : undefined"
   >
-    <img v-if="type.icon.kind === 'image'" :src="type.icon.dataUrl" alt="" class="size-full object-cover" draggable="false">
-    <component :is="TICKET_TYPE_ICON_COMPONENTS[type.icon.name]" v-else :size="iconSize" :stroke-width="2.25" aria-hidden="true" />
+    <img v-if="imageUrl" :src="imageUrl" alt="" class="size-full object-cover" draggable="false">
+    <component :is="TICKET_TYPE_ICON_COMPONENTS[type.icon.kind === 'lucide' ? type.icon.name : 'Image']" v-else :size="iconSize" :stroke-width="2.25" aria-hidden="true" />
   </span>
 </template>

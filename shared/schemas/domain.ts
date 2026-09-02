@@ -6,7 +6,7 @@ import {
 import type {
   AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardSummary, Category,
   CategorySummary, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket,
-  TicketActivityEntry, TicketComment, TicketTodo, TicketType, TicketTypeIcon, TicketTypeSummary,
+  TicketActivityEntry, TicketComment, TicketTodo, TicketType, TicketTypeIcon, TicketTypeIconRef, TicketTypeRef, TicketTypeSummary,
   Workspace, WorkspaceMember, WorkspaceSummary
 } from '../types/domain'
 
@@ -55,6 +55,18 @@ export const ticketTypeSchema = z.object({
   createdAt: z.string()
 }).describe('What kind of thing a ticket is. Owned by the workspace; a ticket may have none.')
 export const ticketTypeSummarySchema = ticketTypeSchema.extend({ ticketCount: z.number().int() })
+
+export const ticketTypeIconRefSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('lucide'), name: z.enum(ticketTypeIconNames) }),
+  z.object({ kind: z.literal('image') }).describe('The image itself is on the workspace’s type list, under this type’s id.')
+])
+
+export const ticketTypeRefSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  color: z.enum(ticketTypeColors),
+  icon: ticketTypeIconRefSchema
+}).describe('A ticket’s type, without the uploaded image: resolve the id against the workspace’s types for that.')
 
 export const attachmentSchema = z.object({
   id: z.string(),
@@ -105,7 +117,7 @@ export const ticketSchema = z.object({
   assignee: personSchema.nullable(),
   commentCount: z.number().int(),
   category: categorySchema.nullable(),
-  type: ticketTypeSchema.nullable(),
+  type: ticketTypeRefSchema.nullable(),
   labels: z.array(labelSchema),
   feedback: appleFeedbackSchema.nullable(),
   attachments: z.array(attachmentSchema),
@@ -255,6 +267,8 @@ const named: Record<string, z.ZodType> = {
   TicketTypeIcon: ticketTypeIconSchema,
   TicketType: ticketTypeSchema,
   TicketTypeSummary: ticketTypeSummarySchema,
+  TicketTypeIconRef: ticketTypeIconRefSchema,
+  TicketTypeRef: ticketTypeRefSchema,
   Attachment: attachmentSchema,
   TicketTodo: ticketTodoSchema,
   AppleFeedback: appleFeedbackSchema,
@@ -299,6 +313,8 @@ export type SchemasMatchDomain = [
   Expect<Equal<z.infer<typeof ticketTypeIconSchema>, TicketTypeIcon>>,
   Expect<Equal<z.infer<typeof ticketTypeSchema>, TicketType>>,
   Expect<Equal<z.infer<typeof ticketTypeSummarySchema>, TicketTypeSummary>>,
+  Expect<Equal<z.infer<typeof ticketTypeIconRefSchema>, TicketTypeIconRef>>,
+  Expect<Equal<z.infer<typeof ticketTypeRefSchema>, TicketTypeRef>>,
   Expect<Equal<z.infer<typeof attachmentSchema>, Attachment>>,
   Expect<Equal<z.infer<typeof ticketTodoSchema>, TicketTodo>>,
   Expect<Equal<z.infer<typeof appleFeedbackSchema>, AppleFeedback>>,

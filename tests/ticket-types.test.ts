@@ -154,6 +154,13 @@ describe('ticket types', () => {
       ]))
     })
 
+    it('hands a ticket only a reference to its type, never the image bytes', () => {
+      const pictured = db.createTicketType(workspaceId, { name: 'Pictured ref', color: 'teal', icon: { kind: 'image', dataUrl: 'data:image/png;base64,AAAA' } })!
+      const ticket = db.createTicket(boardId, { title: 'With a picture', typeId: pictured.id })!
+      expect(ticket.type).toEqual({ id: pictured.id, name: 'Pictured ref', color: 'teal', icon: { kind: 'image' } })
+      expect(JSON.stringify(ticket)).not.toContain('base64')
+    })
+
     it('leaves tickets untyped when their type is deleted', () => {
       const doomed = db.createTicketType(workspaceId, { name: 'Ephemeral', color: 'amber', icon: { kind: 'lucide', name: 'Zap' } })!
       const ticket = db.createTicket(boardId, { title: 'Short-lived', typeId: doomed.id })!
@@ -179,7 +186,7 @@ describe('ticket types', () => {
       const presentation = db.createTicket(board.id, { title: 'Loses its type', typeId: typeIds.Presentation })!
       db.moveBoardToWorkspace(board.id, target.id)
       const targetEmail = db.listTicketTypes(target.id).find(type => type.name === 'Email')!
-      expect(db.findTicket(email.id)!.type).toMatchObject({ id: targetEmail.id, workspaceId: target.id })
+      expect(db.findTicket(email.id)!.type).toMatchObject({ id: targetEmail.id })
       expect(db.findTicket(presentation.id)!.type).toBeNull()
     })
 
@@ -190,7 +197,7 @@ describe('ticket types', () => {
       expect(db.listTickets(same.board.id)[0]!.type!.id).toBe(typeIds.Email)
       const target = db.createWorkspace('Copy target', people.owner)
       const moved = db.duplicateBoard(source.id, { name: 'Copy there', workspaceId: target.id, includeTickets: true, creatorId: people.owner! })!
-      expect(db.listTickets(moved.board.id)[0]!.type).toMatchObject({ name: 'Email', workspaceId: target.id })
+      expect(db.listTickets(moved.board.id)[0]!.type).toMatchObject({ id: db.listTicketTypes(target.id).find(type => type.name === 'Email')!.id })
     })
   })
 

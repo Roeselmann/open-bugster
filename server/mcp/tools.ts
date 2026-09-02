@@ -153,6 +153,7 @@ export function registerTools(server: McpServer, actor: Actor) {
       priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
       label: z.string().optional(),
       assigneeId: z.string().optional().describe('Use "unassigned" for tickets nobody holds.'),
+      typeId: z.string().optional().describe('A ticket type id from board_overview.ticketTypes, or "untyped" for tickets without one.'),
       archived: z.boolean().optional().describe('Archived tickets are visible to board admins only, and only with a boardId.'),
       limit: z.number().int().min(1).max(100).optional().describe('Defaults to 25.')
     }
@@ -176,6 +177,8 @@ export function registerTools(server: McpServer, actor: Actor) {
       if (input.label && !ticket.labels.some(label => label.name.toLowerCase() === input.label!.toLowerCase())) return false
       if (input.assigneeId === 'unassigned' && ticket.assignee) return false
       if (input.assigneeId && input.assigneeId !== 'unassigned' && ticket.assignee?.id !== input.assigneeId) return false
+      if (input.typeId === 'untyped' && ticket.type) return false
+      if (input.typeId && input.typeId !== 'untyped' && ticket.type?.id !== input.typeId) return false
       return true
     })
     const limit = input.limit ?? 25

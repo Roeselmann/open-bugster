@@ -53,6 +53,22 @@ export interface TicketTypeSummary extends TicketType {
 }
 
 /**
+ * The type as a ticket carries it: enough to draw the card, without the uploaded image.
+ * A data URL of up to 64 KB repeated on every ticket of a board would turn a listing into
+ * megabytes; the image lives on the workspace's type list alone, resolved by id.
+ */
+export type TicketTypeIconRef =
+  | { kind: 'lucide'; name: TicketTypeIconName }
+  | { kind: 'image' }
+
+export interface TicketTypeRef {
+  id: string
+  name: string
+  color: TicketTypeColor
+  icon: TicketTypeIconRef
+}
+
+/**
  * Someone referenced by a ticket, comment, or activity entry. Everybody gets a row in
  * `users`, so a person is always addressed by id: an imported TestFlight tester exists as a
  * `contact` and turns into a team member the moment somebody invites that address, without
@@ -311,7 +327,7 @@ export interface Ticket {
   assignee: Person | null
   commentCount: number
   category: Category | null
-  type: TicketType | null
+  type: TicketTypeRef | null
   labels: Label[]
   feedback: AppleFeedback | null
   attachments: Attachment[]
