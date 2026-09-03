@@ -2,7 +2,14 @@
 import { Image, Inbox, Plus } from '@lucide/vue'
 import type { Lane, Ticket } from '~~/shared/types/domain'
 
-const props = withDefaults(defineProps<{ boardId: string; lanes: Lane[]; tickets: Ticket[]; canEdit?: boolean }>(), { canEdit: true })
+const props = withDefaults(defineProps<{
+  boardId: string
+  lanes: Lane[]
+  tickets: Ticket[]
+  canEdit?: boolean
+  /** Phone layout: only this lane, full width, without the lane's own frame and scroll box. */
+  laneId?: string | null
+}>(), { canEdit: true, laneId: null })
 const emit = defineEmits<{ open: [ticket: Ticket]; move: [id: string, laneId: string, index: number]; create: [laneId: string, placement: 'top' | 'bottom'] }>()
 
 const showScreenshotByLane = reactive<Record<string, boolean>>({})
@@ -22,7 +29,11 @@ const ticketsFor = (laneId: string) => props.tickets
   .sort((a, b) => a.position - b.position)
 
 // The import lane only earns its column once something has been imported into it.
-const visibleLanes = computed(() => props.lanes.filter(lane => !lane.isImport || ticketsFor(lane.id).length > 0))
+const visibleLanes = computed(() => props.lanes.filter((lane) => {
+  if (props.laneId) return lane.id === props.laneId
+  return !lane.isImport || ticketsFor(lane.id).length > 0
+}))
+const compact = computed(() => Boolean(props.laneId))
 
 const draggedTicket = computed(() => props.tickets.find(ticket => ticket.id === draggedId.value) || null)
 
@@ -269,6 +280,16 @@ function cleanupPointerDrag() {
   dragPreview.value = null
 }
 
+// The card's reorder buttons: the target index counts within the lane after the ticket leaves its slot.
+function reorderTicket(ticket: Ticket, placement: 'top' | 'up' | 'down' | 'bottom') {
+  const laneTickets = ticketsFor(ticket.laneId)
+  const index = laneTickets.findIndex(item => item.id === ticket.id)
+  const last = laneTickets.length - 1
+  const target = placement === 'top' ? 0 : placement === 'bottom' ? last : placement === 'up' ? index - 1 : index + 1
+  const clamped = Math.max(0, Math.min(last, target))
+  if (clamped !== index) emit('move', ticket.id, ticket.laneId, clamped)
+}
+
 function preventClickAfterDrag(event: MouseEvent) {
   if (!suppressClick) return
   event.preventDefault()
@@ -281,7 +302,7 @@ onBeforeUnmount(cleanupPointerDrag)
 <template>
   <div
     class="scrollbar-thin grid items-start gap-4 pb-6 xl:gap-5"
-    :style="{
+    :style="compact ? undefined : {
       minWidth: `${visibleLanes.length * 280}px`,
       gridTemplateColumns: `repeat(${visibleLanes.length}, minmax(260px, 1fr))`,
     }"
@@ -291,10 +312,18 @@ onBeforeUnmount(cleanupPointerDrag)
     <section v-for="lane in visibleLanes" :key="lane.id" class="min-w-0">
       <div
         :data-lane-id="lane.id"
-        class="flex max-h-[calc(100vh-230px)] flex-col rounded-[12px] bg-[color-mix(in_srgb,var(--panel)_70%,transparent)] transition-colors duration-150 dark:bg-[color-mix(in_srgb,var(--panel-strong)_50%,var(--canvas))]"
-        :class="targetLaneId === lane.id ? 'bg-[color-mix(in_srgb,var(--accent)_7%,var(--panel))] dark:bg-[color-mix(in_srgb,var(--accent)_16%,var(--panel-strong))]' : ''"
+        class="flex flex-col transition-colors duration-150"
+        :class="[
+          compact
+            ? ''
+            : 'max-h-[calc(100vh-230px)] rounded-[12px] bg-[color-mix(in_srgb,var(--panel)_70%,transparent)] dark:bg-[color-mix(in_srgb,var(--panel-strong)_50%,var(--canvas))]',
+          !compact && targetLaneId === lane.id ? 'bg-[color-mix(in_srgb,var(--accent)_7%,var(--panel))] dark:bg-[color-mix(in_srgb,var(--accent)_16%,var(--panel-strong))]' : '',
+        ]"
       >
-        <header class="flex shrink-0 items-center gap-2 px-3.5 pb-1.5 pt-3 transition-colors duration-150" :class="targetLaneId === lane.id ? 'text-[var(--accent)]' : ''">
+        <header
+          class="flex shrink-0 items-center gap-2 transition-colors duration-150"
+          :class="[compact ? 'px-1 pb-2' : 'px-3.5 pb-1.5 pt-3', targetLaneId === lane.id ? 'text-[var(--accent)]' : '']"
+        >
           <h2 class="truncate text-[13px] font-bold uppercase tracking-[.1em]">{{ lane.name }}</h2>
           <div class="ml-auto flex items-center gap-2">
             <button
@@ -330,7 +359,8 @@ onBeforeUnmount(cleanupPointerDrag)
             <span class="muted text-[13px] font-semibold tabular-nums">{{ ticketsFor(lane.id).length }}</span>
           </div>
         </header>
-        <div data-lane-scroll class="scrollbar-thin relative min-h-0 flex-1 overflow-y-auto px-2.5 pb-2.5 pt-1">
+        <!-- On a phone the page scrolls instead of the lane; a scroll box would cap it at a few cards. -->
+        <div data-lane-scroll class="relative min-h-0 flex-1" :class="compact ? '' : 'scrollbar-thin overflow-y-auto px-2.5 pb-2.5 pt-1'">
           <TransitionGroup name="ticket-sort" tag="div" data-ticket-stack class="relative flex flex-col gap-2.5">
             <div
               v-for="(item, index) in sortItemsFor(lane.id)"
@@ -343,8 +373,10 @@ onBeforeUnmount(cleanupPointerDrag)
                 :index="index"
                 :lanes="lanes"
                 :show-screenshot="showScreenshotByLane[lane.id]"
+                :lane-count="ticketsFor(lane.id).length"
                 @open="emit('open', $event)"
                 @move="nextLaneId => emit('move', item.id, nextLaneId, ticketsFor(nextLaneId).length)"
+                @reorder="placement => reorderTicket(item, placement)"
               />
               <div
                 v-else
@@ -363,7 +395,7 @@ onBeforeUnmount(cleanupPointerDrag)
           </div>
         </div>
 
-        <footer v-if="canEdit" class="shrink-0 px-2.5 pb-2.5 pt-1">
+        <footer v-if="canEdit" class="shrink-0" :class="compact ? 'pt-2' : 'px-2.5 pb-2.5 pt-1'">
           <button
             type="button"
             class="focus-ring muted flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-sm font-semibold transition hover:bg-[var(--panel-strong)] hover:text-[var(--ink)]"

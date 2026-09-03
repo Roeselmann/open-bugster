@@ -8,6 +8,8 @@ interface FilterOption {
 }
 
 defineProps<{
+  /** Icon-only trigger for the phone header; the badge still shows how many filters are on. */
+  compact?: boolean
   labelOptions: FilterOption[]
   categoryOptions: FilterOption[]
   typeOptions: FilterOption[]
@@ -37,15 +39,19 @@ function clear() {
 <template>
   <PopoverRoot>
     <PopoverTrigger
-      class="focus-ring surface flex h-11 items-center gap-2 rounded-xl px-3.5 text-sm font-semibold outline-none transition hover:bg-[var(--panel-strong)]"
-      :class="activeCount ? 'border-[color-mix(in_srgb,var(--line)_35%,var(--accent))]' : ''"
-      aria-label="Filter tickets"
+      class="focus-ring flex items-center outline-none transition hover:bg-[var(--panel-strong)]"
+      :class="[
+        compact ? 'relative size-10 justify-center rounded-xl border border-[var(--line)]' : 'surface h-11 gap-2 rounded-xl px-3.5 text-sm font-semibold',
+        activeCount ? 'border-[color-mix(in_srgb,var(--line)_35%,var(--accent))]' : '',
+      ]"
+      :aria-label="activeCount ? `Filter tickets, ${activeCount} active` : 'Filter tickets'"
     >
-      <ListFilter :size="16" :class="activeCount ? 'text-[var(--accent)]' : 'muted'" aria-hidden="true" />
-      Filter
+      <ListFilter :size="compact ? 18 : 16" :class="activeCount ? 'text-[var(--accent)]' : compact ? '' : 'muted'" aria-hidden="true" />
+      <template v-if="!compact">Filter</template>
       <span
         v-if="activeCount"
         class="grid min-w-5 place-items-center rounded-full bg-[var(--accent-soft)] px-1 py-0.5 text-[11px] font-bold tabular-nums text-[var(--accent)]"
+        :class="compact ? 'absolute -right-1.5 -top-1.5 border border-[var(--panel)]' : ''"
       >{{ activeCount }}</span>
     </PopoverTrigger>
 

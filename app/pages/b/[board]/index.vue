@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RefreshCcw, Search, X } from '@lucide/vue'
+import { Check, RefreshCcw, Search, Settings2, X } from '@lucide/vue'
 import type { Attachment, CategorySummary, LabelSummary, SyncRun, Ticket, TicketPriority, TicketTodoInput, TicketTypeSummary } from '~~/shared/types/domain'
 import { TICKET_TYPES_KEY } from '~/utils/ticketTypes'
 
@@ -10,7 +10,9 @@ type PendingConfirmation =
 definePageMeta({ middleware: 'board' })
 
 const route = useRoute()
+const router = useRouter()
 const boardId = computed(() => String(route.params.board || ''))
+const isMobile = useIsMobile()
 
 // The `board` middleware has already checked that this id exists.
 const { boards, refresh: refreshBoards } = useBoards()
@@ -63,6 +65,7 @@ const ticketTypes = computed(() => typeData.value?.types || [])
 provide(TICKET_TYPES_KEY, ticketTypes)
 
 const query = ref('')
+const searchOpen = ref(false)
 const categoryFilter = ref('all')
 const typeFilter = ref('all')
 const labelFilter = ref<string[]>([])
@@ -84,6 +87,7 @@ const assigneeFilter = ref('all')
 
 watch(boardId, () => {
   query.value = ''
+  searchOpen.value = false
   categoryFilter.value = 'all'
   typeFilter.value = 'all'
   labelFilter.value = []
@@ -186,6 +190,56 @@ const filteredTickets = computed(() => {
     return matchesCategory && matchesType && matchesLabels && matchesAssignee && matchesText
   })
 })
+
+// --- Phone layout: one lane at a time, picked from a chip row -------------------------------
+
+// Same rule as the board: the import lane only shows once something has landed in it.
+const laneCounts = computed(() => {
+  const counts: Record<string, number> = {}
+  for (const ticket of filteredTickets.value) counts[ticket.laneId] = (counts[ticket.laneId] || 0) + 1
+  return counts
+})
+const mobileLanes = computed(() => lanes.value.filter(lane => !lane.isImport || (laneCounts.value[lane.id] || 0) > 0))
+
+// Kept in the URL so a reload or the back button lands on the same lane.
+const selectedLaneId = computed(() => {
+  const requested = typeof route.query.lane === 'string' ? route.query.lane : ''
+  if (mobileLanes.value.some(lane => lane.id === requested)) return requested
+  return (mobileLanes.value.find(lane => (laneCounts.value[lane.id] || 0) > 0) || mobileLanes.value[0])?.id || null
+})
+function selectLane(laneId: string) {
+  if (laneId === selectedLaneId.value) return
+  router.replace({ query: { ...route.query, lane: laneId } })
+}
+
+// A sideways swipe over the cards steps to the neighbouring lane.
+let swipeStart: { x: number; y: number } | null = null
+function beginSwipe(event: TouchEvent) {
+  const touch = event.touches[0]
+  swipeStart = touch ? { x: touch.clientX, y: touch.clientY } : null
+}
+function endSwipe(event: TouchEvent) {
+  const touch = event.changedTouches[0]
+  if (!swipeStart || !touch || !selectedLaneId.value) return
+  const dx = touch.clientX - swipeStart.x
+  const dy = touch.clientY - swipeStart.y
+  swipeStart = null
+  if (Math.abs(dx) < 60 || Math.abs(dy) > Math.abs(dx) / 2) return
+  const index = mobileLanes.value.findIndex(lane => lane.id === selectedLaneId.value)
+  const next = mobileLanes.value[index + (dx < 0 ? 1 : -1)]
+  if (next) selectLane(next.id)
+}
+
+// The search field folds away behind the header's magnifier until it is wanted.
+const searchInput = ref<HTMLInputElement | null>(null)
+function toggleSearch() {
+  searchOpen.value = !searchOpen.value
+  if (!searchOpen.value) query.value = ''
+  else nextTick(() => searchInput.value?.focus())
+}
+
+// Mirrors BoardSwitcher: importing needs both an administrator and complete Apple credentials.
+const showSync = computed(() => canModerate.value && Boolean(board.value?.credentials.complete))
 
 // The lane the "Add ticket" button was pressed in; the server falls back to the first lane.
 const newTicketLaneId = ref<string | null>(null)
@@ -372,15 +426,86 @@ async function sync() {
 
 <template>
   <div v-if="board" class="min-h-screen">
-    <AppHeader :board-id="board.id" :can-view-archive="canModerate" />
+    <AppHeader :board-id="board.id" :can-view-archive="canModerate">
+      <template #title>
+        <h1 class="truncate text-[15px] font-bold tracking-[-0.02em]">{{ board.name }}</h1>
+      </template>
+      <template #actions>
+        <button
+          type="button"
+          class="focus-ring grid size-10 shrink-0 place-items-center rounded-xl border border-[var(--line)] transition hover:bg-[var(--panel-strong)]"
+          :class="searchOpen || query ? 'border-[color-mix(in_srgb,var(--line)_35%,var(--accent))] text-[var(--accent)]' : ''"
+          :aria-pressed="searchOpen"
+          aria-label="Search tickets"
+          @click="toggleSearch"
+        >
+          <Search :size="18" />
+        </button>
+        <BoardFilterPane
+          v-model:labels="labelFilter"
+          v-model:category="categoryFilter"
+          v-model:type="typeFilter"
+          v-model:assignee="assigneeFilter"
+          compact
+          :label-options="labelFilterOptions"
+          :category-options="categoryFilterOptions"
+          :type-options="typeFilterOptions"
+          :assignee-options="assigneeFilterOptions"
+        />
+      </template>
+      <template #menu="{ close }">
+        <p class="sheet-heading">Boards</p>
+        <NuxtLink v-for="item in workspaceBoards" :key="item.id" :to="`/b/${item.id}`" class="sheet-item" @click="close">
+          <Check v-if="item.id === board.id" :size="15" stroke-width="2.5" class="text-[var(--accent)]" aria-hidden="true" />
+          <span v-else class="size-[15px]" aria-hidden="true" />
+          <span class="min-w-0 flex-1 truncate">{{ item.name }}</span>
+          <span class="muted shrink-0 text-[11px] font-semibold tabular-nums">{{ item.ticketCount }}</span>
+        </NuxtLink>
+        <template v-if="board.role === 'admin' || showSync">
+          <div class="my-1 h-px bg-[var(--line)]" />
+          <NuxtLink v-if="board.role === 'admin'" :to="`/b/${board.id}/settings/board`" class="sheet-item" @click="close">
+            <Settings2 :size="15" aria-hidden="true" /> Board settings
+          </NuxtLink>
+          <button v-if="showSync" type="button" class="sheet-item" :disabled="syncing" @click="close(); sync()">
+            <RefreshCcw :size="15" :class="syncing ? 'animate-spin' : ''" aria-hidden="true" /> TestFlight sync
+          </button>
+        </template>
+      </template>
+    </AppHeader>
 
-    <main class="mx-auto max-w-[1800px] px-4 py-6 sm:px-6">
-      <div class="mb-6 flex flex-col gap-4 md:flex-row md:items-end">
+    <main class="mx-auto max-w-[1800px] px-4 py-6 sm:px-6 max-md:px-3 max-md:py-3">
+      <!-- Phone: the header carries the title and actions; only the search field and lane chips live here. -->
+      <div class="md:hidden">
+        <div v-if="searchOpen" class="relative mb-3">
+          <Search :size="17" class="muted absolute left-3 top-1/2 -translate-y-1/2" />
+          <input ref="searchInput" v-model="query" type="search" class="focus-ring surface h-11 w-full rounded-xl pl-10 pr-9 text-sm outline-none [&::-webkit-search-cancel-button]:appearance-none" placeholder="Search tickets">
+          <button v-if="query" class="muted absolute right-2 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-lg hover:bg-[var(--panel-strong)]" aria-label="Clear search" @click="query = ''"><X :size="14" /></button>
+        </div>
+        <div v-if="mobileLanes.length" role="tablist" aria-label="Lanes" class="scrollbar-none -mx-3 mb-3 flex gap-1.5 overflow-x-auto px-3 pb-0.5">
+          <button
+            v-for="lane in mobileLanes"
+            :key="lane.id"
+            type="button"
+            role="tab"
+            :aria-selected="lane.id === selectedLaneId"
+            class="focus-ring flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 text-[13px] font-semibold transition"
+            :class="lane.id === selectedLaneId
+              ? 'border-[var(--ink)] bg-[var(--ink)] text-[var(--canvas)]'
+              : 'border-[var(--line)] bg-[var(--panel)] hover:bg-[var(--panel-strong)]'"
+            @click="selectLane(lane.id)"
+          >
+            {{ lane.name }}
+            <span class="tabular-nums" :class="lane.id === selectedLaneId ? 'opacity-70' : 'muted'">{{ laneCounts[lane.id] || 0 }}</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="mb-6 flex-col gap-4 max-md:hidden md:flex md:flex-row md:items-end">
         <BoardSwitcher :board="board" :boards="workspaceBoards" :syncing="syncing" :latest-run="syncData?.run || null" :can-sync="canModerate" @sync="sync" />
         <div class="flex flex-wrap gap-2 md:ml-auto md:justify-end">
           <div class="relative w-full sm:w-72">
             <Search :size="17" class="muted absolute left-3 top-1/2 -translate-y-1/2" />
-            <input v-model="query" type="search" class="focus-ring surface h-11 w-full rounded-xl pl-10 pr-9 text-sm outline-none" placeholder="Search tickets">
+            <input v-model="query" type="search" class="focus-ring surface h-11 w-full rounded-xl pl-10 pr-9 text-sm outline-none [&::-webkit-search-cancel-button]:appearance-none" placeholder="Search tickets">
             <button v-if="query" class="muted absolute right-2 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-lg hover:bg-[var(--panel-strong)]" aria-label="Clear search" @click="query = ''"><X :size="14" /></button>
           </div>
           <BoardFilterPane
@@ -396,14 +521,19 @@ async function sync() {
         </div>
       </div>
 
-      <div v-if="pending" class="grid gap-4" :style="{ minWidth: `${lanes.length * 280}px`, gridTemplateColumns: `repeat(${lanes.length}, minmax(260px, 1fr))` }">
-        <div v-for="lane in lanes" :key="lane.id" class="space-y-3"><div class="h-5 w-28 animate-pulse rounded bg-[var(--line)]" /><div v-for="card in 3" :key="card" class="surface h-36 animate-pulse rounded-2xl" /></div>
+      <div v-if="pending" class="grid gap-4" :style="isMobile ? undefined : { minWidth: `${lanes.length * 280}px`, gridTemplateColumns: `repeat(${lanes.length}, minmax(260px, 1fr))` }">
+        <div v-for="lane in (isMobile ? lanes.slice(0, 1) : lanes)" :key="lane.id" class="space-y-3"><div class="h-5 w-28 animate-pulse rounded bg-[var(--line)]" /><div v-for="card in 3" :key="card" class="surface h-36 animate-pulse rounded-2xl" /></div>
       </div>
       <div v-else-if="error" class="surface mx-auto mt-24 max-w-md rounded-2xl p-7 text-center">
         <h2 class="font-bold">Could not load the board</h2><p class="muted mt-2 text-sm">{{ errorText(error) }}</p>
         <button class="mt-5 inline-flex items-center gap-2 rounded-xl bg-[var(--ink)] px-4 py-2 text-sm font-semibold text-[var(--canvas)]" @click="refresh()"><RefreshCcw :size="15" /> Try again</button>
       </div>
-      <div v-else class="scrollbar-thin overflow-x-auto"><KanbanBoard :board-id="board.id" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" @open="openTicket" @move="moveTicket" @create="newTicket" /></div>
+      <!-- The server renders the desktop board; the phone view takes over once the viewport is known. -->
+      <div v-else-if="isMobile" class="md:hidden" @touchstart.passive="beginSwipe" @touchend.passive="endSwipe">
+        <KanbanBoard v-if="selectedLaneId" :board-id="board.id" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" :lane-id="selectedLaneId" @open="openTicket" @move="moveTicket" @create="newTicket" />
+        <p v-else class="muted py-16 text-center text-sm">This board has no lanes yet.</p>
+      </div>
+      <div v-else class="scrollbar-thin overflow-x-auto max-md:hidden"><KanbanBoard :board-id="board.id" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" @open="openTicket" @move="moveTicket" @create="newTicket" /></div>
     </main>
 
     <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :deleting-attachment-id="deletingAttachmentId" :initial-lane-id="newTicketLaneId" :initial-placement="newTicketPlacement" :lane-ticket-count="selectedLaneTicketCount" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @reorder="reorderTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @save-description="saveDescriptionFromEditor" @commented="refresh()" @notify="notify" />

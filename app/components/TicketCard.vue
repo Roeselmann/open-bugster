@@ -1,12 +1,21 @@
 <script setup lang="ts">
-import { CalendarClock, Check, Image, ListTodo, MessageSquare, Tag, TestTubeDiagonal, TriangleAlert, UserRound } from '@lucide/vue'
+import { ArrowDownToLine, ArrowUpToLine, CalendarClock, Check, ChevronDown, ChevronUp, Image, ListTodo, MessageSquare, Tag, TestTubeDiagonal, TriangleAlert, UserRound } from '@lucide/vue'
 import type { Lane, Ticket } from '~~/shared/types/domain'
 import { CATEGORY_TONE_CLASSES } from '~~/shared/utils/constants'
 
-const props = defineProps<{ ticket: Ticket; index: number; lanes: Lane[]; preview?: boolean; showScreenshot?: boolean }>()
+const props = withDefaults(defineProps<{
+  ticket: Ticket
+  index: number
+  lanes: Lane[]
+  preview?: boolean
+  showScreenshot?: boolean
+  /** How many tickets share the lane; greys out a reorder that would change nothing. */
+  laneCount?: number
+}>(), { laneCount: 0 })
 const emit = defineEmits<{
   open: [ticket: Ticket]
   move: [laneId: string]
+  reorder: [placement: 'top' | 'up' | 'down' | 'bottom']
 }>()
 
 const dateFormatter = new Intl.DateTimeFormat('en', {
@@ -33,6 +42,16 @@ const authorText = computed(() => {
 const authorTitle = computed(() => props.ticket.author?.email || props.ticket.feedback?.tester?.email || '')
 const completedTodoCount = computed(() => props.ticket.todos.filter(todo => todo.completed).length)
 const laneOptions = computed(() => props.lanes.map(lane => ({ value: lane.id, label: lane.name })))
+
+// The phone has no drag between cards, so the card offers the four reorder steps itself.
+const atTop = computed(() => props.index <= 0)
+const atBottom = computed(() => props.index >= props.laneCount - 1)
+const reorderButtons = computed(() => [
+  { placement: 'top' as const, label: 'Move to top of lane', icon: ArrowUpToLine, disabled: atTop.value },
+  { placement: 'up' as const, label: 'Move up', icon: ChevronUp, disabled: atTop.value },
+  { placement: 'down' as const, label: 'Move down', icon: ChevronDown, disabled: atBottom.value },
+  { placement: 'bottom' as const, label: 'Move to bottom of lane', icon: ArrowDownToLine, disabled: atBottom.value },
+])
 </script>
 
 <template>
@@ -119,13 +138,29 @@ const laneOptions = computed(() => props.lanes.map(lane => ({ value: lane.id, la
 
     <div class="muted block px-4 pb-4 text-[10px] font-semibold uppercase tracking-wider sm:hidden">
       <span class="mb-1 block">Move</span>
-      <UiSelect
-        :model-value="ticket.laneId"
-        :options="laneOptions"
-        aria-label="Move ticket"
-        compact
-        @update:model-value="emit('move', $event)"
-      />
+      <div class="flex items-center gap-1.5">
+        <div class="min-w-0 flex-1">
+          <UiSelect
+            :model-value="ticket.laneId"
+            :options="laneOptions"
+            aria-label="Move ticket"
+            compact
+            @update:model-value="emit('move', $event)"
+          />
+        </div>
+        <button
+          v-for="action in reorderButtons"
+          :key="action.placement"
+          type="button"
+          class="focus-ring muted grid size-8 shrink-0 place-items-center rounded-lg border border-[var(--line)] transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--line)] disabled:hover:bg-transparent"
+          :disabled="preview || action.disabled"
+          :aria-label="action.label"
+          :title="action.label"
+          @click="emit('reorder', action.placement)"
+        >
+          <component :is="action.icon" :size="15" aria-hidden="true" />
+        </button>
+      </div>
     </div>
 
   </article>

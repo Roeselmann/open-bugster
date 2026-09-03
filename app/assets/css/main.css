@@ -51,6 +51,8 @@ button { cursor: pointer; }
 }
 
 .scrollbar-thin { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.scrollbar-none { scrollbar-width: none; }
+.scrollbar-none::-webkit-scrollbar { display: none; }
 
 /*
  * Rendered Markdown (descriptions, comments). Hand-rolled on the theme tokens instead of
@@ -167,6 +169,24 @@ button { cursor: pointer; }
 .ui-dialog-overlay[data-state="closed"] { animation: dialog-overlay-out 120ms ease-in both; }
 .ui-dialog-content[data-state="open"] { animation: dialog-content-in 170ms cubic-bezier(.2, .8, .2, 1) both; }
 .ui-dialog-content[data-state="closed"] { animation: dialog-content-out 120ms ease-in both; }
+
+/* The phone menu rises from the bottom edge instead of scaling in at the centre. */
+@keyframes sheet-in {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@keyframes sheet-out {
+  from { transform: translateY(0); }
+  to { transform: translateY(100%); }
+}
+.ui-sheet-content[data-state="open"] { animation: sheet-in 200ms cubic-bezier(.2, .8, .2, 1) both; }
+.ui-sheet-content[data-state="closed"] { animation: sheet-out 150ms ease-in both; }
+
+/* Rows of that menu, shared with the entries a page contributes. */
+.sheet-heading { padding: .75rem .75rem .25rem; font-size: .6875rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.sheet-item { display: flex; width: 100%; align-items: center; gap: .625rem; height: 2.75rem; border-radius: .75rem; padding: 0 .75rem; font-size: .875rem; font-weight: 500; text-align: left; }
+.sheet-item:hover, .sheet-item:focus-visible { background: var(--accent-soft); }
+.sheet-item:disabled { opacity: .5; }
 
 .ui-toast[data-state="open"] { animation: toast-in 180ms cubic-bezier(.2, .8, .2, 1) both; }
 .ui-toast[data-state="closed"] { animation: toast-out 140ms ease-in both; }

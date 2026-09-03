@@ -1,13 +1,21 @@
 <script setup lang="ts">
-import { Archive, Bug, Layers, LogOut, Moon, Sun, User, Users } from '@lucide/vue'
+import { Archive, Bug, Check, Layers, LogOut, Menu, Moon, Sun, User, Users } from '@lucide/vue'
 import {
+  DialogContent,
+  DialogDescription,
+  DialogOverlay,
+  DialogPortal,
+  DialogRoot,
+  DialogTitle,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuPortal,
   DropdownMenuRoot,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  VisuallyHidden,
 } from 'reka-ui'
+import type { WorkspaceSummary } from '~~/shared/types/domain'
 
 const props = withDefaults(defineProps<{
   boardId?: string
@@ -18,15 +26,38 @@ const props = withDefaults(defineProps<{
 
 const { isDark, toggle } = useTheme()
 const { user, instanceAdmin, logout } = useAuth()
-const { workspaceId } = useCurrentWorkspace()
+const { workspaceId, workspace } = useCurrentWorkspace()
+const { workspaces } = useWorkspaces()
+const { boards } = useBoards()
+const lastWorkspaceId = useLastWorkspaceId()
+const lastBoardId = useLastBoardId()
 
 // Board-less pages (profile, user administration) mount the same header.
 const home = computed(() => (props.boardId ? `/b/${props.boardId}` : '/'))
+const showArchiveLink = computed(() => Boolean(props.boardId) && (props.archiveMode || props.canViewArchive))
+
+// Below `md` everything but the title folds into this sheet.
+const menuOpen = ref(false)
+const route = useRoute()
+watch(() => route.fullPath, () => { menuOpen.value = false })
+
+function closeMenu() {
+  menuOpen.value = false
+}
+
+// Same rule as WorkspaceSwitcher: the remembered board if it lives here, else the first.
+function openWorkspace(item: WorkspaceSummary) {
+  lastWorkspaceId.value = item.id
+  const inWorkspace = boards.value.filter(board => board.workspaceId === item.id)
+  const target = inWorkspace.find(board => board.id === lastBoardId.value) || inWorkspace[0]
+  closeMenu()
+  return navigateTo(target ? `/b/${target.id}` : '/')
+}
 </script>
 
 <template>
   <header class="border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_88%,transparent)] backdrop-blur-xl">
-    <div class="mx-auto flex min-h-18 max-w-[1800px] items-center gap-3 px-4 sm:px-6">
+    <div class="mx-auto hidden min-h-18 max-w-[1800px] items-center gap-3 px-6 md:flex">
       <!-- The wrapper takes all free space (keeping the icons right even when the workspace
            switcher inside renders nothing) and passes it down, so the switcher can lay a
            description into the room the workspace name leaves over. -->
@@ -41,7 +72,7 @@ const home = computed(() => (props.boardId ? `/b/${props.boardId}` : '/'))
       </div>
 
       <NuxtLink
-        v-if="boardId && (archiveMode || canViewArchive)"
+        v-if="showArchiveLink"
         :to="archiveMode ? `/b/${boardId}` : `/b/${boardId}/archive`"
         class="focus-ring grid size-10 place-items-center rounded-xl border border-[var(--line)] transition hover:bg-[var(--panel-strong)]"
         :aria-label="archiveMode ? 'Back to board' : 'Open archive'"
@@ -100,5 +131,78 @@ const home = computed(() => (props.boardId ? `/b/${props.boardId}` : '/'))
         </DropdownMenuPortal>
       </DropdownMenuRoot>
     </div>
+
+    <!-- Phone: logo, the page's title, its quick actions (search, filter) and the burger. -->
+    <div class="flex min-h-14 items-center gap-2 px-3 md:hidden">
+      <NuxtLink :to="home" class="focus-ring grid size-9 shrink-0 place-items-center rounded-xl bg-[var(--ink)] text-[var(--canvas)] shadow-sm" aria-label="Open-Bugster board">
+        <Bug :size="18" :stroke-width="2.2" />
+      </NuxtLink>
+      <div class="min-w-0 flex-1">
+        <slot name="title">
+          <span class="block truncate text-[15px] font-bold tracking-[-0.02em]">{{ workspace?.name || 'Open-Bugster' }}</span>
+        </slot>
+      </div>
+      <slot name="actions" />
+      <button
+        type="button"
+        class="focus-ring grid size-10 shrink-0 place-items-center rounded-xl border border-[var(--line)] transition hover:bg-[var(--panel-strong)]"
+        aria-label="Open menu"
+        @click="menuOpen = true"
+      >
+        <Menu :size="18" />
+      </button>
+    </div>
+
+    <DialogRoot :open="menuOpen" @update:open="menuOpen = $event">
+      <DialogPortal>
+        <DialogOverlay class="ui-dialog-overlay fixed inset-0 z-[70] bg-black/35 backdrop-blur-[2px]" />
+        <DialogContent
+          class="ui-sheet-content fixed inset-x-0 bottom-0 z-[71] max-h-[85dvh] overflow-y-auto rounded-t-2xl border-t border-[var(--line)] bg-[var(--panel-strong)] px-2 pt-2 pb-[max(.5rem,env(safe-area-inset-bottom))] text-[var(--ink)] shadow-[0_-18px_45px_rgba(0,0,0,.16)]"
+          aria-label="Menu"
+          @open-auto-focus.prevent
+        >
+          <VisuallyHidden>
+            <DialogTitle>Menu</DialogTitle>
+            <DialogDescription>Boards, filters and your account.</DialogDescription>
+          </VisuallyHidden>
+          <div aria-hidden="true" class="mx-auto mb-2 h-1 w-10 rounded-full bg-[var(--line)]" />
+
+          <div v-if="user" class="px-3 py-2">
+            <p class="truncate text-sm font-bold">{{ displayName(user) }}</p>
+            <p class="muted truncate text-xs">{{ user.email }}</p>
+          </div>
+
+          <!-- The page's own entries: boards, settings, sync. -->
+          <slot name="menu" :close="closeMenu" />
+
+          <template v-if="workspaces.length > 1">
+            <p class="sheet-heading">Workspaces</p>
+            <button v-for="item in workspaces" :key="item.id" type="button" class="sheet-item" @click="openWorkspace(item)">
+              <Check v-if="item.id === workspaceId" :size="15" stroke-width="2.5" class="text-[var(--accent)]" aria-hidden="true" />
+              <span v-else class="size-[15px]" aria-hidden="true" />
+              <span class="min-w-0 flex-1 truncate">{{ item.name }}</span>
+              <span class="muted shrink-0 text-[11px] font-semibold tabular-nums">{{ item.boardCount }} {{ item.boardCount === 1 ? 'board' : 'boards' }}</span>
+            </button>
+          </template>
+
+          <div class="my-1 h-px bg-[var(--line)]" />
+          <NuxtLink v-if="showArchiveLink" :to="archiveMode ? `/b/${boardId}` : `/b/${boardId}/archive`" class="sheet-item" @click="closeMenu">
+            <Archive :size="15" aria-hidden="true" /> {{ archiveMode ? 'Back to board' : 'Archive' }}
+          </NuxtLink>
+          <button type="button" class="sheet-item" @click="toggle">
+            <Sun v-if="isDark" :size="15" aria-hidden="true" />
+            <Moon v-else :size="15" aria-hidden="true" />
+            {{ isDark ? 'Light mode' : 'Dark mode' }}
+          </button>
+          <NuxtLink to="/profile" class="sheet-item" @click="closeMenu"><User :size="15" aria-hidden="true" /> Your profile</NuxtLink>
+          <NuxtLink v-if="instanceAdmin" to="/admin/users" class="sheet-item" @click="closeMenu"><Users :size="15" aria-hidden="true" /> Users</NuxtLink>
+          <NuxtLink v-if="instanceAdmin && workspaceId" :to="`/w/${workspaceId}/settings`" class="sheet-item" @click="closeMenu"><Layers :size="15" aria-hidden="true" /> Manage workspaces</NuxtLink>
+          <div class="my-1 h-px bg-[var(--line)]" />
+          <button type="button" class="sheet-item font-semibold text-rose-600 hover:bg-rose-500/10" @click="logout()">
+            <LogOut :size="15" aria-hidden="true" /> Sign out
+          </button>
+        </DialogContent>
+      </DialogPortal>
+    </DialogRoot>
   </header>
 </template>
