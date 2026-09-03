@@ -11,7 +11,9 @@ const props = withDefaults(defineProps<{
   showScreenshot?: boolean
   /** How many tickets share the lane; greys out a reorder that would change nothing. */
   laneCount?: number
-}>(), { laneCount: 0 })
+  /** Off on the phone, where a finger would rather scroll than drag and the buttons reorder instead. */
+  draggable?: boolean
+}>(), { laneCount: 0, draggable: true })
 const emit = defineEmits<{
   open: [ticket: Ticket]
   move: [laneId: string]
@@ -57,10 +59,13 @@ const reorderButtons = computed(() => [
 <template>
   <article
     :data-ticket-id="ticket.id"
-    class="group relative cursor-grab overflow-hidden rounded-[10px] bg-[var(--panel-strong)] shadow-[0_1px_1px_rgba(0,0,0,.10),0_0_1px_rgba(0,0,0,.12)] transition-[box-shadow,transform] duration-150 ease-out active:cursor-grabbing dark:shadow-[0_1px_2px_rgba(0,0,0,.55),0_0_1px_rgba(0,0,0,.6)]"
-    :class="preview
-      ? 'scale-[.99] cursor-grabbing opacity-[.96] shadow-[0_18px_45px_rgba(0,0,0,.18),0_3px_12px_rgba(0,0,0,.12)]'
-      : 'hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/10'"
+    class="group relative overflow-hidden rounded-[10px] bg-[var(--panel-strong)] shadow-[0_1px_1px_rgba(0,0,0,.10),0_0_1px_rgba(0,0,0,.12)] transition-[box-shadow,transform] duration-150 ease-out dark:shadow-[0_1px_2px_rgba(0,0,0,.55),0_0_1px_rgba(0,0,0,.6)]"
+    :class="[
+      draggable ? 'cursor-grab active:cursor-grabbing' : '',
+      preview
+        ? 'scale-[.99] cursor-grabbing opacity-[.96] shadow-[0_18px_45px_rgba(0,0,0,.18),0_3px_12px_rgba(0,0,0,.12)]'
+        : 'hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/10',
+    ]"
   >
     <button class="focus-ring block w-full text-left" :tabindex="preview ? -1 : undefined" @click="!preview && emit('open', ticket)">
       <!--

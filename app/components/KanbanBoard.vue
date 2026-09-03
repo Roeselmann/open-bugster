@@ -7,7 +7,7 @@ const props = withDefaults(defineProps<{
   lanes: Lane[]
   tickets: Ticket[]
   canEdit?: boolean
-  /** Phone layout: only this lane, full width, without the lane's own frame and scroll box. */
+  /** Phone layout: only this lane, full width, without the lane's own frame and scroll box — and no drag, the card's buttons reorder. */
   laneId?: string | null
 }>(), { canEdit: true, laneId: null })
 const emit = defineEmits<{ open: [ticket: Ticket]; move: [id: string, laneId: string, index: number]; create: [laneId: string, placement: 'top' | 'bottom'] }>()
@@ -306,7 +306,7 @@ onBeforeUnmount(cleanupPointerDrag)
       minWidth: `${visibleLanes.length * 280}px`,
       gridTemplateColumns: `repeat(${visibleLanes.length}, minmax(260px, 1fr))`,
     }"
-    @pointerdown="canEdit && beginPointerDrag($event)"
+    @pointerdown="canEdit && !compact && beginPointerDrag($event)"
     @click.capture="preventClickAfterDrag"
   >
     <section v-for="lane in visibleLanes" :key="lane.id" class="min-w-0">
@@ -374,6 +374,7 @@ onBeforeUnmount(cleanupPointerDrag)
                 :lanes="lanes"
                 :show-screenshot="showScreenshotByLane[lane.id]"
                 :lane-count="ticketsFor(lane.id).length"
+                :draggable="!compact"
                 @open="emit('open', $event)"
                 @move="nextLaneId => emit('move', item.id, nextLaneId, ticketsFor(nextLaneId).length)"
                 @reorder="placement => reorderTicket(item, placement)"
