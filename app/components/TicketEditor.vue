@@ -16,7 +16,7 @@ import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; deletingAttachmentId?: string | null; initialLaneId?: string | null; initialPlacement?: 'top' | 'bottom'; laneTicketCount?: number; /** Other boards of the workspace the ticket may be moved onto. */ boards?: BoardSummary[] }>(), { canEdit: true, initialLaneId: null, initialPlacement: 'bottom', laneTicketCount: 0, boards: () => [] })
 const emit = defineEmits<{
   close: []
-  save: [payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; typeId?: string | null; laneId?: string; placement?: 'top' | 'bottom'; todos: TicketTodoInput[]; attachments: File[] }]
+  save: [payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; typeId?: string | null; laneId?: string; placement?: 'top' | 'bottom'; todos: TicketTodoInput[]; attachments: File[]; stayOpen?: boolean }]
   commented: []
   notify: [type: 'success' | 'error', text: string]
   move: [ticket: Ticket, laneId: string]
@@ -39,7 +39,9 @@ const descriptionInput = ref<HTMLTextAreaElement | null>(null)
 // A saved description opens as rendered Markdown; the textarea only shows on request, or
 // right away when there is nothing to read yet.
 const editingDescription = ref(true)
-const hasSavedDescription = computed(() => Boolean(props.ticket?.description))
+// Whitespace counts as nothing: a description of blanks would otherwise open as an empty
+// preview with only an Edit button, and the field would look broken.
+const hasSavedDescription = computed(() => Boolean(props.ticket?.description?.trim()))
 function editDescription() {
   if (!props.canEdit) return
   editingDescription.value = true
@@ -130,7 +132,7 @@ watch(() => props.ticket, (ticket, previous) => {
   if (!keepFiles) pendingFiles.value = []
   form.title = ticket?.title || ''
   form.description = ticket?.description || ''
-  editingDescription.value = !ticket?.description
+  editingDescription.value = !ticket?.description?.trim()
   form.priority = ticket?.priority || 'medium'
   form.dueDate = ticket?.dueDate || ''
   form.buildNumber = ticket?.buildNumber || ''
@@ -146,7 +148,9 @@ watch(() => props.ticket, (ticket, previous) => {
   todos.value = (ticket?.todos || []).map(todo => ({ key: `todo-${++todoSequence}`, text: todo.text, completed: todo.completed }))
 }, { immediate: true })
 
-function submit() {
+// `stayOpen` is the small Save beside a new ticket's description: the ticket is created like
+// with the big one, but the editor stays and shows it, so writing can go on.
+function submit(options: { stayOpen?: boolean } = {}) {
   if (!form.title.trim()) return
   const cleanTodos = todos.value
     .map(todo => ({ text: todo.text.trim(), completed: todo.completed }))
@@ -156,7 +160,7 @@ function submit() {
   // Sent only by somebody allowed to set it — the API rejects it from anyone else.
   const authorFields = canAttribute.value ? { authorId: form.authorId === UNASSIGNED ? null : form.authorId } : {}
   const placementFields = isEdit.value ? {} : { laneId: form.laneId || undefined, placement: form.placement }
-  emit('save', { ...shared, ...manualFields, ...authorFields, ...placementFields, title: form.title.trim(), description: form.description, priority: form.priority, dueDate: form.dueDate || null, labels: [...form.labels], categoryName: form.categoryName.trim() || null, typeId: form.typeId === NO_TYPE ? null : form.typeId })
+  emit('save', { ...shared, ...manualFields, ...authorFields, ...placementFields, title: form.title.trim(), description: form.description, priority: form.priority, dueDate: form.dueDate || null, labels: [...form.labels], categoryName: form.categoryName.trim() || null, typeId: form.typeId === NO_TYPE ? null : form.typeId, stayOpen: options.stayOpen === true })
 }
 
 function focusTodo(key: string) {
@@ -403,7 +407,7 @@ function focusTitle(event: Event) {
         <VisuallyHidden>
           <DialogDescription>{{ isEdit ? 'Edit and save the ticket.' : 'Create a new ticket.' }}</DialogDescription>
         </VisuallyHidden>
-        <form class="flex min-h-full flex-col" @submit.prevent="submit">
+        <form class="flex min-h-full flex-col" @submit.prevent="submit()">
           <header class="sticky top-0 z-10 grid grid-cols-[1fr_auto_1fr] items-center gap-3 border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_92%,transparent)] px-5 py-4 backdrop-blur-xl sm:px-7">
             <DialogTitle as-child>
               <h2 class="min-w-0 truncate text-xl font-bold tracking-[-.03em]">{{ ticket ? `Ticket #${ticket.ticketNumber}` : 'New ticket' }}</h2>
@@ -433,7 +437,7 @@ function focusTitle(event: Event) {
               <div class="mb-2 flex items-center justify-between gap-3">
                 <label for="ticket-description" class="block text-xs font-bold uppercase tracking-[.08em]">Description</label>
                 <div v-if="canEdit && isEdit" class="flex items-center gap-2">
-                  <template v-if="editingDescription">
+                  <template v-if="editingDescription || form.description !== (ticket?.description || '')">
                     <button v-if="hasSavedDescription" type="button" class="focus-ring flex h-7 items-center gap-1.5 rounded-lg border border-[var(--line)] px-2.5 text-xs font-semibold" @click="cancelDescription">
                       <X :size="14" /> Cancel
                     </button>
@@ -445,6 +449,17 @@ function focusTitle(event: Event) {
                     <Pencil :size="14" /> Edit
                   </button>
                 </div>
+                <!-- A new ticket: this creates it and keeps the editor open on it, unlike the Save below. -->
+                <button
+                  v-else-if="canEdit && form.description.trim()"
+                  type="button"
+                  :disabled="saving || !form.title.trim()"
+                  :title="form.title.trim() ? 'Create the ticket and keep editing' : 'A title is needed first'"
+                  class="focus-ring flex h-7 items-center gap-1.5 rounded-lg bg-[var(--ink)] px-2.5 text-xs font-semibold text-[var(--canvas)] disabled:opacity-50"
+                  @click="submit({ stayOpen: true })"
+                >
+                  <Check :size="14" /> Save
+                </button>
               </div>
               <textarea v-if="editingDescription" id="ticket-description" ref="descriptionInput" v-model="form.description" maxlength="10000" rows="7" class="focus-ring surface-strong w-full resize-y rounded-xl px-3.5 py-3 text-sm leading-relaxed outline-none" placeholder="Context, expected behavior, notes… Markdown is supported." />
               <MarkdownView

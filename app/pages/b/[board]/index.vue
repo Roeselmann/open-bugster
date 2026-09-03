@@ -262,11 +262,11 @@ function openTicket(ticket: Ticket) {
   editorOpen.value = true
 }
 
-async function saveTicket(payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; typeId?: string | null; laneId?: string; placement?: 'top' | 'bottom'; todos: TicketTodoInput[]; attachments: File[] }) {
+async function saveTicket(payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; typeId?: string | null; laneId?: string; placement?: 'top' | 'bottom'; todos: TicketTodoInput[]; attachments: File[]; stayOpen?: boolean }) {
   saving.value = true
   const wasEdit = Boolean(selected.value)
   try {
-    const { attachments, laneId, placement, ...ticketPayload } = payload
+    const { attachments, laneId, placement, stayOpen, ...ticketPayload } = payload
     const response = selected.value
       ? await $fetch<{ ticket: Ticket }>(`/api/tickets/${selected.value.id}`, { method: 'PATCH', body: ticketPayload })
       : await $fetch<{ ticket: Ticket }>('/api/tickets', { method: 'POST', body: { ...ticketPayload, boardId: boardId.value, laneId: laneId || newTicketLaneId.value || undefined, placement: placement || newTicketPlacement.value } })
@@ -294,7 +294,8 @@ async function saveTicket(payload: { title?: string; description?: string; prior
       if (uploadedIndex >= 0) tickets.value[uploadedIndex] = upload.ticket
     }
     await Promise.all([refreshCategories(), refreshLabels(), refreshBoards()])
-    editorOpen.value = false
+    // The small Save beside the description keeps the editor on the ticket it just created.
+    if (!stayOpen) editorOpen.value = false
     notify('success', wasEdit ? 'Ticket updated.' : 'Ticket created.')
   } catch (error) {
     notify('error', errorText(error))
