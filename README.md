@@ -21,9 +21,9 @@ Open-Bugster is a lightweight, self-hosted Kanban board that is meant to be driv
 - **Move tickets by dragging**  
   Drag cards between lanes and to any position within a lane.
 - **Create tickets manually**  
-  Capture ideas, tasks, and bugs with priority, due date, build number, and an internal comment.
+  Capture ideas, tasks, and bugs with a Markdown description, priority, due date, build number, and an internal comment.
 - **Discuss in the ticket**  
-  A comment thread per ticket instead of one shared note, with a history of moves, assignments and priority changes.
+  A Markdown comment thread per ticket instead of one shared note, with a history of moves, assignments and priority changes.
 - **Organize with categories and labels**  
   One colored category per ticket, plus as many labels as needed. Labels are suggested while typing and created on the fly.
 - **Filter and search**  

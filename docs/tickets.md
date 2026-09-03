@@ -8,6 +8,8 @@ A ticket is a card on a board: a title, a description, an internal comment, prio
 
 New tickets are created with **Add ticket** at the bottom of a lane, or with the **+** in a lane's header to put one at the top; the editor lets you change the lane and the position before saving. Either way they land in that lane. An open ticket can be sent to the top or bottom of its lane with the two arrow buttons beside the **Lane** select. Imported tickets additionally show the original TestFlight feedback with tester, device, system, locale, and build. A board administrator can set the **Author** by hand, which is how an import that arrived before anyone had an account gets one afterwards.
 
+The description is Markdown. A ticket that already has one opens with the rendered text; **Edit** (or a click on the text) brings back the editor. The **Save** beside the field stores just the description right away and shows the rendered result without closing the ticket; **Cancel** drops the unsaved changes and returns to the rendered view. A ticket without a description starts in the editor. Viewers see the rendered text only.
+
 Cards are moved by dragging them between lanes or within a lane. On narrow screens each card offers a lane dropdown instead.
 
 ### To-dos and attachments
@@ -18,7 +20,7 @@ Each ticket carries a to-do list: record the next steps, reorder them, and tick 
 
 A ticket can be assigned to any member of its board, and the assignee's avatar appears on the card. The **All assignees** filter next to the search box narrows the board to your own work, to a colleague's, or to everything nobody has picked up yet.
 
-Each ticket carries a comment thread, open to viewers as well, and a history that records when it was created, moved, assigned, re-prioritised, archived, or restored, and through which agent when a token acted. Authors edit and delete their own comments; board administrators can also remove someone else's.
+Each ticket carries a comment thread, open to viewers as well, and a history that records when it was created, moved, assigned, re-prioritised, archived, or restored, and through which agent when a token acted. Comments are Markdown like the description. Authors edit and delete their own comments; board administrators can also remove someone else's.
 
 ### Filtering and searching
 
@@ -34,6 +36,7 @@ The filter pane narrows the board by labels (any of the picked ones), category, 
 - **Ticket numbers are instance-global**, so a number is a handle that works across boards and in a commit message. `ticket.getByNumber` needs no board.
 - **Positions are per lane.** `moveTicket` takes a lane and an index and renumbers the lane. `ticket.create` takes a `placement` (`top` or `bottom`, default `bottom`) and, for `top`, renumbers the lane the same way.
 - **To-dos are replaced as a whole list** on `ticket.create` and `ticket.update`, up to 100 entries of 500 characters. Titles are at most 160 characters, descriptions 10,000.
+- **Descriptions and comments are Markdown**, rendered by `renderMarkdown` with raw HTML switched off: a `<script>` in the text is shown as text, `javascript:` and `data:` links are dropped, and every link opens in a new tab with `rel="noopener noreferrer"`. That is what makes the output safe for `v-html` without a DOM-based sanitizer, so it works in SSR and in the node-only tests.
 - **Categories and labels are set by name.** `categoryName` creates the category if needed; `labels` creates missing labels and prunes those left without a ticket.
 - **Attachments are validated twice**: by extension allowlist and by magic-byte signature, for uploads and for server-side downloads alike. Stored paths are resolved against the attachments directory and refused if they escape it.
 - **Server-side download** (`attachment.addFromUrl`) screens the URL like a webhook destination, refuses redirects, and reads the body under a running 25 MB cap. See [mcp-server.md](mcp-server.md) for why it exists.
@@ -57,6 +60,7 @@ The filter pane narrows the board by labels (any of the picked ones), category, 
 | `app/components/TicketCard.vue`, `PriorityPill.vue` | The card. |
 | `app/components/TicketEditor.vue` | The ticket dialog: fields, to-dos, labels, category, attachments, author, assignee. |
 | `app/components/TicketComments.vue`, `TicketActivity.vue` | The thread and the history. |
+| [shared/utils/markdown.ts](../shared/utils/markdown.ts), `app/components/MarkdownView.vue` | `renderMarkdown` and the component that shows its output; the `.md-body` styles live in `app/assets/css/main.css`. |
 | `app/components/BoardFilterPane.vue`, `ImageLightbox.vue` | Filtering and search; image preview. |
 | `app/pages/b/[board]/index.vue`, `archive.vue` | The board and the archive view. |
 
@@ -73,4 +77,5 @@ The filter pane narrows the board by labels (any of the picked ones), category, 
 - `tests/attachment-policy.test.ts`: the type and signature allowlist.
 - `tests/attachment-file.test.ts`: a stored path cannot escape the attachments directory.
 - `tests/validation.test.ts`: the ticket schemas.
+- `tests/markdown.test.ts`: raw HTML is escaped, script-scheme links are dropped, links open in a new tab.
 - `tests/mcp.test.ts`, `tests/api-v1.test.ts`: the ticket tools and routes, including cursor paging.

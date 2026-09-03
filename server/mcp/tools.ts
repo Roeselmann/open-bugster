@@ -58,6 +58,7 @@ function reply(payload: unknown) {
  * sit behind the same approval as a delete. Declared on every tool for that reason.
  */
 const readsOnly = { readOnlyHint: true, openWorldHint: false }
+const MARKDOWN_FIELD = 'Markdown. Headings, lists, links and fenced code blocks render; raw HTML is shown as text, not interpreted.'
 
 export function registerTools(server: McpServer, actor: Actor) {
   // `AnyOperation` for the same reason the registry uses it: `ZodType` is invariant, so a
@@ -252,12 +253,12 @@ export function registerTools(server: McpServer, actor: Actor) {
     description:
       'File a new ticket. Search first — a duplicate is worse than a comment on the existing one. '
       + 'Labels are created on demand; a lane must already exist, so take its id from board_overview. '
-      + 'The ticket is attributed to the principal this token acts for.',
+      + 'The ticket is attributed to the principal this token acts for. The description is Markdown.',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     inputSchema: {
       boardId: z.string(),
       title: z.string().max(160),
-      description: z.string().max(10000).optional(),
+      description: z.string().max(10000).optional().describe(MARKDOWN_FIELD),
       laneId: z.string().optional().describe('Defaults to the board’s first non-import lane.'),
       priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
       assigneeId: z.string().optional().describe('Must be a member of this board.'),
@@ -277,13 +278,13 @@ export function registerTools(server: McpServer, actor: Actor) {
 
   server.registerTool('update_ticket', {
     title: 'Update a ticket',
-    description: 'Change fields on an existing ticket. Only the fields given are touched; everything omitted is left alone.',
+    description: 'Change fields on an existing ticket. Only the fields given are touched; everything omitted is left alone. The description is Markdown.',
     // Destructive in the hint's sense: what a field held before is overwritten, not appended to.
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     inputSchema: {
       ticketId: z.string(),
       title: z.string().max(160).optional(),
-      description: z.string().max(10000).optional(),
+      description: z.string().max(10000).optional().describe(MARKDOWN_FIELD),
       priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
       assigneeId: z.string().nullable().optional(),
       dueDate: z.string().nullable().optional(),
@@ -314,9 +315,9 @@ export function registerTools(server: McpServer, actor: Actor) {
 
   server.registerTool('comment_on_ticket', {
     title: 'Comment on a ticket',
-    description: 'Add a comment to a ticket’s thread. Prefer this to editing the description when adding a finding, so the ticket keeps its history.',
+    description: 'Add a comment to a ticket’s thread. Prefer this to editing the description when adding a finding, so the ticket keeps its history. The body is Markdown.',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    inputSchema: { ticketId: z.string(), body: z.string().min(1).max(10000) }
+    inputSchema: { ticketId: z.string(), body: z.string().min(1).max(10000).describe(MARKDOWN_FIELD) }
   }, async ({ ticketId, body }) => {
     const { comment } = await call<{ comment: TicketComment }>(ops.commentAdd, { ticketId, body })
     return reply({ id: comment.id, createdAt: comment.createdAt })

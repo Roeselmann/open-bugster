@@ -128,7 +128,7 @@ async function remove(comment: TicketComment) {
             </button>
           </div>
         </div>
-        <p v-else class="mt-2 whitespace-pre-wrap text-sm leading-relaxed">{{ comment.body }}</p>
+        <MarkdownView v-else :source="comment.body" class="mt-2 text-sm leading-relaxed" />
       </li>
     </ul>
 
@@ -139,7 +139,7 @@ async function remove(comment: TicketComment) {
         rows="3"
         maxlength="10000"
         class="focus-ring surface-strong w-full resize-y rounded-xl px-3.5 py-3 text-sm leading-relaxed outline-none"
-        placeholder="Write a comment…"
+        placeholder="Write a comment… Markdown is supported."
       />
       <div class="mt-2 flex justify-end">
         <button type="button" :disabled="posting || !draft.trim()" class="focus-ring h-9 rounded-xl bg-[var(--ink)] px-3.5 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50" @click="post">

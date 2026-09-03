@@ -46,6 +46,10 @@ search is `search_tickets` without a `boardId` rather than a second search tool.
 | `restore_ticket` | The undo of archiving (board admin) | idempotent |
 | `add_attachment` | Download a URL server-side and attach it | **open-world** |
 
+The `description` of `create_ticket` and `update_ticket` and the `body` of `comment_on_ticket`
+are Markdown; their field descriptions say so, so an agent formats with headings, lists and
+fenced code blocks on its own. Raw HTML is escaped when rendered.
+
 Every tool answers with pretty-printed JSON in a single text block — the shape a model reads
 best — and errors surface as their message string, so every message in the MCP path is written
 for a model's eyes and never carries internals or resolved addresses.

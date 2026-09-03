@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, ArrowDownToLine, ArrowUpToLine, Calendar, Check, Download, FileText, GripVertical, Image, ListTodo, MessageSquare, Paperclip, Plus, Save, Shapes, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { Archive, ArrowDownToLine, ArrowUpToLine, Calendar, Check, Download, FileText, GripVertical, Image, ListTodo, MessageSquare, Paperclip, Pencil, Plus, Save, Shapes, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogClose,
   DialogContent,
@@ -23,6 +23,7 @@ const emit = defineEmits<{
   reorder: [ticket: Ticket, placement: 'top' | 'bottom']
   archive: [ticket: Ticket]
   removeAttachment: [attachment: Attachment]
+  saveDescription: [ticket: Ticket, description: string]
 }>()
 
 const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '', typeId: 'none', laneId: '', placement: 'bottom' as 'top' | 'bottom' })
@@ -32,6 +33,26 @@ let todoSequence = 0
 const isEdit = computed(() => Boolean(props.ticket))
 const isManual = computed(() => !props.ticket || props.ticket.source === 'manual')
 const titleInput = ref<HTMLTextAreaElement | null>(null)
+const descriptionInput = ref<HTMLTextAreaElement | null>(null)
+
+// A saved description opens as rendered Markdown; the textarea only shows on request, or
+// right away when there is nothing to read yet.
+const editingDescription = ref(true)
+const hasSavedDescription = computed(() => Boolean(props.ticket?.description))
+function editDescription() {
+  if (!props.canEdit) return
+  editingDescription.value = true
+  nextTick(() => descriptionInput.value?.focus())
+}
+function cancelDescription() {
+  form.description = props.ticket?.description || ''
+  editingDescription.value = false
+}
+// Saved on its own, like a lane move: the parent replaces the ticket, and the watch below
+// flips back to the rendered view. A failed save therefore leaves the textarea open.
+function saveDescription() {
+  if (props.ticket) emit('saveDescription', props.ticket, form.description)
+}
 
 // An import only gains an author when its tester already had an account, so most of them
 // show the tester instead — who becomes a colleague the moment somebody invites them.
@@ -97,6 +118,7 @@ watch(() => props.ticket, (ticket, previous) => {
   if (!keepFiles) pendingFiles.value = []
   form.title = ticket?.title || ''
   form.description = ticket?.description || ''
+  editingDescription.value = !ticket?.description
   form.priority = ticket?.priority || 'medium'
   form.dueDate = ticket?.dueDate || ''
   form.buildNumber = ticket?.buildNumber || ''
@@ -390,10 +412,36 @@ function focusTitle(event: Event) {
               <textarea ref="titleInput" v-model="form.title" :maxlength="isManual ? 160 : 10000" required rows="2" class="focus-ring surface-strong min-h-20 w-full resize-none overflow-hidden rounded-xl px-3.5 py-3 text-[15px] leading-snug outline-none [field-sizing:content]" placeholder="What needs to be done?" />
             </label>
 
-            <label class="block">
-              <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Description</span>
-              <textarea v-model="form.description" maxlength="10000" rows="7" class="focus-ring surface-strong w-full resize-y rounded-xl px-3.5 py-3 text-sm leading-relaxed outline-none" placeholder="Context, expected behavior, notes…" />
-            </label>
+            <div class="block">
+              <div class="mb-2 flex items-center justify-between gap-3">
+                <label for="ticket-description" class="block text-xs font-bold uppercase tracking-[.08em]">Description</label>
+                <div v-if="canEdit && isEdit" class="flex items-center gap-2">
+                  <template v-if="editingDescription">
+                    <button v-if="hasSavedDescription" type="button" class="focus-ring flex h-7 items-center gap-1.5 rounded-lg border border-[var(--line)] px-2.5 text-xs font-semibold" @click="cancelDescription">
+                      <X :size="14" /> Cancel
+                    </button>
+                    <button type="button" :disabled="saving" class="focus-ring flex h-7 items-center gap-1.5 rounded-lg bg-[var(--ink)] px-2.5 text-xs font-semibold text-[var(--canvas)] disabled:opacity-50" @click="saveDescription">
+                      <Check :size="14" /> Save
+                    </button>
+                  </template>
+                  <button v-else type="button" class="focus-ring flex h-7 items-center gap-1.5 rounded-lg border border-[var(--line)] px-2.5 text-xs font-semibold" @click="editDescription">
+                    <Pencil :size="14" /> Edit
+                  </button>
+                </div>
+              </div>
+              <textarea v-if="editingDescription" id="ticket-description" ref="descriptionInput" v-model="form.description" maxlength="10000" rows="7" class="focus-ring surface-strong w-full resize-y rounded-xl px-3.5 py-3 text-sm leading-relaxed outline-none" placeholder="Context, expected behavior, notes… Markdown is supported." />
+              <MarkdownView
+                v-else
+                :source="form.description"
+                class="surface-strong min-h-24 w-full rounded-xl px-3.5 py-3 text-sm leading-relaxed"
+                :class="canEdit ? 'focus-ring cursor-text' : ''"
+                :role="canEdit ? 'button' : undefined"
+                :tabindex="canEdit ? 0 : undefined"
+                :title="canEdit ? 'Click to edit' : undefined"
+                @click="editDescription"
+                @keydown.enter.prevent="editDescription"
+              />
+            </div>
 
             <section class="space-y-3">
               <div class="flex items-center gap-2">

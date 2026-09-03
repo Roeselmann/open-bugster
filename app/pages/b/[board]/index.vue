@@ -330,6 +330,22 @@ async function moveTicketFromEditor(ticket: Ticket, laneId: string) {
   if (await moveTicket(ticket.id, laneId, targetIndex)) notify('success', `Moved to ${laneName}. Saved right away.`)
 }
 
+// The Save beside the description field: only that field, and the dialog stays open showing the rendered result.
+async function saveDescriptionFromEditor(ticket: Ticket, description: string) {
+  saving.value = true
+  try {
+    const response = await $fetch<{ ticket: Ticket }>(`/api/tickets/${ticket.id}`, { method: 'PATCH', body: { description } })
+    if (selected.value?.id === response.ticket.id) selected.value = response.ticket
+    const index = tickets.value.findIndex(item => item.id === response.ticket.id)
+    if (index >= 0) tickets.value[index] = response.ticket
+    notify('success', 'Description saved.')
+  } catch (error) {
+    notify('error', errorText(error))
+  } finally {
+    saving.value = false
+  }
+}
+
 // How many tickets share the open ticket's lane; the editor greys out a reorder that would change nothing.
 const selectedLaneTicketCount = computed(() => selected.value ? tickets.value.filter(item => item.laneId === selected.value!.laneId).length : 0)
 
@@ -390,7 +406,7 @@ async function sync() {
       <div v-else class="scrollbar-thin overflow-x-auto"><KanbanBoard :board-id="board.id" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" @open="openTicket" @move="moveTicket" @create="newTicket" /></div>
     </main>
 
-    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :deleting-attachment-id="deletingAttachmentId" :initial-lane-id="newTicketLaneId" :initial-placement="newTicketPlacement" :lane-ticket-count="selectedLaneTicketCount" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @reorder="reorderTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @commented="refresh()" @notify="notify" />
+    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :deleting-attachment-id="deletingAttachmentId" :initial-lane-id="newTicketLaneId" :initial-placement="newTicketPlacement" :lane-ticket-count="selectedLaneTicketCount" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @reorder="reorderTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @save-description="saveDescriptionFromEditor" @commented="refresh()" @notify="notify" />
 
     <UiConfirmDialog
       v-if="confirmation"

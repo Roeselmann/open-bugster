@@ -20,6 +20,7 @@
     "@tailwindcss/vite": "^4.1.14",
     "better-sqlite3": "^12.4.1",
     "jose": "^6.1.0",
+    "markdown-it": "^15.0.1",
     "nuxt": "^4.5.2",
     "nuxt-auth-utils": "^0.5.30",
     "reka-ui": "^2.10.4",
@@ -30,6 +31,7 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "@types/markdown-it": "^14.2.0",
     "@types/node": "^24.7.2",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4",
