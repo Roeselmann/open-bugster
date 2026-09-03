@@ -110,6 +110,22 @@ describe('the operation registry', () => {
       expect(await statusOf(ops.run(ops.ticketMove, actorOf('viewer'), { ticketId: ticket.id, laneId, index: 0 }))).toBe(403)
     })
 
+    it('asks for editing rights on both boards when a ticket moves between them', async () => {
+      const other = db.createBoard('Other app')
+      const { ticket } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Crossing', laneId }) as { ticket: { id: string } }
+      // Invisible destination: the same 404 a stranger gets everywhere.
+      expect(await statusOf(ops.run(ops.ticketTransfer, actorOf('editor'), { ticketId: ticket.id, boardId: other.id }))).toBe(404)
+      db.setBoardMember(other.id, people.editor!, 'viewer', false)
+      expect(await statusOf(ops.run(ops.ticketTransfer, actorOf('editor'), { ticketId: ticket.id, boardId: other.id }))).toBe(403)
+      expect(await statusOf(ops.run(ops.ticketTransfer, actorOf('editor'), { ticketId: ticket.id, boardId }))).toBe(409)
+      db.setBoardMember(other.id, people.editor!, 'editor', false)
+      const moved = await ops.run(ops.ticketTransfer, actorOf('editor'), { ticketId: ticket.id, boardId: other.id }) as { ticket: { boardId: string }; assigneeCleared: boolean }
+      expect(moved.ticket.boardId).toBe(other.id)
+      expect(moved.assigneeCleared).toBe(false)
+      expect(audit.listAudit({ operation: 'ticket.transfer' })[0]).toMatchObject({ targetId: ticket.id, changes: { boardId: other.id } })
+      db.deleteBoard(other.id)
+    })
+
     it('checks a ticket number against the ticket it names, not the caller', async () => {
       const { ticket } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Numbered', laneId }) as { ticket: { id: string; ticketNumber: number } }
       expect(await statusOf(ops.run(ops.ticketGetByNumber, actorOf('viewer'), { ticketNumber: ticket.ticketNumber }))).toBe(200)

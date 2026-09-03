@@ -62,6 +62,12 @@ export const ticketMoveSchema = z.object({
   index: z.number().int().min(0).max(10000)
 })
 
+export const ticketTransferSchema = z.object({
+  boardId: idSchema,
+  /** A lane of the destination board; its default lane when omitted. */
+  laneId: idSchema.optional()
+})
+
 export const boardCreateSchema = z.object({
   name: z.string().trim().min(1, 'A board name is required.').max(40),
   /** Omitted lands the board in the default workspace, so pre-workspace clients keep working. */

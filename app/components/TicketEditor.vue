@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, ArrowDownToLine, ArrowUpToLine, Calendar, Check, Download, FileText, GripVertical, Image, ListTodo, MessageSquare, Paperclip, Pencil, Plus, Save, Shapes, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, Download, FileText, GripVertical, Image, ListTodo, MessageSquare, Paperclip, Pencil, Plus, Save, Shapes, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogClose,
   DialogContent,
@@ -10,10 +10,10 @@ import {
   DialogTitle,
   VisuallyHidden,
 } from 'reka-ui'
-import type { Attachment, BoardMember, Category, LabelSummary, Lane, Ticket, TicketPriority, TicketTodoInput, TicketType } from '~~/shared/types/domain'
+import type { Attachment, BoardMember, Category, LabelSummary, Lane, Ticket, TicketPriority, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 
-const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; deletingAttachmentId?: string | null; initialLaneId?: string | null; initialPlacement?: 'top' | 'bottom'; laneTicketCount?: number }>(), { canEdit: true, initialLaneId: null, initialPlacement: 'bottom', laneTicketCount: 0 })
+const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; deletingAttachmentId?: string | null; initialLaneId?: string | null; initialPlacement?: 'top' | 'bottom'; laneTicketCount?: number; /** Other boards of the workspace the ticket may be moved onto. */ boards?: BoardSummary[] }>(), { canEdit: true, initialLaneId: null, initialPlacement: 'bottom', laneTicketCount: 0, boards: () => [] })
 const emit = defineEmits<{
   close: []
   save: [payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; typeId?: string | null; laneId?: string; placement?: 'top' | 'bottom'; todos: TicketTodoInput[]; attachments: File[] }]
@@ -21,6 +21,7 @@ const emit = defineEmits<{
   notify: [type: 'success' | 'error', text: string]
   move: [ticket: Ticket, laneId: string]
   reorder: [ticket: Ticket, placement: 'top' | 'bottom']
+  transfer: [ticket: Ticket, boardId: string, laneId: string]
   archive: [ticket: Ticket]
   removeAttachment: [attachment: Attachment]
   saveDescription: [ticket: Ticket, description: string]
@@ -104,6 +105,17 @@ const laneOptions = computed(() => props.lanes.map(lane => ({ value: lane.id, la
 const atTop = computed(() => (props.ticket?.position ?? 0) === 0)
 const atBottom = computed(() => (props.ticket?.position ?? 0) >= props.laneTicketCount - 1)
 const placementOptions = [{ value: 'top', label: 'Top of lane' }, { value: 'bottom', label: 'Bottom of lane' }]
+
+// Moving onto another board: pick the board, then one of its lanes, then say so with a
+// button — unlike the lane select, this leaves the board and must not happen by accident.
+const THIS_BOARD = 'this'
+const targetBoardId = ref(THIS_BOARD)
+const targetLaneId = ref('')
+const boardOptions = computed(() => [{ value: THIS_BOARD, label: 'This board' }, ...props.boards.map(board => ({ value: board.id, label: board.name }))])
+const targetBoard = computed(() => props.boards.find(board => board.id === targetBoardId.value) || null)
+const targetLaneOptions = computed(() => (targetBoard.value?.lanes || []).filter(lane => !lane.isImport).map(lane => ({ value: lane.id, label: lane.name })))
+watch(targetBoard, (board) => { targetLaneId.value = board?.lanes.find(lane => !lane.isImport)?.id || '' })
+watch(() => props.ticket?.id, () => { targetBoardId.value = THIS_BOARD })
 const priorityOptions = Object.entries(PRIORITY_LABELS).map(([value, label]) => ({ value, label }))
 const categoryOptions = computed(() => (props.categories || []).map(category => category.name))
 // Same sentinel trick as `UNASSIGNED`: "no type" needs a value the select can hold.
@@ -367,9 +379,14 @@ function date(value: string) {
   return new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 }
 
+// A new ticket wants its title typed; an existing one is opened to read, so the focus goes
+// to the panel itself — no caret in the title, and no keyboard popping up on a phone.
 function focusTitle(event: Event) {
   event.preventDefault()
-  nextTick(() => titleInput.value?.focus())
+  nextTick(() => {
+    if (props.ticket) document.querySelector<HTMLElement>('[data-ticket-editor-scroll]')?.focus()
+    else titleInput.value?.focus()
+  })
 }
 </script>
 
@@ -496,8 +513,25 @@ function focusTitle(event: Event) {
 
 
             <div v-if="ticket" class="block border-t border-[var(--line)] pt-6">
+              <template v-if="canEdit && boards.length">
+                <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Board</span>
+                <div class="mb-4"><UiSelect :model-value="targetBoardId" :options="boardOptions" aria-label="Board" @update:model-value="targetBoardId = $event" /></div>
+              </template>
               <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Lane</span>
-              <div class="flex items-center gap-2">
+              <div v-if="targetBoard" class="flex items-center gap-2">
+                <div class="min-w-0 flex-1">
+                  <UiSelect :model-value="targetLaneId" :options="targetLaneOptions" aria-label="Lane on the destination board" @update:model-value="targetLaneId = $event" />
+                </div>
+                <button
+                  type="button"
+                  class="focus-ring flex h-10 shrink-0 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"
+                  :disabled="!targetLaneId || saving"
+                  @click="emit('transfer', ticket, targetBoard.id, targetLaneId)"
+                >
+                  <ArrowRightLeft :size="16" aria-hidden="true" /> Move to {{ targetBoard.name }}
+                </button>
+              </div>
+              <div v-else class="flex items-center gap-2">
                 <div class="min-w-0 flex-1">
                   <UiSelect
                     :model-value="ticket.laneId"
@@ -530,7 +564,8 @@ function focusTitle(event: Event) {
                   <ArrowDownToLine :size="16" aria-hidden="true" />
                 </button>
               </div>
-              <span v-if="canEdit" class="muted mt-1.5 block text-[11px]">Lane and position are saved as soon as you change them.</span>
+              <span v-if="targetBoard" class="muted mt-1.5 block text-[11px]">The ticket leaves this board. Labels and category come along; an assignee who is no member over there is dropped.</span>
+              <span v-else-if="canEdit" class="muted mt-1.5 block text-[11px]">Lane and position are saved as soon as you change them.</span>
             </div>
             <div v-else class="grid gap-4 border-t border-[var(--line)] pt-6 sm:grid-cols-2">
               <div class="block">

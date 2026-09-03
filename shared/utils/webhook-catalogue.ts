@@ -67,6 +67,13 @@ export const WEBHOOK_EVENTS: readonly WebhookEventDoc[] = [
     holds: 'The ticket, with its new `laneId` and `position`.'
   },
   {
+    event: 'ticket.transferred',
+    operation: 'ticket.transfer',
+    fires: 'A ticket moved onto another board of the workspace. Sent to the board it left.',
+    dataKey: 'ticket',
+    holds: 'The ticket as it stands on its new board: a new `boardId`, `laneId` and `position`. Labels and category were re-created there by name; the assignee is gone when they were no member of that board.'
+  },
+  {
     event: 'ticket.archived',
     operation: 'ticket.archive',
     fires: 'A ticket was taken off the board.',

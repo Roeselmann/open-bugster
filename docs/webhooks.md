@@ -13,6 +13,7 @@ The events:
 | `ticket.created` | A ticket is created, by hand or through the API. |
 | `ticket.updated` | Fields of a ticket change. |
 | `ticket.moved` | A ticket changes lane or position. |
+| `ticket.transferred` | A ticket moves onto another board of the workspace; sent to the board it left. |
 | `ticket.archived`, `ticket.restored` | A ticket leaves or returns to the board. |
 | `comment.added` | A comment is posted. |
 | `import.completed` | A TestFlight sync finishes. |

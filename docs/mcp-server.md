@@ -40,7 +40,7 @@ search is `search_tickets` without a `boardId` rather than a second search tool.
 | `whats_new` | Board-wide activity since a timestamp — the digest | read-only |
 | `create_ticket` | File a ticket, to-dos included, at the top or bottom of its lane | additive |
 | `update_ticket` | Change given fields | destructive (overwrites) |
-| `move_ticket` | Lane and position | idempotent |
+| `move_ticket` | Lane and position, or with `boardId` onto another board of the workspace | idempotent |
 | `comment_on_ticket` | Append to the thread | additive |
 | `archive_ticket` | Off the board, reversibly | idempotent, non-destructive |
 | `restore_ticket` | The undo of archiving (board admin) | idempotent |

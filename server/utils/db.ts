@@ -2832,6 +2832,51 @@ export function moveTicket(id: string, targetLaneId: string, targetIndex: number
   return findTicket(id)
 }
 
+export interface TicketTransferResult {
+  ticket: Ticket
+  /** The assignee was no member of the destination board and had to be dropped. */
+  assigneeCleared: boolean
+}
+
+/**
+ * Moves a ticket onto another board of the same workspace. The workspace is the container
+ * tickets live in, so the boundary is enforced here rather than left to the caller.
+ * Labels and category are per board: they follow the ticket by name, created on the
+ * destination where missing. The assignee has to be a member over there, or is dropped.
+ * The ticket number is instance-wide and stays. Null when the destination is not a board
+ * of this workspace, or the lane not one of its.
+ */
+export function transferTicket(id: string, targetBoardId: string, targetLaneId: string | null = null, actor: Actor | null = null): TicketTransferResult | null {
+  const current = findTicket(id)
+  if (!current || current.archivedAt || current.boardId === targetBoardId) return null
+  const sourceBoard = findBoard(current.boardId)
+  const targetBoard = findBoard(targetBoardId)
+  if (!sourceBoard || !targetBoard || targetBoard.workspaceId !== sourceBoard.workspaceId) return null
+  const targetLane = targetLaneId ? findLane(targetLaneId) : defaultLaneFor(targetBoardId)
+  if (!targetLane || targetLane.boardId !== targetBoardId) return null
+
+  const db = getDb()
+  const isMember = Boolean(current.assignee && db.prepare('SELECT 1 FROM board_members WHERE board_id = ? AND user_id = ?').get(targetBoardId, current.assignee.id))
+  const assigneeCleared = Boolean(current.assignee) && !isMember
+  const now = new Date().toISOString()
+  db.transaction(() => {
+    const sourceIds = (db.prepare('SELECT id FROM tickets WHERE lane_id = ? AND archived_at IS NULL ORDER BY position, created_at').all(current.laneId) as Array<{ id: string }>)
+      .map(row => row.id).filter(ticketId => ticketId !== id)
+    const categoryId = resolveCategoryId(targetBoardId, current.category?.name)
+    db.prepare('UPDATE tickets SET board_id = ?, lane_id = ?, position = ?, category_id = ?, assignee_id = ?, updated_at = ? WHERE id = ?')
+      .run(targetBoardId, targetLane.id, nextPosition(targetLane.id), categoryId, assigneeCleared ? null : current.assignee?.id ?? null, now, id)
+    // Re-resolves every label against the destination and prunes what the source no longer uses.
+    setTicketLabels(id, targetBoardId, current.labels.map(label => label.name))
+    reindexLane(current.laneId, sourceIds)
+    recordActivity(id, actor, 'moved', {
+      from: `${sourceBoard.name} · ${findLane(current.laneId)?.name || ''}`,
+      to: `${targetBoard.name} · ${targetLane.name}`
+    })
+    if (assigneeCleared) recordActivity(id, actor, 'unassigned', { from: current.assignee?.id || null, to: null })
+  })()
+  return { ticket: findTicket(id)!, assigneeCleared }
+}
+
 export function archiveTicket(id: string, actor: Actor | null = null): Ticket | null {
   const now = new Date().toISOString()
   const result = getDb().prepare('UPDATE tickets SET archived_at = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL').run(now, now, id)

@@ -247,6 +247,15 @@ describe('the MCP tool surface', () => {
       expect(full.comments[0]).toMatchObject({ author: 'Grace Hopper', body: 'Reproduced.' })
     })
 
+    it('moves a ticket onto another board of the workspace through the same tool', async () => {
+      const other = db.createBoard('Other app')
+      const created = await call('create_ticket', { boardId, laneId, title: 'Crossing over' })
+      const moved = await call('move_ticket', { ticketId: created.id, boardId: other.id })
+      expect(moved.assigneeCleared).toBe(false)
+      expect((await call('get_ticket', { ticketId: created.id })).boardId).toBe(other.id)
+      db.deleteBoard(other.id)
+    })
+
     it('archives without deleting', async () => {
       const created = await call('create_ticket', { boardId, laneId, title: 'Doomed' })
       const archived = await call('archive_ticket', { ticketId: created.id })

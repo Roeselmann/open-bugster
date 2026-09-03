@@ -314,15 +314,16 @@ onBeforeUnmount(cleanupPointerDrag)
         :data-lane-id="lane.id"
         class="flex flex-col transition-colors duration-150"
         :class="[
+          // The phone lane is a flat, edge-to-edge surface so the cards keep their contrast.
           compact
-            ? ''
+            ? '-mx-3 min-h-[50vh] bg-[color-mix(in_srgb,var(--panel)_70%,transparent)] px-3 pb-3 pt-2 dark:bg-[color-mix(in_srgb,var(--panel-strong)_50%,var(--canvas))]'
             : 'max-h-[calc(100vh-230px)] rounded-[12px] bg-[color-mix(in_srgb,var(--panel)_70%,transparent)] dark:bg-[color-mix(in_srgb,var(--panel-strong)_50%,var(--canvas))]',
           !compact && targetLaneId === lane.id ? 'bg-[color-mix(in_srgb,var(--accent)_7%,var(--panel))] dark:bg-[color-mix(in_srgb,var(--accent)_16%,var(--panel-strong))]' : '',
         ]"
       >
         <header
           class="flex shrink-0 items-center gap-2 transition-colors duration-150"
-          :class="[compact ? 'px-1 pb-2' : 'px-3.5 pb-1.5 pt-3', targetLaneId === lane.id ? 'text-[var(--accent)]' : '']"
+          :class="[compact ? 'px-1 pb-2 pt-1' : 'px-3.5 pb-1.5 pt-3', targetLaneId === lane.id ? 'text-[var(--accent)]' : '']"
         >
           <h2 class="truncate text-[13px] font-bold uppercase tracking-[.1em]">{{ lane.name }}</h2>
           <div class="ml-auto flex items-center gap-2">

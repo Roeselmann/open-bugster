@@ -67,9 +67,9 @@ The filter pane narrows the board by labels (any of the picked ones), category, 
 ## Surfaces
 
 - **Internal routes:** `server/api/tickets/index.get.ts`, `index.post.ts`, `[id].get.ts`, `[id].patch.ts`, `[id]/position.patch.ts`, `[id]/archive.post.ts`, `[id]/restore.post.ts`, `[id]/activity.get.ts`, `[id]/attachments.post.ts`, `[id]/comments.get.ts`, `[id]/comments.post.ts`; `server/api/attachments/[id].get.ts`, `[id].delete.ts`; `server/api/comments/[id].patch.ts`, `[id].delete.ts`.
-- **REST v1:** `GET /boards/{boardId}/tickets` (cursor paged), `POST /tickets`, `GET|PATCH /tickets/{ticketId}`, `GET /tickets/by-number/{ticketNumber}`, `POST /tickets/{ticketId}/move|archive|restore`, `GET /tickets/{ticketId}/activity`, `GET /attachments/{attachmentId}` (download), `POST /tickets/{ticketId}/attachments` and `/attachments/from-url`, `GET|POST /tickets/{ticketId}/comments`, `PATCH|DELETE /comments/{commentId}`.
+- **REST v1:** `GET /boards/{boardId}/tickets` (cursor paged), `POST /tickets`, `GET|PATCH /tickets/{ticketId}`, `GET /tickets/by-number/{ticketNumber}`, `POST /tickets/{ticketId}/move|transfer|archive|restore`, `GET /tickets/{ticketId}/activity`, `GET /attachments/{attachmentId}` (download), `POST /tickets/{ticketId}/attachments` and `/attachments/from-url`, `GET|POST /tickets/{ticketId}/comments`, `PATCH|DELETE /comments/{commentId}`.
 - **MCP:** `search_tickets`, `get_ticket`, `create_ticket`, `update_ticket`, `move_ticket`, `comment_on_ticket`, `archive_ticket`, `restore_ticket`, `add_attachment`, `whats_new`.
-- **Webhooks:** `ticket.created`, `ticket.updated`, `ticket.moved`, `ticket.archived`, `ticket.restored`, `comment.added`.
+- **Webhooks:** `ticket.created`, `ticket.updated`, `ticket.moved`, `ticket.transferred`, `ticket.archived`, `ticket.restored`, `comment.added`.
 
 ## Tests
 

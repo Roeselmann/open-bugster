@@ -79,6 +79,7 @@ export const v1Routes: readonly V1Route[] = [
   { method: 'GET', path: '/tickets/by-number/{ticketNumber}', operation: ops.ticketGetByNumber, response: z.object({ ticket: ticketSchema }) },
   { method: 'PATCH', path: '/tickets/{ticketId}', operation: ops.ticketUpdate, response: z.object({ ticket: ticketSchema }) },
   { method: 'POST', path: '/tickets/{ticketId}/move', operation: ops.ticketMove, response: z.object({ ticket: ticketSchema }) },
+  { method: 'POST', path: '/tickets/{ticketId}/transfer', operation: ops.ticketTransfer, response: z.object({ ticket: ticketSchema, assigneeCleared: z.boolean().describe('True when the assignee was no member of the destination board and was dropped.') }) },
   { method: 'POST', path: '/tickets/{ticketId}/archive', operation: ops.ticketArchive, response: z.object({ ticket: ticketSchema }) },
   { method: 'POST', path: '/tickets/{ticketId}/restore', operation: ops.ticketRestore, response: z.object({ ticket: ticketSchema }) },
   { method: 'GET', path: '/tickets/{ticketId}/activity', operation: ops.ticketActivity, response: z.object({ activity: z.array(ticketActivitySchema) }) },

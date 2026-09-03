@@ -29,6 +29,8 @@ watchEffect(() => {
 
 // The switcher offers the boards around this one; other workspaces have their own.
 const workspaceBoards = computed(() => boards.value.filter(item => item.workspaceId === board.value?.workspaceId))
+// Where a ticket may be moved to: the workspace's other boards the user can edit.
+const transferableBoards = computed(() => workspaceBoards.value.filter(item => item.id !== board.value?.id && item.role !== 'viewer'))
 
 const lanes = computed(() => board.value?.lanes || [])
 
@@ -384,6 +386,24 @@ async function moveTicketFromEditor(ticket: Ticket, laneId: string) {
   if (await moveTicket(ticket.id, laneId, targetIndex)) notify('success', `Moved to ${laneName}. Saved right away.`)
 }
 
+// A ticket that moves to another board leaves this page like an archived one does.
+async function transferTicketFromEditor(ticket: Ticket, targetBoardId: string, laneId: string) {
+  saving.value = true
+  try {
+    const { assigneeCleared } = await $fetch<{ ticket: Ticket; assigneeCleared: boolean }>(`/api/tickets/${ticket.id}/transfer`, { method: 'POST', body: { boardId: targetBoardId, laneId } })
+    tickets.value = tickets.value.filter(item => item.id !== ticket.id)
+    editorOpen.value = false
+    const target = boards.value.find(item => item.id === targetBoardId)
+    const laneName = target?.lanes.find(lane => lane.id === laneId)?.name
+    await Promise.all([refreshBoards(), refreshLabels(), refreshCategories()])
+    notify('success', `Moved to ${target?.name || 'the other board'}${laneName ? ` · ${laneName}` : ''}.${assigneeCleared ? ' The assignee is no member there and was removed.' : ''}`)
+  } catch (error) {
+    notify('error', errorText(error))
+  } finally {
+    saving.value = false
+  }
+}
+
 // The Save beside the description field: only that field, and the dialog stays open showing the rendered result.
 async function saveDescriptionFromEditor(ticket: Ticket, description: string) {
   saving.value = true
@@ -536,7 +556,7 @@ async function sync() {
       <div v-else class="scrollbar-thin overflow-x-auto max-md:hidden"><KanbanBoard :board-id="board.id" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" @open="openTicket" @move="moveTicket" @create="newTicket" /></div>
     </main>
 
-    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :deleting-attachment-id="deletingAttachmentId" :initial-lane-id="newTicketLaneId" :initial-placement="newTicketPlacement" :lane-ticket-count="selectedLaneTicketCount" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @reorder="reorderTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @save-description="saveDescriptionFromEditor" @commented="refresh()" @notify="notify" />
+    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :deleting-attachment-id="deletingAttachmentId" :initial-lane-id="newTicketLaneId" :initial-placement="newTicketPlacement" :lane-ticket-count="selectedLaneTicketCount" :boards="transferableBoards" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @reorder="reorderTicketFromEditor" @transfer="transferTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @save-description="saveDescriptionFromEditor" @commented="refresh()" @notify="notify" />
 
     <UiConfirmDialog
       v-if="confirmation"

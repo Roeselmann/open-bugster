@@ -12,7 +12,7 @@ import { WEBHOOK_DELIVERY } from '../../shared/utils/webhook-catalogue'
  * field can read the payload.
  */
 export const webhookEvents = [
-  'ticket.created', 'ticket.updated', 'ticket.moved', 'ticket.archived', 'ticket.restored',
+  'ticket.created', 'ticket.updated', 'ticket.moved', 'ticket.transferred', 'ticket.archived', 'ticket.restored',
   'comment.added', 'import.completed'
 ] as const
 export type WebhookEvent = typeof webhookEvents[number]
@@ -22,6 +22,7 @@ export const eventForOperation: Record<string, WebhookEvent> = {
   'ticket.create': 'ticket.created',
   'ticket.update': 'ticket.updated',
   'ticket.move': 'ticket.moved',
+  'ticket.transfer': 'ticket.transferred',
   'ticket.archive': 'ticket.archived',
   'ticket.restore': 'ticket.restored',
   'comment.add': 'comment.added',

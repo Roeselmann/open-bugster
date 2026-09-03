@@ -301,14 +301,20 @@ export function registerTools(server: McpServer, actor: Actor) {
 
   server.registerTool('move_ticket', {
     title: 'Move a ticket',
-    description: 'Move a ticket to a lane, and optionally to a position within it. Lane ids come from board_overview.',
+    description: 'Move a ticket to a lane, and optionally to a position within it. With a boardId the ticket moves onto that other board of the same workspace instead, into laneId there (its default lane when omitted); labels and category come along by name, an assignee who is no member over there is dropped. Ids come from list_boards and board_overview.',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: {
       ticketId: z.string(),
-      laneId: z.string(),
-      index: z.number().int().min(0).optional().describe('Position in the lane; 0 is the top. Defaults to the top.')
+      laneId: z.string().optional().describe('The destination lane. Required unless boardId is given.'),
+      boardId: z.string().optional().describe('Another board of the workspace to move the ticket onto.'),
+      index: z.number().int().min(0).optional().describe('Position in the lane; 0 is the top. Defaults to the top. Ignored with boardId, where the ticket lands at the bottom.')
     }
-  }, async ({ ticketId, laneId, index }) => {
+  }, async ({ ticketId, laneId, boardId, index }) => {
+    if (boardId) {
+      const { ticket, assigneeCleared } = await call<{ ticket: Ticket; assigneeCleared: boolean }>(ops.ticketTransfer, { ticketId, boardId, laneId })
+      return reply({ ...slim(ticket), assigneeCleared })
+    }
+    if (!laneId) throw new Error('Either laneId or boardId is needed.')
     const { ticket } = await call<{ ticket: Ticket }>(ops.ticketMove, { ticketId, laneId, index: index ?? 0 })
     return reply(slim(ticket))
   })

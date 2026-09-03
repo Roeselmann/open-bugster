@@ -1,11 +1,11 @@
 import { createError } from 'h3'
 import { z } from 'zod'
-import { boardMemberIds } from '../utils/access'
+import { boardMemberIds, requireBoardAccess } from '../utils/access'
 import {
   archiveTicket, createTicket, listActivity, listBoardActivity, listTickets, listTicketsPage,
-  moveTicket, personById, restoreTicket, ticketIdByNumber, ticketTypeBelongsToBoard, updateTicket
+  findBoard, moveTicket, personById, restoreTicket, ticketIdByNumber, ticketTypeBelongsToBoard, transferTicket, updateTicket
 } from '../utils/db'
-import { importedTicketUpdateSchema, ticketCreateSchema, ticketMoveSchema, ticketUpdateSchema } from '../utils/validation'
+import { importedTicketUpdateSchema, ticketCreateSchema, ticketMoveSchema, ticketTransferSchema, ticketUpdateSchema } from '../utils/validation'
 import { createdId, defineOperation } from './types'
 import { orNotFound } from './run'
 
@@ -160,6 +160,29 @@ export const ticketMove = defineOperation({
   requires: { scope: 'ticket', role: 'editor', ticketId: input => input.ticketId },
   audit: { targetType: 'ticket', targetId: input => input.ticketId, changes: ['laneId', 'index'] },
   run: (ctx, input) => ({ ticket: orNotFound(moveTicket(input.ticketId, input.laneId, input.index, ctx.actor), 'Ticket') })
+})
+
+export const ticketTransfer = defineOperation({
+  name: 'ticket.transfer',
+  summary: 'Move a ticket onto another board of the same workspace',
+  input: ticketTransferSchema.extend({ ticketId }),
+  requires: { scope: 'ticket', role: 'editor', ticketId: input => input.ticketId },
+  audit: { targetType: 'ticket', targetId: input => input.ticketId, changes: ['boardId', 'laneId'] },
+  run: (ctx, input) => {
+    // Editing rights on the source come from the requirement; the destination asks for the
+    // same, and stays a 404 to anyone who cannot see it — as `board.move` does for workspaces.
+    requireBoardAccess(ctx.actor, input.boardId, 'editor')
+    if (ctx.ticket!.boardId === input.boardId) {
+      throw createError({ statusCode: 409, statusMessage: 'The ticket is already on this board.' })
+    }
+    const target = orNotFound(findBoard(input.boardId), 'Board')
+    if (target.workspaceId !== orNotFound(findBoard(ctx.ticket!.boardId), 'Board').workspaceId) {
+      throw createError({ statusCode: 422, statusMessage: 'Tickets can only move between boards of the same workspace.' })
+    }
+    const result = transferTicket(input.ticketId, input.boardId, input.laneId ?? null, ctx.actor)
+    if (!result) throw createError({ statusCode: 422, statusMessage: 'The lane does not belong to the destination board.' })
+    return result
+  }
 })
 
 export const ticketArchive = defineOperation({

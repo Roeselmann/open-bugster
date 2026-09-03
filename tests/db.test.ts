@@ -64,6 +64,42 @@ describe('ticket persistence', () => {
     db.deleteBoard(other.id)
   })
 
+  it('moves a ticket onto another board of the workspace, labels and category by name', () => {
+    const other = db.createBoard('Other app')
+    const memberId = db.createUser({ email: 'member@example.com', firstName: 'Mem', lastName: 'Ber', role: 'member' }).id
+    db.setBoardMember(boardId, memberId, 'editor', false)
+    const ticket = db.createTicket(boardId, { title: 'Travels', labels: ['API', 'iOS'], categoryName: 'Payments', assigneeId: memberId })!
+    const number = ticket.ticketNumber
+    const targetLane = other.lanes.find(lane => !lane.isImport && lane.name === 'In Progress')!
+
+    // The assignee is no member of the destination, so the ticket arrives unassigned.
+    const result = db.transferTicket(ticket.id, other.id, targetLane.id)!
+    expect(result.assigneeCleared).toBe(true)
+    expect(result.ticket).toMatchObject({ boardId: other.id, laneId: targetLane.id, position: 0, ticketNumber: number, assignee: null })
+    expect(result.ticket.labels.map(label => label.name).sort()).toEqual(['API', 'iOS'])
+    expect(result.ticket.category?.name).toBe('Payments')
+    // Labels and category now belong to the destination; the source dropped what nothing uses.
+    expect(db.listLabels(other.id).map(label => label.name).sort()).toEqual(['API', 'iOS'])
+    expect(db.listLabels(boardId).map(label => label.name)).not.toContain('iOS')
+    expect(db.listCategories(other.id).map(category => category.name)).toContain('Payments')
+    expect(db.listTickets(boardId).map(item => item.id)).not.toContain(ticket.id)
+    expect(db.listActivity(ticket.id).map(entry => entry.kind)).toEqual(expect.arrayContaining(['moved', 'unassigned']))
+
+    // Members travel fine; a foreign lane or a board of another workspace does not.
+    db.setBoardMember(boardId, memberId, 'editor', false)
+    const back = db.transferTicket(ticket.id, boardId, laneIdByName.Backlog)!
+    expect(back).toMatchObject({ assigneeCleared: false, ticket: { boardId, laneId: laneIdByName.Backlog } })
+    expect(db.transferTicket(ticket.id, other.id, laneIdByName.Open!)).toBeNull()
+    expect(db.transferTicket(ticket.id, boardId, other.lanes[1]!.id)).toBeNull()
+    const elsewhere = db.createWorkspace('Elsewhere')
+    const foreign = db.createBoard('Foreign', null, elsewhere.id)
+    expect(db.transferTicket(ticket.id, foreign.id)).toBeNull()
+
+    db.archiveTicket(ticket.id)
+    db.deleteBoard(other.id)
+    db.deleteBoard(foreign.id)
+  })
+
   it('deduplicates imported feedback by external id within a board', () => {
     const importLane = db.importLaneFor(boardId)!.id
     const crash = db.insertImportedTicket({
