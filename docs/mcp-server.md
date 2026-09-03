@@ -38,7 +38,7 @@ search is `search_tickets` without a `boardId` rather than a second search tool.
 | `get_ticket` | Everything about one ticket, by id or ticket number | read-only |
 | `list_lanes` | Just the lanes, when the overview would be overkill | read-only |
 | `whats_new` | Board-wide activity since a timestamp — the digest | read-only |
-| `create_ticket` | File a ticket, to-dos included | additive |
+| `create_ticket` | File a ticket, to-dos included, at the top or bottom of its lane | additive |
 | `update_ticket` | Change given fields | destructive (overwrites) |
 | `move_ticket` | Lane and position | idempotent |
 | `comment_on_ticket` | Append to the thread | additive |

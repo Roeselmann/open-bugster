@@ -87,6 +87,14 @@ describe('the operation registry', () => {
       expect(ticket.priority).toBe('medium')
       expect(ticket.description).toBe('')
     })
+
+    it('puts a ticket at the top of its lane when the placement says so', async () => {
+      const { ticket: below } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Below', laneId }) as { ticket: { id: string; position: number } }
+      const { ticket: top } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Top', laneId, placement: 'top' }) as { ticket: { id: string; position: number } }
+      expect(top.position).toBe(0)
+      expect(db.findTicket(below.id)!.position).toBe(below.position + 1)
+      expect(await statusOf(ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Nope', laneId, placement: 'middle' }))).toBe(422)
+    })
   })
 
   describe('access is resolved from the requirement', () => {

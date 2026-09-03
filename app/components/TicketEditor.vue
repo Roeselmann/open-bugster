@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, Calendar, Check, Download, FileText, GripVertical, Image, ListTodo, MessageSquare, Paperclip, Plus, Save, Shapes, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { Archive, ArrowDownToLine, ArrowUpToLine, Calendar, Check, Download, FileText, GripVertical, Image, ListTodo, MessageSquare, Paperclip, Plus, Save, Shapes, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogClose,
   DialogContent,
@@ -13,18 +13,19 @@ import {
 import type { Attachment, BoardMember, Category, LabelSummary, Lane, Ticket, TicketPriority, TicketTodoInput, TicketType } from '~~/shared/types/domain'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 
-const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; deletingAttachmentId?: string | null }>(), { canEdit: true })
+const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; deletingAttachmentId?: string | null; initialLaneId?: string | null; initialPlacement?: 'top' | 'bottom'; laneTicketCount?: number }>(), { canEdit: true, initialLaneId: null, initialPlacement: 'bottom', laneTicketCount: 0 })
 const emit = defineEmits<{
   close: []
-  save: [payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; typeId?: string | null; todos: TicketTodoInput[]; attachments: File[] }]
+  save: [payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; typeId?: string | null; laneId?: string; placement?: 'top' | 'bottom'; todos: TicketTodoInput[]; attachments: File[] }]
   commented: []
   notify: [type: 'success' | 'error', text: string]
   move: [ticket: Ticket, laneId: string]
+  reorder: [ticket: Ticket, placement: 'top' | 'bottom']
   archive: [ticket: Ticket]
   removeAttachment: [attachment: Attachment]
 }>()
 
-const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '', typeId: 'none' })
+const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '', typeId: 'none', laneId: '', placement: 'bottom' as 'top' | 'bottom' })
 interface EditableTodo extends TicketTodoInput { key: string }
 const todos = ref<EditableTodo[]>([])
 let todoSequence = 0
@@ -78,6 +79,10 @@ const dragActive = ref(false)
 const lightboxId = ref<string | null>(null)
 const imageAttachments = computed(() => props.ticket?.attachments.filter(attachment => attachment.mimeType.startsWith('image/')) || [])
 const laneOptions = computed(() => props.lanes.map(lane => ({ value: lane.id, label: lane.name })))
+// Whether the ticket already sits where a reorder button would take it.
+const atTop = computed(() => (props.ticket?.position ?? 0) === 0)
+const atBottom = computed(() => (props.ticket?.position ?? 0) >= props.laneTicketCount - 1)
+const placementOptions = [{ value: 'top', label: 'Top of lane' }, { value: 'bottom', label: 'Bottom of lane' }]
 const priorityOptions = Object.entries(PRIORITY_LABELS).map(([value, label]) => ({ value, label }))
 const categoryOptions = computed(() => (props.categories || []).map(category => category.name))
 // Same sentinel trick as `UNASSIGNED`: "no type" needs a value the select can hold.
@@ -101,6 +106,9 @@ watch(() => props.ticket, (ticket, previous) => {
   form.labels = ticket?.labels.map(label => label.name) || []
   form.categoryName = ticket?.category?.name || ''
   form.typeId = ticket?.type?.id || NO_TYPE
+  // Only a new ticket picks its lane and position here; an existing one is moved through the lane select.
+  form.laneId = ticket ? ticket.laneId : (props.initialLaneId || props.lanes[0]?.id || '')
+  form.placement = ticket ? 'bottom' : props.initialPlacement
   todos.value = (ticket?.todos || []).map(todo => ({ key: `todo-${++todoSequence}`, text: todo.text, completed: todo.completed }))
 }, { immediate: true })
 
@@ -113,7 +121,8 @@ function submit() {
   const manualFields = isManual.value ? { buildNumber: form.buildNumber.trim() || null } : {}
   // Sent only by somebody allowed to set it — the API rejects it from anyone else.
   const authorFields = canAttribute.value ? { authorId: form.authorId === UNASSIGNED ? null : form.authorId } : {}
-  emit('save', { ...shared, ...manualFields, ...authorFields, title: form.title.trim(), description: form.description, priority: form.priority, dueDate: form.dueDate || null, labels: [...form.labels], categoryName: form.categoryName.trim() || null, typeId: form.typeId === NO_TYPE ? null : form.typeId })
+  const placementFields = isEdit.value ? {} : { laneId: form.laneId || undefined, placement: form.placement }
+  emit('save', { ...shared, ...manualFields, ...authorFields, ...placementFields, title: form.title.trim(), description: form.description, priority: form.priority, dueDate: form.dueDate || null, labels: [...form.labels], categoryName: form.categoryName.trim() || null, typeId: form.typeId === NO_TYPE ? null : form.typeId })
 }
 
 function focusTodo(key: string) {
@@ -440,13 +449,51 @@ function focusTitle(event: Event) {
 
             <div v-if="ticket" class="block border-t border-[var(--line)] pt-6">
               <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Lane</span>
-              <UiSelect
-                :model-value="ticket.laneId"
-                :options="laneOptions"
-                :disabled="!canEdit"
-                aria-label="Lane"
-                @update:model-value="emit('move', ticket, $event)"
-              />
+              <div class="flex items-center gap-2">
+                <div class="min-w-0 flex-1">
+                  <UiSelect
+                    :model-value="ticket.laneId"
+                    :options="laneOptions"
+                    :disabled="!canEdit"
+                    aria-label="Lane"
+                    @update:model-value="emit('move', ticket, $event)"
+                  />
+                </div>
+                <button
+                  v-if="canEdit"
+                  type="button"
+                  class="focus-ring muted flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--line)] transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--line)] disabled:hover:bg-transparent"
+                  :disabled="atTop"
+                  aria-label="Move to top of lane"
+                  title="Move to top of lane"
+                  @click="emit('reorder', ticket, 'top')"
+                >
+                  <ArrowUpToLine :size="16" aria-hidden="true" />
+                </button>
+                <button
+                  v-if="canEdit"
+                  type="button"
+                  class="focus-ring muted flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--line)] transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--line)] disabled:hover:bg-transparent"
+                  :disabled="atBottom"
+                  aria-label="Move to bottom of lane"
+                  title="Move to bottom of lane"
+                  @click="emit('reorder', ticket, 'bottom')"
+                >
+                  <ArrowDownToLine :size="16" aria-hidden="true" />
+                </button>
+              </div>
+              <span v-if="canEdit" class="muted mt-1.5 block text-[11px]">Lane and position are saved as soon as you change them.</span>
+            </div>
+            <div v-else class="grid gap-4 border-t border-[var(--line)] pt-6 sm:grid-cols-2">
+              <div class="block">
+                <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Lane</span>
+                <UiSelect :model-value="form.laneId" :options="laneOptions" aria-label="Lane" @update:model-value="form.laneId = $event" />
+              </div>
+              <div class="block">
+                <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Position</span>
+                <UiSelect :model-value="form.placement" :options="placementOptions" aria-label="Position in lane" @update:model-value="form.placement = $event as 'top' | 'bottom'" />
+                <span class="muted mt-1.5 block text-[11px]">Top pushes the lane’s other tickets down.</span>
+              </div>
             </div>
 
             <div class="block">

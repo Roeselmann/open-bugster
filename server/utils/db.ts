@@ -2709,6 +2709,8 @@ export interface TicketInput {
   assigneeId?: string | null
   /** Admin-only: who a ticket is attributed to, independent of who is editing it. */
   authorId?: string | null
+  /** Where in its lane the ticket lands. Bottom when omitted; only `createTicket` reads it. */
+  placement?: 'top' | 'bottom'
 }
 
 function nextPosition(laneId: string): number {
@@ -2733,15 +2735,21 @@ export function createTicket(boardId: string, input: TicketInput, author: Person
   if (!lane) return null
   const id = randomUUID()
   const now = new Date().toISOString()
-  const position = nextPosition(lane.id)
   db.transaction(() => {
     const categoryId = resolveCategoryId(boardId, input.categoryName)
+    // Appended first either way; a ticket asked to the top is then shuffled with the lane.
+    const position = nextPosition(lane.id)
     db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, source, created_at, updated_at, author_id, assignee_id, category_id, type_id)
       VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?)`).run(
       id, boardId, lane.id, input.title, input.description || '', position, input.priority || 'medium',
       input.dueDate || null, input.buildNumber || null, now, now,
       author?.id || null, input.assigneeId || null, categoryId, input.typeId || null
     )
+    if (input.placement === 'top') {
+      const rest = (db.prepare('SELECT id FROM tickets WHERE lane_id = ? AND archived_at IS NULL ORDER BY position, created_at').all(lane.id) as Array<{ id: string }>)
+        .map(row => row.id).filter(ticketId => ticketId !== id)
+      reindexLane(lane.id, [id, ...rest])
+    }
     setTicketLabels(id, boardId, input.labels || [])
     setTicketTodos(id, input.todos || [])
     recordActivity(id, actor, 'created', { lane: lane.name })

@@ -43,7 +43,9 @@ export const ticketCreateSchema = z.object({
   labels: ticketShape.labels.default([]),
   categoryName: ticketShape.categoryName.optional(),
   typeId: ticketShape.typeId.optional(),
-  todos: ticketShape.todos.default([])
+  todos: ticketShape.todos.default([]),
+  /** Where in its lane the ticket lands; the bottom unless asked otherwise. */
+  placement: z.enum(['top', 'bottom']).default('bottom')
 })
 
 export const ticketUpdateSchema = z.object(ticketShape).partial()

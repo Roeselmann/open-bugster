@@ -266,7 +266,9 @@ export function registerTools(server: McpServer, actor: Actor) {
       categoryName: z.string().optional(),
       typeId: z.string().optional().describe('A ticket type id from board_overview.ticketTypes. Omit for an untyped ticket.'),
       todos: z.array(z.object({ text: z.string().min(1).max(500), completed: z.boolean().default(false) })).max(100).optional()
-        .describe('The ticket’s initial to-do list, in order.')
+        .describe('The ticket’s initial to-do list, in order.'),
+      placement: z.enum(['top', 'bottom']).optional()
+        .describe('Where the ticket lands in its lane. Defaults to the bottom; "top" pushes the lane’s other tickets down one.')
     }
   }, async (input) => {
     const { ticket } = await call<{ ticket: Ticket }>(ops.ticketCreate, input)

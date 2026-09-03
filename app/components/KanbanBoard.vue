@@ -3,7 +3,7 @@ import { Image, Inbox, Plus } from '@lucide/vue'
 import type { Lane, Ticket } from '~~/shared/types/domain'
 
 const props = withDefaults(defineProps<{ boardId: string; lanes: Lane[]; tickets: Ticket[]; canEdit?: boolean }>(), { canEdit: true })
-const emit = defineEmits<{ open: [ticket: Ticket]; move: [id: string, laneId: string, index: number]; create: [laneId: string] }>()
+const emit = defineEmits<{ open: [ticket: Ticket]; move: [id: string, laneId: string, index: number]; create: [laneId: string, placement: 'top' | 'bottom'] }>()
 
 const showScreenshotByLane = reactive<Record<string, boolean>>({})
 const screenshotVisibilityStorageKey = computed(() => `open-bugster-lane-screenshot-visibility:${props.boardId}`)
@@ -298,6 +298,16 @@ onBeforeUnmount(cleanupPointerDrag)
           <h2 class="truncate text-[13px] font-bold uppercase tracking-[.1em]">{{ lane.name }}</h2>
           <div class="ml-auto flex items-center gap-2">
             <button
+              v-if="canEdit"
+              type="button"
+              :aria-label="`Add a ticket to the top of ${lane.name}`"
+              :title="`Add a ticket to the top of ${lane.name}`"
+              class="focus-ring muted flex items-center rounded-lg p-1 transition hover:bg-[var(--panel-strong)] hover:text-[var(--ink)]"
+              @click="emit('create', lane.id, 'top')"
+            >
+              <Plus aria-hidden="true" class="size-4" />
+            </button>
+            <button
               type="button"
               role="switch"
               :aria-checked="showScreenshotByLane[lane.id] === true"
@@ -358,7 +368,7 @@ onBeforeUnmount(cleanupPointerDrag)
             type="button"
             class="focus-ring muted flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-sm font-semibold transition hover:bg-[var(--panel-strong)] hover:text-[var(--ink)]"
             :aria-label="`Add a ticket to ${lane.name}`"
-            @click="emit('create', lane.id)"
+            @click="emit('create', lane.id, 'bottom')"
           >
             <Plus :size="16" aria-hidden="true" /> Add ticket
           </button>

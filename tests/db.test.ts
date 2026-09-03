@@ -193,6 +193,24 @@ describe('ticket persistence', () => {
     db.archiveTicket(foreign.id)
   })
 
+  it('places a ticket at the top of its lane when asked, and at the bottom otherwise', () => {
+    const board = db.createBoard('Placement')
+    const laneId = db.defaultLaneFor(board.id)!.id
+    const first = db.createTicket(board.id, { title: 'First', laneId })!
+    const second = db.createTicket(board.id, { title: 'Second', laneId })!
+    expect([first.position, second.position]).toEqual([0, 1])
+
+    const top = db.createTicket(board.id, { title: 'Urgent', laneId, placement: 'top' })!
+    expect(top.position).toBe(0)
+    const inOrder = () => db.listTickets(board.id).filter(ticket => ticket.laneId === laneId).sort((a, b) => a.position - b.position)
+    expect(inOrder().map(ticket => [ticket.title, ticket.position])).toEqual([['Urgent', 0], ['First', 1], ['Second', 2]])
+
+    // Saying "bottom" out loud is the same as saying nothing.
+    const last = db.createTicket(board.id, { title: 'Last', laneId, placement: 'bottom' })!
+    expect(last.position).toBe(3)
+    expect(inOrder().map(ticket => ticket.title)).toEqual(['Urgent', 'First', 'Second', 'Last'])
+  })
+
   it('keeps labels per board, creates them on demand and drops the unused ones', () => {
     // Fresh boards: the shared one already carries labels from the tests above.
     const home = db.createBoard('Label home')

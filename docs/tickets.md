@@ -6,7 +6,7 @@ A ticket is a card on a board: a title, a description, an internal comment, prio
 
 ### Creating and editing
 
-New tickets are created with **Add ticket** at the bottom of a lane and land in that lane. Imported tickets additionally show the original TestFlight feedback with tester, device, system, locale, and build. A board administrator can set the **Author** by hand, which is how an import that arrived before anyone had an account gets one afterwards.
+New tickets are created with **Add ticket** at the bottom of a lane, or with the **+** in a lane's header to put one at the top; the editor lets you change the lane and the position before saving. Either way they land in that lane. An open ticket can be sent to the top or bottom of its lane with the two arrow buttons beside the **Lane** select. Imported tickets additionally show the original TestFlight feedback with tester, device, system, locale, and build. A board administrator can set the **Author** by hand, which is how an import that arrived before anyone had an account gets one afterwards.
 
 Cards are moved by dragging them between lanes or within a lane. On narrow screens each card offers a lane dropdown instead.
 
@@ -32,7 +32,7 @@ The filter pane narrows the board by labels (any of the picked ones), category, 
 
 - **Roles.** Reading needs `viewer`; creating, editing, moving, and archiving need `editor`; restoring needs `admin`. An archived ticket answers 404 to anyone below admin.
 - **Ticket numbers are instance-global**, so a number is a handle that works across boards and in a commit message. `ticket.getByNumber` needs no board.
-- **Positions are per lane.** `moveTicket` takes a lane and an index and renumbers the lane.
+- **Positions are per lane.** `moveTicket` takes a lane and an index and renumbers the lane. `ticket.create` takes a `placement` (`top` or `bottom`, default `bottom`) and, for `top`, renumbers the lane the same way.
 - **To-dos are replaced as a whole list** on `ticket.create` and `ticket.update`, up to 100 entries of 500 characters. Titles are at most 160 characters, descriptions 10,000.
 - **Categories and labels are set by name.** `categoryName` creates the category if needed; `labels` creates missing labels and prunes those left without a ticket.
 - **Attachments are validated twice**: by extension allowlist and by magic-byte signature, for uploads and for server-side downloads alike. Stored paths are resolved against the attachments directory and refused if they escape it.

@@ -4,7 +4,13 @@ import { boardUpdateSchema, connectionTestSchema, importedTicketUpdateSchema, ti
 describe('ticket validation', () => {
   it('normalizes a valid manual ticket', () => {
     const result = ticketCreateSchema.parse({ boardId: 'board-1', title: '  Fix login  ', buildNumber: ' 42 ', labels: ['Auth'] })
-    expect(result).toEqual({ boardId: 'board-1', title: 'Fix login', description: '', priority: 'medium', buildNumber: '42', labels: ['Auth'], todos: [] })
+    expect(result).toEqual({ boardId: 'board-1', title: 'Fix login', description: '', priority: 'medium', buildNumber: '42', labels: ['Auth'], todos: [], placement: 'bottom' })
+  })
+
+  it('places a new ticket at the bottom unless told otherwise', () => {
+    expect(ticketCreateSchema.parse({ boardId: 'board-1', title: 'T' }).placement).toBe('bottom')
+    expect(ticketCreateSchema.parse({ boardId: 'board-1', title: 'T', placement: 'top' }).placement).toBe('top')
+    expect(ticketCreateSchema.safeParse({ boardId: 'board-1', title: 'T', placement: 'middle' }).success).toBe(false)
   })
 
   it('rejects empty titles and invalid board moves', () => {

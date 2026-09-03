@@ -189,31 +189,45 @@ const filteredTickets = computed(() => {
 
 // The lane the "Add ticket" button was pressed in; the server falls back to the first lane.
 const newTicketLaneId = ref<string | null>(null)
+// Top for the plus in a lane's header, bottom for the button under its cards; the editor may still change it.
+const newTicketPlacement = ref<'top' | 'bottom'>('bottom')
 
-function newTicket(laneId: string) {
+function newTicket(laneId: string, placement: 'top' | 'bottom' = 'bottom') {
   selected.value = null
   newTicketLaneId.value = laneId
+  newTicketPlacement.value = placement
   editorOpen.value = true
 }
 
 function openTicket(ticket: Ticket) {
   selected.value = ticket
   newTicketLaneId.value = null
+  newTicketPlacement.value = 'bottom'
   editorOpen.value = true
 }
 
-async function saveTicket(payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; typeId?: string | null; todos: TicketTodoInput[]; attachments: File[] }) {
+async function saveTicket(payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; typeId?: string | null; laneId?: string; placement?: 'top' | 'bottom'; todos: TicketTodoInput[]; attachments: File[] }) {
   saving.value = true
   const wasEdit = Boolean(selected.value)
   try {
-    const { attachments, ...ticketPayload } = payload
+    const { attachments, laneId, placement, ...ticketPayload } = payload
     const response = selected.value
       ? await $fetch<{ ticket: Ticket }>(`/api/tickets/${selected.value.id}`, { method: 'PATCH', body: ticketPayload })
-      : await $fetch<{ ticket: Ticket }>('/api/tickets', { method: 'POST', body: { ...ticketPayload, boardId: boardId.value, laneId: newTicketLaneId.value || undefined } })
+      : await $fetch<{ ticket: Ticket }>('/api/tickets', { method: 'POST', body: { ...ticketPayload, boardId: boardId.value, laneId: laneId || newTicketLaneId.value || undefined, placement: placement || newTicketPlacement.value } })
     selected.value = response.ticket
     const index = tickets.value.findIndex(ticket => ticket.id === response.ticket.id)
-    if (index >= 0) tickets.value[index] = response.ticket
-    else tickets.value.push(response.ticket)
+    if (index >= 0) {
+      tickets.value[index] = response.ticket
+    } else {
+      tickets.value.push(response.ticket)
+      // A ticket placed at the top made the server renumber its lane; mirror that here, as moveTicket does.
+      if (response.ticket.position === 0) {
+        tickets.value
+          .filter(item => item.laneId === response.ticket.laneId && item.id !== response.ticket.id)
+          .sort((a, b) => a.position - b.position)
+          .forEach((item, itemIndex) => { item.position = itemIndex + 1 })
+      }
+    }
 
     if (attachments.length) {
       const formData = new FormData()
@@ -273,7 +287,8 @@ async function executeConfirmation() {
   }
 }
 
-async function moveTicket(id: string, laneId: string, index: number) {
+/** Moves optimistically and reports whether the server agreed. */
+async function moveTicket(id: string, laneId: string, index: number): Promise<boolean> {
   // Vue wraps the fetched tickets in reactive proxies. Those proxies cannot be
   // cloned with structuredClone and caused every drag operation to abort before
   // the API request was sent. Only lane and position are changed optimistically,
@@ -284,7 +299,7 @@ async function moveTicket(id: string, laneId: string, index: number) {
     position: ticket.position,
   }))
   const ticket = tickets.value.find(item => item.id === id)
-  if (!ticket) return
+  if (!ticket) return false
   const source = ticket.laneId
   const sourceTickets = tickets.value.filter(item => item.laneId === source && item.id !== id).sort((a, b) => a.position - b.position)
   const targetTickets = source === laneId ? sourceTickets : tickets.value.filter(item => item.laneId === laneId && item.id !== id).sort((a, b) => a.position - b.position)
@@ -293,6 +308,7 @@ async function moveTicket(id: string, laneId: string, index: number) {
   targetTickets.forEach((item, itemIndex) => { item.laneId = laneId; item.position = itemIndex })
   try {
     await $fetch(`/api/tickets/${id}/position`, { method: 'PATCH', body: { laneId, index } })
+    return true
   } catch (error) {
     const previousById = new Map(snapshot.map(item => [item.id, item]))
     tickets.value.forEach((item) => {
@@ -302,13 +318,25 @@ async function moveTicket(id: string, laneId: string, index: number) {
       item.position = previous.position
     })
     notify('error', errorText(error))
+    return false
   }
 }
 
+// Moves from the editor bypass its Save button, so each one says out loud that it already happened.
 async function moveTicketFromEditor(ticket: Ticket, laneId: string) {
   if (ticket.laneId === laneId) return
   const targetIndex = tickets.value.filter(item => item.laneId === laneId).length
-  await moveTicket(ticket.id, laneId, targetIndex)
+  const laneName = lanes.value.find(lane => lane.id === laneId)?.name || 'the lane'
+  if (await moveTicket(ticket.id, laneId, targetIndex)) notify('success', `Moved to ${laneName}. Saved right away.`)
+}
+
+// How many tickets share the open ticket's lane; the editor greys out a reorder that would change nothing.
+const selectedLaneTicketCount = computed(() => selected.value ? tickets.value.filter(item => item.laneId === selected.value!.laneId).length : 0)
+
+// The reorder buttons beside the editor's lane select: same lane, first or last place.
+async function reorderTicketFromEditor(ticket: Ticket, placement: 'top' | 'bottom') {
+  const targetIndex = placement === 'top' ? 0 : tickets.value.filter(item => item.laneId === ticket.laneId).length - 1
+  if (await moveTicket(ticket.id, ticket.laneId, Math.max(0, targetIndex))) notify('success', `Moved to the ${placement} of the lane. Saved right away.`)
 }
 
 async function sync() {
@@ -362,7 +390,7 @@ async function sync() {
       <div v-else class="scrollbar-thin overflow-x-auto"><KanbanBoard :board-id="board.id" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" @open="openTicket" @move="moveTicket" @create="newTicket" /></div>
     </main>
 
-    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :deleting-attachment-id="deletingAttachmentId" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @commented="refresh()" @notify="notify" />
+    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :deleting-attachment-id="deletingAttachmentId" :initial-lane-id="newTicketLaneId" :initial-placement="newTicketPlacement" :lane-ticket-count="selectedLaneTicketCount" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @reorder="reorderTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @commented="refresh()" @notify="notify" />
 
     <UiConfirmDialog
       v-if="confirmation"
