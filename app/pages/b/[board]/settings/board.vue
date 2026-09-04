@@ -10,6 +10,7 @@ const { boardId, board } = useCurrentBoard()
 const { boards, refresh: refreshBoards } = useBoards()
 const { workspaces, refresh: refreshWorkspaces } = useWorkspaces()
 const lastBoardId = useLastBoardId()
+const lastWorkspaceId = useLastWorkspaceId()
 
 const { data: categoryData, refresh: refreshCategories } = await useFetch<{ categories: CategorySummary[] }>('/api/categories', {
   query: { boardId },
@@ -158,10 +159,19 @@ async function executeConfirmation() {
       notify('success', `Moved to ${action.workspaceName}.`)
       return
     }
+    // Pin the workspace before anything else: settings pages leave the cookie alone, so it may
+    // still name another workspace visited earlier, and "/" would follow that one. It has to
+    // happen before the refresh — once the board is gone from the list this page unmounts,
+    // and a cookie written after that never reaches the browser.
+    lastWorkspaceId.value = action.board.workspaceId
     await $fetch(`/api/boards/${action.board.id}`, { method: 'DELETE' })
-    await refreshBoards()
+    // The workspace list carries a board count the home middleware trusts: left stale after
+    // the last board goes, "/" would think this workspace still has boards and leave it.
+    await Promise.all([refreshBoards(), refreshWorkspaces()])
     confirmation.value = null
-    await navigateTo(boards.value[0] ? `/b/${boards.value[0].id}` : '/')
+    // Stay in the workspace the board lived in — its next board, or its empty state.
+    const sibling = boards.value.find(item => item.workspaceId === action.board.workspaceId)
+    await navigateTo(sibling ? `/b/${sibling.id}` : '/')
     return
   } catch (error) {
     notify('error', errorText(error))
