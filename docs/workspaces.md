@@ -6,14 +6,19 @@ A workspace groups boards: one per team, client, or department. It is a containe
 
 Every instance starts with a single workspace named **Workspace**. As long as it keeps that name and has no description, nothing about workspaces appears anywhere and the app looks as if the level did not exist. Give the lone workspace a name of its own or a description, and its name appears in the header next to the logo as a plain title, with the description beside it.
 
-Instance administrators create further workspaces from the **Workspaces** entry in the account menu. The moment a second one exists, the workspace name in the header becomes a switcher, with a settings icon beside it for the workspace's administrators. Switching a workspace lands on its last visited board, or its first, or on an empty state with a create-board button for workspace administrators.
+Two levels are kept apart on purpose:
+
+- **Workspaces** (`/admin/workspaces`), under *Administration* in the account menu next to *Users*, is the instance-level overview for instance administrators: every workspace with its board and member counts, a link into each one's settings, and the form that creates a new workspace. Creating one leads straight into its settings.
+- **Workspace settings** (`/w/[workspace]/settings`) is about one workspace only. It is reached from the workspace's context: the settings icon beside the name in the header, the *Settings of …* entry in the switcher menu, and on phones the same entry in the menu sheet. Instance administrators find a link back to the overview at the top.
+
+The moment a second workspace exists, the workspace name in the header becomes a switcher. Instance administrators see the menu even with a single workspace, because it carries the **New workspace…** shortcut and the way to the overview. Switching a workspace lands on its last visited board, or its first, or on an empty state with a create-board button for workspace administrators.
 
 The workspace settings page holds:
 
 - **General**: name and description.
 - **Boards**: the list, create new ones, and reorder them; the order is what the board switcher offers.
 - **Members**: workspace **administrators** manage the workspace and open boards in it; **members** merely see it listed. Neither role grants access to a board inside it.
-- **New workspace** (instance administrators only) and a **Danger zone**. A workspace can be deleted only when it holds no boards, and the last workspace cannot be deleted.
+- **Danger zone** (instance administrators only). A workspace can be deleted only when it holds no boards, and the last workspace cannot be deleted.
 
 A board can be **moved** to another workspace and **duplicated**, into the same workspace or a different one, from **Board settings → Board**, above the danger zone. Moving keeps everything, members and credentials included, and only changes where the board hangs. Duplicating copies the structure (lanes, categories, labels, members) with an optional **Include tickets** switch; the App Store Connect key, webhooks, comments, and history always stay with the original.
 
@@ -21,7 +26,7 @@ A board can be **moved** to another workspace and **duplicated**, into the same 
 
 - **Visibility is derived, not stored.** A person sees a workspace if they hold an explicit workspace membership, are a member of at least one board inside it, or are an instance administrator. No membership rows are backfilled on migration.
 - **Workspaces are grouping, not access control.** Board membership stays the only thing that grants board access. A workspace with no administrators at all is a normal state, because instance administrators hold every workspace regardless.
-- **URLs stay `/b/[board]`.** Board ids are globally unique, so the workspace is context rather than a path segment. Only the settings page has a workspace route, `/w/[workspace]/settings`.
+- **URLs stay `/b/[board]`.** Board ids are globally unique, so the workspace is context rather than a path segment. Only the settings page has a workspace route, `/w/[workspace]/settings`; the overview lives under `/admin/workspaces`.
 - **Board creation is a workspace-admin operation.** `board.create` takes an optional `workspaceId` and falls back to the default workspace, so API clients that predate workspaces keep working. Instance administrators pass through the implicit-admin rule.
 - **Reordering is all-or-nothing.** `workspace.reorderBoards` refuses with 422 unless the new order lists every board of the workspace exactly once. The settings page therefore shows its reorder controls only to someone who can see the complete board list.
 - **Board-pinned tokens** cannot run workspace operations at all; they answer 404.
@@ -39,7 +44,8 @@ A board can be **moved** to another workspace and **duplicated**, into the same 
 | [shared/utils/constants.ts](../shared/utils/constants.ts) | `DEFAULT_WORKSPACE_NAME`, the name that keeps the switcher hidden. |
 | `app/composables/useWorkspaces.ts` | Workspace list state, `useCurrentWorkspace`, `useLastWorkspaceId` (cookie `open-bugster-workspace`). |
 | `app/components/WorkspaceSwitcher.vue` | The header switcher; renders nothing for a single untouched workspace. |
-| `app/pages/w/[workspace]/settings.vue` | The settings page with its stacked sections. |
+| `app/pages/admin/workspaces.vue` | The instance-level overview: every workspace, and where new ones are created. |
+| `app/pages/w/[workspace]/settings.vue` | One workspace's settings page with its stacked sections. |
 | `app/middleware/workspace.ts`, `home-board.ts` | Resolving the route parameter; landing on a board inside the selected workspace. |
 
 ## Surfaces

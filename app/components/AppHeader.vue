@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, Bug, Check, Layers, LogOut, Menu, Moon, Sun, User, Users } from '@lucide/vue'
+import { Archive, Bug, Check, Layers, LogOut, Menu, Moon, Settings2, Sun, User, Users } from '@lucide/vue'
 import {
   DialogContent,
   DialogDescription,
@@ -9,6 +9,7 @@ import {
   DialogTitle,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuPortal,
   DropdownMenuRoot,
   DropdownMenuSeparator,
@@ -105,6 +106,8 @@ function openWorkspace(item: WorkspaceSummary) {
             >
               <User :size="15" aria-hidden="true" /> Your profile
             </DropdownMenuItem>
+            <DropdownMenuSeparator v-if="instanceAdmin" class="my-1 h-px bg-[var(--line)]" />
+            <DropdownMenuLabel v-if="instanceAdmin" class="muted px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-[.14em]">Administration</DropdownMenuLabel>
             <DropdownMenuItem
               v-if="instanceAdmin"
               class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm outline-none data-[highlighted]:bg-[var(--accent-soft)]"
@@ -112,11 +115,12 @@ function openWorkspace(item: WorkspaceSummary) {
             >
               <Users :size="15" aria-hidden="true" /> Users
             </DropdownMenuItem>
-            <!-- The way in while the switcher is hidden — the second workspace is created here. -->
+            <!-- Instance level: every workspace of the server. The current workspace's own
+                 settings live with the switcher, next to its name. -->
             <DropdownMenuItem
-              v-if="instanceAdmin && workspaceId"
+              v-if="instanceAdmin"
               class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm outline-none data-[highlighted]:bg-[var(--accent-soft)]"
-              @select="navigateTo(`/w/${workspaceId}/settings`)"
+              @select="navigateTo('/admin/workspaces')"
             >
               <Layers :size="15" aria-hidden="true" /> Workspaces
             </DropdownMenuItem>
@@ -176,7 +180,7 @@ function openWorkspace(item: WorkspaceSummary) {
           <slot name="menu" :close="closeMenu" />
 
           <template v-if="workspaces.length > 1">
-            <p class="sheet-heading">Workspaces</p>
+            <p class="sheet-heading">Switch workspace</p>
             <button v-for="item in workspaces" :key="item.id" type="button" class="sheet-item" @click="openWorkspace(item)">
               <Check v-if="item.id === workspaceId" :size="15" stroke-width="2.5" class="text-[var(--accent)]" aria-hidden="true" />
               <span v-else class="size-[15px]" aria-hidden="true" />
@@ -194,9 +198,13 @@ function openWorkspace(item: WorkspaceSummary) {
             <Moon v-else :size="15" aria-hidden="true" />
             {{ isDark ? 'Light mode' : 'Dark mode' }}
           </button>
+          <NuxtLink v-if="workspace?.role === 'admin'" :to="`/w/${workspaceId}/settings`" class="sheet-item" @click="closeMenu"><Settings2 :size="15" aria-hidden="true" /> Settings of {{ workspace.name }}</NuxtLink>
           <NuxtLink to="/profile" class="sheet-item" @click="closeMenu"><User :size="15" aria-hidden="true" /> Your profile</NuxtLink>
-          <NuxtLink v-if="instanceAdmin" to="/admin/users" class="sheet-item" @click="closeMenu"><Users :size="15" aria-hidden="true" /> Users</NuxtLink>
-          <NuxtLink v-if="instanceAdmin && workspaceId" :to="`/w/${workspaceId}/settings`" class="sheet-item" @click="closeMenu"><Layers :size="15" aria-hidden="true" /> Manage workspaces</NuxtLink>
+          <template v-if="instanceAdmin">
+            <p class="sheet-heading">Administration</p>
+            <NuxtLink to="/admin/users" class="sheet-item" @click="closeMenu"><Users :size="15" aria-hidden="true" /> Users</NuxtLink>
+            <NuxtLink to="/admin/workspaces" class="sheet-item" @click="closeMenu"><Layers :size="15" aria-hidden="true" /> Workspaces</NuxtLink>
+          </template>
           <div class="my-1 h-px bg-[var(--line)]" />
           <button type="button" class="sheet-item font-semibold text-rose-600 hover:bg-rose-500/10" @click="logout()">
             <LogOut :size="15" aria-hidden="true" /> Sign out

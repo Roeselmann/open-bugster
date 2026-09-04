@@ -352,30 +352,6 @@ async function removeMember(member: WorkspaceMember) {
   }
 }
 
-/* ── other workspaces ───────────────────────────────────────────────────── */
-
-// The switcher's own "New workspace" item only exists once there are two — the very first
-// second workspace has to be creatable from here.
-const newWorkspaceName = ref('')
-const creatingWorkspace = ref(false)
-
-async function createWorkspace() {
-  const value = newWorkspaceName.value.trim()
-  if (!value || creatingWorkspace.value) return
-  creatingWorkspace.value = true
-  try {
-    const response = await $fetch<{ workspace: { id: string } }>('/api/workspaces', { method: 'POST', body: { name: value } })
-    await refreshWorkspaces()
-    lastWorkspaceId.value = response.workspace.id
-    newWorkspaceName.value = ''
-    await navigateTo(`/w/${response.workspace.id}/settings`)
-  } catch (error) {
-    notify('error', errorText(error))
-  } finally {
-    creatingWorkspace.value = false
-  }
-}
-
 /* ── danger zone ────────────────────────────────────────────────────────── */
 
 const confirmingDelete = ref(false)
@@ -409,10 +385,14 @@ async function deleteWorkspace() {
 
     <main class="mx-auto max-w-4xl space-y-6 px-4 py-8 sm:px-6">
       <div>
-        <NuxtLink to="/" class="focus-ring muted inline-flex items-center gap-1.5 rounded-lg text-sm font-semibold hover:text-[var(--ink)]">
-          <ArrowLeft :size="15" /> Back to the boards
+        <NuxtLink
+          :to="instanceAdmin ? '/admin/workspaces' : '/'"
+          class="focus-ring muted inline-flex items-center gap-1.5 rounded-lg text-sm font-semibold hover:text-[var(--ink)]"
+        >
+          <ArrowLeft :size="15" /> {{ instanceAdmin ? 'All workspaces' : 'Back to the boards' }}
         </NuxtLink>
-        <h1 class="mt-2 text-3xl font-bold tracking-[-.045em]">Workspace settings</h1>
+        <h1 class="mt-2 text-3xl font-bold tracking-[-.045em]">{{ workspace.name }}</h1>
+        <p class="muted mt-1 text-sm">Workspace settings — name, boards and members of this workspace only.</p>
       </div>
 
       <section class="surface rounded-2xl">
@@ -576,33 +556,6 @@ async function deleteWorkspace() {
             class="focus-ring flex h-11 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50"
           >
             <UserPlus :size="16" aria-hidden="true" /> {{ adding ? 'Adding…' : 'Add member' }}
-          </button>
-        </form>
-      </section>
-
-      <section v-if="instanceAdmin" class="surface rounded-2xl">
-        <header class="border-b border-[var(--line)] px-5 py-4">
-          <p class="muted text-[10px] font-bold uppercase tracking-[.14em]">Instance</p>
-          <h2 class="mt-0.5 text-lg font-bold">New workspace</h2>
-          <p class="muted mt-1 text-sm">
-            Another workspace gets its own boards and its own administrators. The switcher
-            appears next to the logo as soon as a second one exists.
-          </p>
-        </header>
-        <form class="flex flex-wrap items-center gap-3 px-5 py-4" @submit.prevent="createWorkspace">
-          <input
-            v-model="newWorkspaceName"
-            class="focus-ring surface-strong h-11 min-w-56 flex-1 rounded-xl px-3 text-sm outline-none"
-            maxlength="40"
-            placeholder="Workspace name"
-            aria-label="Name for a new workspace"
-          >
-          <button
-            type="submit"
-            :disabled="creatingWorkspace || !newWorkspaceName.trim()"
-            class="focus-ring flex h-11 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"
-          >
-            <Plus :size="16" aria-hidden="true" /> {{ creatingWorkspace ? 'Creating…' : 'Create workspace' }}
           </button>
         </form>
       </section>

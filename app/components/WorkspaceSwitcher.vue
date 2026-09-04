@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, ChevronDown, Plus, Settings2 } from '@lucide/vue'
+import { Check, ChevronDown, Layers, Plus, Settings2 } from '@lucide/vue'
 import {
   DialogClose,
   DialogContent,
@@ -33,6 +33,9 @@ const lastBoardId = useLastBoardId()
 // One workspace needs no switcher: the header looks exactly as it did before workspaces
 // existed, and the menu appears on its own the day a second one is created.
 const hasChoice = computed(() => workspaces.value.length > 1)
+// Instance administrators get the menu even with a single workspace — it carries the
+// shortcut to open the second one, the same way the board switcher offers "New board".
+const hasMenu = computed(() => hasChoice.value || instanceAdmin.value)
 
 // A lone workspace still shows its name — as a plain title, like the single-board case in
 // BoardSwitcher — once somebody has made it theirs: renamed it away from the seeded default
@@ -85,7 +88,7 @@ async function createWorkspace() {
   <div v-if="visible && workspace" class="flex min-w-0 flex-1 items-center gap-1.5">
     <span class="muted mx-1 select-none text-2xl font-light" aria-hidden="true">/</span>
 
-    <span v-if="!hasChoice" class="truncate px-1 text-3xl font-bold tracking-[-.045em]">{{ workspace.name }}</span>
+    <span v-if="!hasMenu" class="truncate px-1 text-3xl font-bold tracking-[-.045em]">{{ workspace.name }}</span>
 
     <DropdownMenuRoot v-else>
       <DropdownMenuTrigger
@@ -111,13 +114,27 @@ async function createWorkspace() {
             <span class="min-w-0 flex-1 truncate font-medium">{{ item.name }}</span>
             <span class="muted shrink-0 text-[11px] font-semibold tabular-nums">{{ item.boardCount }} {{ item.boardCount === 1 ? 'board' : 'boards' }}</span>
           </DropdownMenuItem>
-          <DropdownMenuSeparator v-if="instanceAdmin" class="my-1 h-px bg-[var(--line)]" />
+          <DropdownMenuSeparator v-if="workspace.role === 'admin' || instanceAdmin" class="my-1 h-px bg-[var(--line)]" />
+          <DropdownMenuItem
+            v-if="workspace.role === 'admin'"
+            class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-semibold outline-none data-[highlighted]:bg-[var(--accent-soft)]"
+            @select="navigateTo(`/w/${workspace.id}/settings`)"
+          >
+            <Settings2 :size="15" aria-hidden="true" /> Settings of {{ workspace.name }}
+          </DropdownMenuItem>
           <DropdownMenuItem
             v-if="instanceAdmin"
             class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-semibold outline-none data-[highlighted]:bg-[var(--accent-soft)]"
             @select="openCreate"
           >
             <Plus :size="15" aria-hidden="true" /> New workspace…
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            v-if="instanceAdmin"
+            class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-semibold outline-none data-[highlighted]:bg-[var(--accent-soft)]"
+            @select="navigateTo('/admin/workspaces')"
+          >
+            <Layers :size="15" aria-hidden="true" /> All workspaces
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenuPortal>
@@ -153,7 +170,7 @@ async function createWorkspace() {
           <DialogTitle as-child>
             <h2 class="text-lg font-bold tracking-[-.025em]">New workspace</h2>
           </DialogTitle>
-          <p class="muted mt-2 text-sm">A workspace groups boards. It starts empty — open its first board from the workspace settings.</p>
+          <p class="muted mt-2 text-sm">A workspace groups boards. It starts empty — you are taken to its settings to open the first board.</p>
           <form class="mt-5" @submit.prevent="createWorkspace">
             <label class="mb-2 block text-xs font-bold uppercase tracking-[.08em]" for="new-workspace-name">Name</label>
             <input
