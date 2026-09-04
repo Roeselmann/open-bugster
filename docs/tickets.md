@@ -1,12 +1,12 @@
 # Tickets
 
-A ticket is a card on a board: a title, a description, an internal comment, priority, due date, build number, a to-do list, attachments, one category, any number of labels, an assignee, a comment thread, and a history. Imported TestFlight feedback becomes a ticket too, with the original submission attached. Tickets are moved by dragging, archived instead of deleted, and numbered instance-wide.
+A ticket is a card on a board: a title, a description, an internal comment, priority, due date, build number, an optional link to something elsewhere, a to-do list, attachments, one category, any number of labels, an assignee, a comment thread, and a history. Imported TestFlight feedback and Jira issues become tickets too, with the original submission or issue attached. Tickets are moved by dragging, archived instead of deleted, and numbered instance-wide.
 
 ## Using it
 
 ### Creating and editing
 
-New tickets are created with **Add ticket** at the bottom of a lane, or with the **+** in a lane's header to put one at the top; the editor lets you change the lane and the position before saving. Either way they land in that lane. An open ticket can be sent to the top or bottom of its lane with the two arrow buttons beside the **Lane** select. Imported tickets additionally show the original TestFlight feedback with tester, device, system, locale, and build. A board administrator can set the **Author** by hand, which is how an import that arrived before anyone had an account gets one afterwards.
+New tickets are created with **Add ticket** at the bottom of a lane, or with the **+** in a lane's header to put one at the top; the editor lets you change the lane and the position before saving. Either way they land in that lane. An open ticket can be sent to the top or bottom of its lane with the two arrow buttons beside the **Lane** select. Imported tickets additionally show their origin: the TestFlight feedback with tester, device, system, locale, and build, or the Jira issue with key, project, type, status, priority, reporter, and assignee as they were at import. A board administrator can set the **Author** by hand, which is how an import that arrived before anyone had an account gets one afterwards.
 
 The description is Markdown. A ticket that already has one opens with the rendered text; **Edit** (or a click on the text) brings back the editor. The **Save** beside the field stores just the description right away and shows the rendered result without closing the ticket; **Cancel** drops the unsaved changes and returns to the rendered view. A ticket without a description starts in the editor. Viewers see the rendered text only.
 
@@ -24,11 +24,11 @@ Each ticket carries a comment thread, open to viewers as well, and a history tha
 
 ### Filtering and searching
 
-The filter pane narrows the board by labels (any of the picked ones), category, or assignee, including everything still unassigned. The search box matches titles, descriptions, to-dos, authors, assignees, build numbers, and ticket numbers.
+The filter pane narrows the board by labels (any of the picked ones), category, or assignee, including everything still unassigned. The search box matches titles, descriptions, to-dos, authors, assignees, build numbers, links, Jira issue keys, and ticket numbers.
 
 ### Archive
 
-**Archive** removes a ticket from the board without losing it, and an archived TestFlight ticket is never imported again by a later sync. Editors archive; the archive itself belongs to the board's administrators. Only they see its icon in the header, reach the archive view, and restore from it. For everyone else an archived ticket is simply gone, including through its own address, and the dialog says as much before an editor archives anything.
+**Archive** removes a ticket from the board without losing it, and an archived import is never imported again by a later sync. Editors archive; the archive itself belongs to the board's administrators. Only they see its icon in the header, reach the archive view, and restore from it. For everyone else an archived ticket is simply gone, including through its own address, and the dialog says as much before an editor archives anything.
 
 ## How it works
 
@@ -50,7 +50,7 @@ The filter pane narrows the board by labels (any of the picked ones), category, 
 | [server/operations/tickets.ts](../server/operations/tickets.ts) | `ticket.list`, `ticket.get`, `ticket.getByNumber`, `ticket.activity`, `board.activity` (viewer); `ticket.create`, `ticket.update`, `ticket.move`, `ticket.archive` (editor); `ticket.restore` (admin). |
 | [server/operations/attachments.ts](../server/operations/attachments.ts) | `attachment.get` (viewer), `attachment.add` (base64 body), `attachment.addFromUrl` (editor). |
 | [server/operations/board-domain.ts](../server/operations/board-domain.ts) | `comment.list`, `comment.add` (viewer on the ticket), `comment.update`, `comment.remove` (author or board admin). |
-| [server/utils/db.ts](../server/utils/db.ts) | `listTickets`, `listTicketsPage`, `findTicket`, `ticketIdByNumber`; `createTicket`, `updateTicket`, `moveTicket`, `archiveTicket`, `restoreTicket`; comments and `listActivity`, `recordActivity`. Tables `tickets`, `ticket_todos`, `ticket_labels`, `attachments`, `apple_feedback`, `ticket_comments`, `ticket_activity`. |
+| [server/utils/db.ts](../server/utils/db.ts) | `listTickets`, `listTicketsPage`, `findTicket`, `ticketIdByNumber`; `createTicket`, `updateTicket`, `moveTicket`, `archiveTicket`, `restoreTicket`; comments and `listActivity`, `recordActivity`. Tables `tickets`, `ticket_todos`, `ticket_labels`, `attachments`, `apple_feedback`, `jira_issues`, `ticket_comments`, `ticket_activity`. |
 | [server/utils/attachment-policy.ts](../server/utils/attachment-policy.ts) | `MAX_ATTACHMENT_SIZE`, `MAX_ATTACHMENT_COUNT`, the extension allowlist, and the signature check. |
 | [server/utils/attachment-file.ts](../server/utils/attachment-file.ts) | Storing files under `ATTACHMENTS_PATH` and resolving stored paths safely. |
 | [server/utils/attachment-fetch.ts](../server/utils/attachment-fetch.ts) | The server-side download behind `attachment.addFromUrl`. |

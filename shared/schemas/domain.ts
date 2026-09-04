@@ -1,11 +1,11 @@
 import { z } from 'zod'
 import {
-  activityChannels, activityKinds, boardRoles, categoryColors, ticketPriorities, ticketSources,
+  activityChannels, activityKinds, boardRoles, categoryColors, integrationProviders, ticketPriorities, ticketSources,
   ticketTypeColors, ticketTypeIconNames, userRoles, userStatuses, workspaceRoles
 } from '../types/domain'
 import type {
   AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardSummary, Category,
-  CategorySummary, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket,
+  CategorySummary, JiraIntegration, JiraIssue, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket,
   TicketActivityEntry, TicketComment, TicketTodo, TicketType, TicketTypeIcon, TicketTypeIconRef, TicketTypeRef, TicketTypeSummary,
   Workspace, WorkspaceMember, WorkspaceSummary
 } from '../types/domain'
@@ -97,6 +97,23 @@ export const appleFeedbackSchema = z.object({
   sourceCreatedAt: z.string()
 }).describe('What TestFlight reported alongside an imported ticket.')
 
+export const jiraIssueSchema = z.object({
+  issueId: z.string(),
+  issueKey: z.string(),
+  projectKey: z.string().nullable(),
+  issueType: z.string().nullable(),
+  status: z.string().nullable(),
+  statusCategory: z.string().nullable(),
+  jiraPriority: z.string().nullable(),
+  reporter: personSchema.nullable(),
+  reporterName: z.string().nullable(),
+  assigneeName: z.string().nullable(),
+  url: z.string(),
+  labels: z.array(z.string()),
+  sourceCreatedAt: z.string(),
+  sourceUpdatedAt: z.string().nullable()
+}).describe('What Jira reported alongside an imported issue, frozen at import time.')
+
 export const ticketSchema = z.object({
   id: z.string(),
   ticketNumber: z.number().int(),
@@ -108,6 +125,7 @@ export const ticketSchema = z.object({
   priority: z.enum(ticketPriorities),
   dueDate: z.string().nullable(),
   buildNumber: z.string().nullable(),
+  link: z.string().nullable().describe('An optional reference elsewhere; a Jira import sets it to the issue.'),
   source: z.enum(ticketSources),
   externalId: z.string().nullable(),
   createdAt: z.string(),
@@ -120,6 +138,7 @@ export const ticketSchema = z.object({
   type: ticketTypeRefSchema.nullable(),
   labels: z.array(labelSchema),
   feedback: appleFeedbackSchema.nullable(),
+  jira: jiraIssueSchema.nullable(),
   attachments: z.array(attachmentSchema),
   todos: z.array(ticketTodoSchema)
 })
@@ -178,6 +197,15 @@ export const boardCredentialsSchema = z.object({
   complete: z.boolean()
 }).describe('App Store Connect settings. The private key itself is never returned.')
 
+export const jiraIntegrationSchema = z.object({
+  siteUrl: z.string(),
+  email: z.string(),
+  jql: z.string(),
+  tokenLabel: z.string().nullable(),
+  tokenUpdatedAt: z.string().nullable(),
+  complete: z.boolean()
+}).describe('Jira settings. The API token itself is never returned.')
+
 export const workspaceSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -218,6 +246,7 @@ export const boardSummarySchema = boardSchema.extend({
   lanes: z.array(laneSummarySchema),
   ticketCount: z.number().int(),
   credentials: boardCredentialsSchema,
+  jira: jiraIntegrationSchema,
   members: z.array(boardMemberSchema),
   role: z.enum(boardRoles).describe('The calling principal’s own role on this board.')
 })
@@ -225,6 +254,7 @@ export const boardSummarySchema = boardSchema.extend({
 export const syncRunSchema = z.object({
   id: z.string(),
   boardId: z.string(),
+  provider: z.enum(integrationProviders),
   startedAt: z.string(),
   finishedAt: z.string().nullable(),
   status: z.enum(['running', 'success', 'partial', 'failed']),
@@ -279,6 +309,8 @@ const named: Record<string, z.ZodType> = {
   LaneSummary: laneSummarySchema,
   BoardMember: boardMemberSchema,
   BoardCredentials: boardCredentialsSchema,
+  JiraIntegration: jiraIntegrationSchema,
+  JiraIssue: jiraIssueSchema,
   Board: boardSchema,
   BoardSummary: boardSummarySchema,
   Workspace: workspaceSchema,
@@ -318,6 +350,8 @@ export type SchemasMatchDomain = [
   Expect<Equal<z.infer<typeof attachmentSchema>, Attachment>>,
   Expect<Equal<z.infer<typeof ticketTodoSchema>, TicketTodo>>,
   Expect<Equal<z.infer<typeof appleFeedbackSchema>, AppleFeedback>>,
+  Expect<Equal<z.infer<typeof jiraIssueSchema>, JiraIssue>>,
+  Expect<Equal<z.infer<typeof jiraIntegrationSchema>, JiraIntegration>>,
   Expect<Equal<z.infer<typeof ticketSchema>, Ticket>>,
   Expect<Equal<z.infer<typeof ticketCommentSchema>, TicketComment>>,
   Expect<Equal<z.infer<typeof ticketActivitySchema>, TicketActivityEntry>>,

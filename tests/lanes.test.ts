@@ -106,8 +106,10 @@ describe('boards and lanes', () => {
 
     expect(updated.credentials).toMatchObject({ issuerId: 'issuer', keyId: 'KEY123', appId: '1234567890', keyFilename: 'AuthKey_KEY123.p8', complete: true })
     expect(JSON.stringify(updated)).not.toContain('BEGIN PRIVATE KEY')
-    const stored = db.getDb().prepare('SELECT asc_private_key AS key FROM boards WHERE id = ?').get(board.id) as { key: string }
+    const stored = db.getDb().prepare("SELECT secret AS key FROM board_integrations WHERE board_id = ? AND provider = 'testflight'").get(board.id) as { key: string }
     expect(stored.key).not.toContain('BEGIN PRIVATE KEY')
+    // The board row itself no longer carries credentials at all.
+    expect((db.getDb().pragma('table_info(boards)') as Array<{ name: string }>).map(column => column.name)).not.toContain('asc_private_key')
     expect(db.boardSyncCredentials(board.id)?.privateKeyPem).toBe(pem)
 
     expect(db.clearBoardPrivateKey(board.id)?.credentials).toMatchObject({ complete: false, keyFilename: null })

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Check, RefreshCcw, Search, Settings2, X } from '@lucide/vue'
-import type { Attachment, CategorySummary, LabelSummary, SyncRun, Ticket, TicketPriority, TicketTodoInput, TicketTypeSummary } from '~~/shared/types/domain'
+import type { Attachment, CategorySummary, IntegrationProvider, LabelSummary, SyncRun, Ticket, TicketPriority, TicketTodoInput, TicketTypeSummary } from '~~/shared/types/domain'
+import { PROVIDER_LABELS } from '~~/shared/utils/ticket-source'
 import { TICKET_TYPES_KEY } from '~/utils/ticketTypes'
 
 type PendingConfirmation =
@@ -38,10 +39,20 @@ const { data, pending, error, refresh } = await useFetch<{ tickets: Ticket[] }>(
   query: { boardId },
   watch: [boardId],
 })
-const { data: syncData, refresh: refreshSync } = await useFetch<{ run: SyncRun | null }>('/api/import/latest', {
-  query: { boardId },
+// One last-run line per connection; a board may have both.
+const { data: testflightSync, refresh: refreshTestflightSync } = await useFetch<{ run: SyncRun | null }>('/api/import/latest', {
+  query: { boardId, provider: 'testflight' },
   watch: [boardId],
 })
+const { data: jiraSync, refresh: refreshJiraSync } = await useFetch<{ run: SyncRun | null }>('/api/import/latest', {
+  query: { boardId, provider: 'jira' },
+  watch: [boardId],
+})
+const refreshSync = () => Promise.all([refreshTestflightSync(), refreshJiraSync()])
+const latestRuns = computed<Record<IntegrationProvider, SyncRun | null>>(() => ({
+  testflight: testflightSync.value?.run || null,
+  jira: jiraSync.value?.run || null,
+}))
 const { data: categoryData, refresh: refreshCategories } = await useFetch<{ categories: CategorySummary[] }>('/api/categories', {
   query: { boardId },
   watch: [boardId],
@@ -75,7 +86,8 @@ const selected = ref<Ticket | null>(null)
 const editorOpen = ref(false)
 const deletingAttachmentId = ref<string | null>(null)
 const saving = ref(false)
-const syncing = ref(false)
+/** Which connection is syncing right now; one at a time keeps the counts readable. */
+const syncing = ref<IntegrationProvider | null>(null)
 const confirmation = ref<PendingConfirmation | null>(null)
 const confirmationPending = ref(false)
 const { notice, notify, closeNotice } = useNotify()
@@ -185,6 +197,8 @@ const filteredTickets = computed(() => {
       ticket.assignee?.lastName || '',
       ticket.assignee?.email || '',
       ticket.buildNumber || '',
+      ticket.link || '',
+      ticket.jira?.issueKey || '',
       ticket.type?.name || '',
       ...ticket.todos.map(todo => todo.text),
       ...ticket.labels.map(label => label.name),
@@ -240,8 +254,15 @@ function toggleSearch() {
   else nextTick(() => searchInput.value?.focus())
 }
 
-// Mirrors BoardSwitcher: importing needs both an administrator and complete Apple credentials.
-const showSync = computed(() => canModerate.value && Boolean(board.value?.credentials.complete))
+// The connections a sync button exists for: importing needs an administrator and complete
+// credentials, and each complete connection gets its own button.
+const syncProviders = computed<IntegrationProvider[]>(() => {
+  if (!canModerate.value || !board.value) return []
+  const providers: IntegrationProvider[] = []
+  if (board.value.credentials.complete) providers.push('testflight')
+  if (board.value.jira.complete) providers.push('jira')
+  return providers
+})
 
 // The lane the "Add ticket" button was pressed in; the server falls back to the first lane.
 const newTicketLaneId = ref<string | null>(null)
@@ -262,7 +283,7 @@ function openTicket(ticket: Ticket) {
   editorOpen.value = true
 }
 
-async function saveTicket(payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; typeId?: string | null; laneId?: string; placement?: 'top' | 'bottom'; todos: TicketTodoInput[]; attachments: File[]; stayOpen?: boolean }) {
+async function saveTicket(payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; link?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; typeId?: string | null; laneId?: string; placement?: 'top' | 'bottom'; todos: TicketTodoInput[]; attachments: File[]; stayOpen?: boolean }) {
   saving.value = true
   const wasEdit = Boolean(selected.value)
   try {
@@ -430,17 +451,18 @@ async function reorderTicketFromEditor(ticket: Ticket, placement: 'top' | 'botto
   if (await moveTicket(ticket.id, ticket.laneId, Math.max(0, targetIndex))) notify('success', `Moved to the ${placement} of the lane. Saved right away.`)
 }
 
-async function sync() {
-  syncing.value = true
+async function sync(provider: IntegrationProvider) {
+  if (syncing.value) return
+  syncing.value = provider
   try {
-    const response = await $fetch<{ run: SyncRun }>('/api/import/testflight', { method: 'POST', body: { boardId: boardId.value } })
+    const response = await $fetch<{ run: SyncRun }>('/api/import/run', { method: 'POST', body: { boardId: boardId.value, provider } })
     await Promise.all([refresh(), refreshSync(), refreshLabels(), refreshBoards()])
-    notify(response.run.failedCount ? 'error' : 'success', `${response.run.importedCount} new tickets.`)
+    notify(response.run.failedCount ? 'error' : 'success', `${response.run.importedCount} new tickets from ${PROVIDER_LABELS[provider]}.`)
   } catch (error) {
     await refreshSync()
     notify('error', errorText(error))
   } finally {
-    syncing.value = false
+    syncing.value = null
   }
 }
 </script>
@@ -482,13 +504,13 @@ async function sync() {
           <span class="min-w-0 flex-1 truncate">{{ item.name }}</span>
           <span class="muted shrink-0 text-[11px] font-semibold tabular-nums">{{ item.ticketCount }}</span>
         </NuxtLink>
-        <template v-if="board.role === 'admin' || showSync">
+        <template v-if="board.role === 'admin' || syncProviders.length">
           <div class="my-1 h-px bg-[var(--line)]" />
           <NuxtLink v-if="board.role === 'admin'" :to="`/b/${board.id}/settings/board`" class="sheet-item" @click="close">
             <Settings2 :size="15" aria-hidden="true" /> Board settings
           </NuxtLink>
-          <button v-if="showSync" type="button" class="sheet-item" :disabled="syncing" @click="close(); sync()">
-            <RefreshCcw :size="15" :class="syncing ? 'animate-spin' : ''" aria-hidden="true" /> TestFlight sync
+          <button v-for="provider in syncProviders" :key="provider" type="button" class="sheet-item" :disabled="Boolean(syncing)" @click="close(); sync(provider)">
+            <RefreshCcw :size="15" :class="syncing === provider ? 'animate-spin' : ''" aria-hidden="true" /> {{ PROVIDER_LABELS[provider] }} sync
           </button>
         </template>
       </template>
@@ -522,7 +544,7 @@ async function sync() {
       </div>
 
       <div class="mb-6 flex-col gap-4 max-md:hidden md:flex md:flex-row md:items-end">
-        <BoardSwitcher :board="board" :boards="workspaceBoards" :syncing="syncing" :latest-run="syncData?.run || null" :can-sync="canModerate" @sync="sync" />
+        <BoardSwitcher :board="board" :boards="workspaceBoards" :syncing="syncing" :latest-runs="latestRuns" :sync-providers="syncProviders" @sync="sync" />
         <div class="flex flex-wrap gap-2 md:ml-auto md:justify-end">
           <div class="relative w-full sm:w-72">
             <Search :size="17" class="muted absolute left-3 top-1/2 -translate-y-1/2" />

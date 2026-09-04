@@ -110,7 +110,7 @@ export const v1Routes: readonly V1Route[] = [
   { method: 'DELETE', path: '/categories/{categoryId}', operation: ops.categoryDelete, status: 204 },
   { method: 'GET', path: '/boards/{boardId}/labels', operation: ops.labelList, response: z.object({ labels: z.array(labelSummarySchema) }) },
 
-  // TestFlight import
+  // Imports — TestFlight or Jira, chosen by `provider`
   { method: 'GET', path: '/boards/{boardId}/import', operation: ops.importStatus, response: z.object({ run: syncRunSchema.nullable() }) },
   { method: 'POST', path: '/boards/{boardId}/import', operation: ops.importRun, response: z.object({ run: syncRunSchema }) }
 ]

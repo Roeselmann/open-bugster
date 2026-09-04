@@ -16,7 +16,7 @@ Line numbers in code maps are approximate and refer to the state of the code whe
 
 - **Operating an instance:** [setup.md](setup.md), then [backups-and-updates.md](backups-and-updates.md).
 - **Using the board:** [boards.md](boards.md), [tickets.md](tickets.md), [users-and-access.md](users-and-access.md).
-- **Connecting other software:** [api.md](api.md), [mcp-server.md](mcp-server.md), [webhooks.md](webhooks.md).
+- **Connecting other software:** [api.md](api.md), [mcp-server.md](mcp-server.md), [webhooks.md](webhooks.md); the built-in imports are [app-store-connect.md](app-store-connect.md) and [jira.md](jira.md).
 - **Reading or changing the code:** [architecture.md](architecture.md) first, then [development.md](development.md) for the checklist a new feature has to satisfy.
 
 ## Documents
@@ -35,3 +35,4 @@ Line numbers in code maps are approximate and refer to the state of the code whe
 | [mcp-server.md](mcp-server.md) | The MCP endpoint for AI agents: the tools, their annotations, the two permission layers. |
 | [webhooks.md](webhooks.md) | Outgoing signed webhooks: events, signing, retries, destination screening. |
 | [app-store-connect.md](app-store-connect.md) | The built-in TestFlight import: credentials, encryption, the sync, and upgrading from a single board. |
+| [jira.md](jira.md) | The built-in Jira Cloud import: API token and JQL per board, the one-way sync, descriptions from ADF, attachments. |

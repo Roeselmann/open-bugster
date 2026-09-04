@@ -1,6 +1,6 @@
 # App Store Connect and the TestFlight import
 
-App Store Connect is the one integration built into Open-Bugster. A board configured with an App Store Connect API key imports TestFlight screenshots and crash reports as tickets, with tester, device, system, locale, build, and the original submission attached. Credentials are configured in the app, per board, so every board tracks its own app. A board without credentials is simply a board.
+App Store Connect is one of the two integrations built into Open-Bugster, the other being [Jira](jira.md). A board configured with an App Store Connect API key imports TestFlight screenshots and crash reports as tickets, with tester, device, system, locale, build, and the original submission attached. Credentials are configured in the app, per board, so every board tracks its own app. A board without credentials is simply a board.
 
 ## Using it
 
@@ -46,9 +46,9 @@ Installations that configured TestFlight through the `ASC_ISSUER_ID`, `ASC_KEY_I
 ## How it works
 
 - **Apple authentication** is an ES256 JWT signed with the `.p8`, with `kid` set to the key ID and a 19-minute lifetime, minted per request.
-- **The key is validated on upload**: at most 16 KB, a `.p8` filename, a PKCS#8 header, and importable as an ES256 key. Then it is sealed with AES-256-GCM and stored on the board row.
+- **The key is validated on upload**: at most 16 KB, a `.p8` filename, a PKCS#8 header, and importable as an ES256 key. Then it is sealed with AES-256-GCM and stored in `board_integrations`, the board's `testflight` row, next to the issuer, key and app ids as JSON. Older installations kept these on the `boards` row itself; `ensureBoardIntegrations` moves them across on the first start and drops the old columns.
 - **The encryption key** is `BUGSTER_SECRET_KEY`. By default it is generated on the first start into `secrets.json` in the data volume. An environment value always wins over the generated one. One legacy case remains: an installation that sets `NUXT_SESSION_PASSWORD` but no `BUGSTER_SECRET_KEY` derives the encryption key from the session password, as older versions did; changing that password then makes every stored `.p8` unreadable and the startup log warns about it.
-- **A sync is a `sync_runs` row** with a per-board in-flight lock, so two clicks cannot run twice. The first sync on a board looks 90 days back; later syncs start one day before the previous successful run began, and the `syncLimit` caps how many submissions per type are inspected. A run ends as `success`, `partial`, or `failed`.
+- **A sync is a `sync_runs` row** with `provider = 'testflight'` and an in-process lock per board and provider, so two clicks cannot run twice while a Jira sync may run alongside. The first sync on a board looks 90 days back; later syncs start one day before the previous successful run began, and the `syncLimit` caps how many submissions per type are inspected. A run ends as `success`, `partial`, or `failed`.
 - **Deduplication** is by Apple's feedback id, stored in `apple_feedback`; archived tickets keep their id, which is what stops a re-import.
 - **Imported tickets** land in the import lane, get their title from the feedback, and carry the screenshot as an attachment under the usual attachment policy.
 - **Attribution** matches the tester's email against the people table at render time, so the author appears as soon as that person has an account.
@@ -63,15 +63,16 @@ Installations that configured TestFlight through the `ASC_ISSUER_ID`, `ASC_KEY_I
 | [server/utils/secret-box.ts](../server/utils/secret-box.ts) | `encryptSecret`, `decryptSecret`, `secretKeyAvailable`, the legacy derivation. |
 | [server/utils/runtime-secrets.ts](../server/utils/runtime-secrets.ts), [server/plugins/00-runtime-secrets.ts](../server/plugins/00-runtime-secrets.ts) | Generating and loading `secrets.json`. |
 | [server/operations/board-domain.ts](../server/operations/board-domain.ts) | `board.setKey`, `board.clearKey`, `board.testConnection`, `import.run` (board admin); `import.status` (viewer). |
-| [server/utils/db.ts](../server/utils/db.ts) | `ensureBoardSyncLimit`, `ensureBoardAutoAuthor`, `ensureImportStatus`; `setBoardPrivateKey`, `clearBoardPrivateKey`, `boardSyncCredentials`, the sync-run and feedback functions. Tables `apple_feedback`, `sync_runs`. |
+| [server/utils/db.ts](../server/utils/db.ts) | `ensureBoardSyncLimit`, `ensureBoardAutoAuthor`, `ensureImportStatus`, `ensureBoardIntegrations`; `setBoardPrivateKey`, `clearBoardPrivateKey`, `boardSyncCredentials`, the sync-run and feedback functions. Tables `board_integrations`, `apple_feedback`, `sync_runs`. |
+| [server/utils/sync-lock.ts](../server/utils/sync-lock.ts) | `acquireSyncLock`, shared with the Jira sync. |
 | [server/utils/config.ts](../server/utils/config.ts) | The legacy `ASC_*` variables, read once for the single-board upgrade. |
 | `app/components/BoardTestFlightSettings.vue`, `app/pages/b/[board]/settings/integration.vue` | The settings form, test connection, sync options. |
 | `app/components/AppHeader.vue` | The **TestFlight Sync** button and last-run line. |
 
 ## Surfaces
 
-- **Internal routes:** `server/api/boards/[id]/key.post.ts`, `key.delete.ts`, `test-connection.post.ts`; `server/api/import/testflight.post.ts`, `latest.get.ts`.
-- **REST v1:** `GET /boards/{boardId}/import` (last run), `POST /boards/{boardId}/import` (run a sync). Credentials are not on the public surface.
+- **Internal routes:** `server/api/boards/[id]/key.post.ts`, `key.delete.ts`, `test-connection.post.ts`; `server/api/import/run.post.ts`, `latest.get.ts`, both taking `provider` and defaulting to TestFlight.
+- **REST v1:** `GET /boards/{boardId}/import` (last run), `POST /boards/{boardId}/import` (run a sync); `provider` defaults to `testflight`. Credentials are not on the public surface.
 - **MCP:** none. An agent sees imported tickets like any other.
 - **Webhooks:** `import.completed`.
 

@@ -1,5 +1,7 @@
 export const ticketPriorities = ['low', 'medium', 'high', 'urgent'] as const
-export const ticketSources = ['manual', 'testflight_screenshot', 'testflight_crash'] as const
+export const ticketSources = ['manual', 'testflight_screenshot', 'testflight_crash', 'jira_issue'] as const
+/** The systems a board can import tickets from. Each has its own settings tab and sync. */
+export const integrationProviders = ['testflight', 'jira'] as const
 export const categoryColors = ['neutral', 'rose', 'amber', 'emerald', 'teal', 'blue', 'violet', 'fuchsia'] as const
 export const userRoles = ['owner', 'admin', 'member'] as const
 export const userStatuses = ['invited', 'active', 'disabled'] as const
@@ -20,6 +22,7 @@ export const ticketTypeIconNames = [
 
 export type TicketPriority = typeof ticketPriorities[number]
 export type TicketSource = typeof ticketSources[number]
+export type IntegrationProvider = typeof integrationProviders[number]
 export type CategoryColor = typeof categoryColors[number]
 export type UserRole = typeof userRoles[number]
 export type UserStatus = typeof userStatuses[number]
@@ -186,6 +189,28 @@ export interface BoardCredentials {
   complete: boolean
 }
 
+/** A board's Jira connection as the browser may see it: everything but the token. */
+export interface JiraIntegration {
+  /** The Jira Cloud site, `https://<team>.atlassian.net`, without a path. Empty when unset. */
+  siteUrl: string
+  /** The Atlassian account the API token belongs to. */
+  email: string
+  /** Which issues a sync brings in. */
+  jql: string
+  /** A hint at the stored token, `Token · …ab12`; null when none is stored. */
+  tokenLabel: string | null
+  tokenUpdatedAt: string | null
+  complete: boolean
+}
+
+/** What a Jira connection test reports back. */
+export interface JiraConnection {
+  displayName: string | null
+  email: string | null
+  /** How many issues the JQL currently matches; null when Jira could not say. */
+  matchingIssues: number | null
+}
+
 /**
  * The level above boards: a workspace groups them and will own everything meant to be
  * shared across them. It grants no board access by itself — board membership stays the
@@ -247,6 +272,7 @@ export interface BoardSummary extends Board {
   lanes: LaneSummary[]
   ticketCount: number
   credentials: BoardCredentials
+  jira: JiraIntegration
   members: BoardMember[]
   /** The requesting user's own role on this board, so the UI can gate controls. */
   role: BoardRole
@@ -304,6 +330,26 @@ export interface AppleFeedback {
   sourceCreatedAt: string
 }
 
+/** What Jira reported alongside an imported issue. Frozen at import: the ticket lives on here. */
+export interface JiraIssue {
+  /** Jira's numeric issue id — what `externalId` holds, because keys change when an issue moves. */
+  issueId: string
+  issueKey: string
+  projectKey: string | null
+  issueType: string | null
+  status: string | null
+  statusCategory: string | null
+  jiraPriority: string | null
+  /** The reporter, as a contact or — once invited — an account. Null when Jira hid the address. */
+  reporter: Person | null
+  reporterName: string | null
+  assigneeName: string | null
+  url: string
+  labels: string[]
+  sourceCreatedAt: string
+  sourceUpdatedAt: string | null
+}
+
 /** Kept as the historic name for a ticket's author; identical to `Person`. */
 export type TicketAuthor = Person
 
@@ -318,6 +364,8 @@ export interface Ticket {
   priority: TicketPriority
   dueDate: string | null
   buildNumber: string | null
+  /** An optional reference elsewhere — the Jira issue for an import, anything for a person. */
+  link: string | null
   source: TicketSource
   externalId: string | null
   createdAt: string
@@ -330,6 +378,7 @@ export interface Ticket {
   type: TicketTypeRef | null
   labels: Label[]
   feedback: AppleFeedback | null
+  jira: JiraIssue | null
   attachments: Attachment[]
   todos: TicketTodo[]
 }
@@ -337,6 +386,7 @@ export interface Ticket {
 export interface SyncRun {
   id: string
   boardId: string
+  provider: IntegrationProvider
   startedAt: string
   finishedAt: string | null
   status: 'running' | 'success' | 'partial' | 'failed'

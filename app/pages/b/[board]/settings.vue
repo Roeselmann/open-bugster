@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Plug, ScrollText, SlidersHorizontal, Users, Webhook } from '@lucide/vue'
+import { ArrowLeft, Plug, ScrollText, SlidersHorizontal, SquareKanban, Users, Webhook } from '@lucide/vue'
 
 definePageMeta({ middleware: 'board' })
 
@@ -16,6 +16,7 @@ const sections = computed(() => {
     { to: `/b/${id}/settings/board`, label: 'Board', icon: SlidersHorizontal },
     users,
     { to: `/b/${id}/settings/integration`, label: 'TestFlight', icon: Plug },
+    { to: `/b/${id}/settings/jira`, label: 'Jira', icon: SquareKanban },
     { to: `/b/${id}/settings/automation`, label: 'Webhooks', icon: Webhook },
     { to: `/b/${id}/settings/audit`, label: 'Audit', icon: ScrollText },
   ]

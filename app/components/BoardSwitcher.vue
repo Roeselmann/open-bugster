@@ -16,17 +16,22 @@ import {
   DropdownMenuTrigger,
   VisuallyHidden,
 } from 'reka-ui'
-import type { BoardSummary, SyncRun } from '~~/shared/types/domain'
+import type { BoardSummary, IntegrationProvider, SyncRun } from '~~/shared/types/domain'
+import { PROVIDER_LABELS } from '~~/shared/utils/ticket-source'
 
 const props = withDefaults(defineProps<{
   board: BoardSummary
   boards: BoardSummary[]
-  syncing?: boolean
-  latestRun?: SyncRun | null
-  /** Importing spends the board's Apple credentials, so only its administrators are offered it. */
-  canSync?: boolean
-}>(), { syncing: false, latestRun: null, canSync: false })
-const emit = defineEmits<{ created: []; sync: [] }>()
+  /** The connection syncing right now, if any. */
+  syncing?: IntegrationProvider | null
+  latestRuns?: Partial<Record<IntegrationProvider, SyncRun | null>>
+  /**
+   * The connections to offer a sync button for. The page decides: importing spends the
+   * board's credentials, so only its administrators get one, and only for complete connections.
+   */
+  syncProviders?: IntegrationProvider[]
+}>(), { syncing: null, latestRuns: () => ({}), syncProviders: () => [] })
+const emit = defineEmits<{ created: []; sync: [provider: IntegrationProvider] }>()
 
 const { refresh: refreshBoards } = useBoards()
 const { workspaces } = useWorkspaces()
@@ -44,11 +49,14 @@ const createError = ref('')
 // A single board needs no menu — the heading stays a plain title until a second one exists.
 const hasChoice = computed(() => props.boards.length > 1)
 
-// A board without complete Apple credentials has nothing to sync — the button would only
-// lead to an error, so it waits until the integration settings are filled in.
-const showSync = computed(() => props.canSync && props.board.credentials.complete)
+function syncLabel(provider: IntegrationProvider) {
+  const run = props.syncProviders.length > 1 ? null : undefined
+  // With two connections the line has to say which one it speaks of.
+  const prefix = run === null ? `${PROVIDER_LABELS[provider]} · ` : ''
+  return prefix + runLabel(props.latestRuns[provider] || null)
+}
 
-function syncLabel(run: SyncRun | null) {
+function runLabel(run: SyncRun | null) {
   if (!run) return 'Not synced yet'
   if (run.status === 'running') return 'Sync in progress'
   const date = new Intl.DateTimeFormat('en', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(run.finishedAt || run.startedAt))
@@ -140,21 +148,22 @@ async function createBoard() {
         <Settings2 :size="17" />
       </NuxtLink>
 
-      <button
-        v-if="showSync"
-        class="focus-ring surface grid size-9 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]"
-        :disabled="syncing"
-        aria-label="TestFlight sync"
-        title="TestFlight sync"
-        @click="emit('sync')"
-      >
-        <RefreshCcw :size="17" :class="syncing ? 'animate-spin' : ''" />
-      </button>
+      <template v-for="provider in syncProviders" :key="provider">
+        <button
+          class="focus-ring surface grid size-9 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]"
+          :disabled="Boolean(syncing)"
+          :aria-label="`${PROVIDER_LABELS[provider]} sync`"
+          :title="`${PROVIDER_LABELS[provider]} sync`"
+          @click="emit('sync', provider)"
+        >
+          <RefreshCcw :size="17" :class="syncing === provider ? 'animate-spin' : ''" />
+        </button>
 
-      <div v-if="showSync" class="muted hidden shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-[var(--line)] px-3 py-1.5 text-xs lg:flex">
-        <span class="size-1.5 rounded-full" :class="latestRun?.status === 'failed' ? 'bg-rose-500' : 'bg-emerald-500'" />
-        {{ syncLabel(latestRun) }}
-      </div>
+        <div class="muted hidden shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-[var(--line)] px-3 py-1.5 text-xs lg:flex">
+          <span class="size-1.5 rounded-full" :class="latestRuns[provider]?.status === 'failed' ? 'bg-rose-500' : 'bg-emerald-500'" />
+          {{ syncLabel(provider) }}
+        </div>
+      </template>
 
       <button
         v-if="!hasChoice && canCreate"
@@ -171,12 +180,12 @@ async function createBoard() {
           <DialogOverlay class="ui-dialog-overlay fixed inset-0 z-[70] bg-black/35 backdrop-blur-[2px]" />
           <DialogContent class="ui-dialog-content surface fixed left-1/2 top-1/2 z-[71] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl p-5 shadow-2xl sm:p-6">
             <VisuallyHidden>
-              <DialogDescription>Create a board with its own lanes and TestFlight app.</DialogDescription>
+              <DialogDescription>Create a board with its own lanes and imports.</DialogDescription>
             </VisuallyHidden>
             <DialogTitle as-child>
               <h2 class="text-lg font-bold tracking-[-.025em]">New board</h2>
             </DialogTitle>
-            <p class="muted mt-2 text-sm">The board starts with an Import, Backlog, In Progress and Done lane. Add its TestFlight credentials in the board settings.</p>
+            <p class="muted mt-2 text-sm">The board starts with an Import, Backlog, In Progress and Done lane. Connect TestFlight or Jira in the board settings.</p>
             <form class="mt-5" @submit.prevent="createBoard">
               <label class="mb-2 block text-xs font-bold uppercase tracking-[.08em]" for="new-board-name">Name</label>
               <input

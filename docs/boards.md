@@ -16,7 +16,7 @@ Deleting a board removes all of it, including attachments and the stored key. Th
 
 Lanes are the columns of the board and are configured under **Board settings → Board**. Drag a lane by its handle to reorder it, or focus the handle and use the arrow keys. Top to bottom in the settings is left to right on the board.
 
-Every board has exactly one **import lane**, which is where TestFlight feedback lands. It can be renamed and reordered, but not deleted, and it only appears on the board once something has been imported into it.
+Every board has exactly one **import lane**, which is where imports from TestFlight and Jira land. It can be renamed and reordered, but not deleted, and it only appears on the board once something has been imported into it.
 
 When a lane is deleted, its tickets are not lost: the dialog asks whether they should move to another lane or go to the archive.
 

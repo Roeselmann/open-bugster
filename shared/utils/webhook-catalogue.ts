@@ -48,7 +48,7 @@ export const WEBHOOK_EVENTS: readonly WebhookEventDoc[] = [
   {
     event: 'ticket.created',
     operation: 'ticket.create',
-    fires: 'A ticket was filed from the board, through the API, or by an agent. A TestFlight import does not fire this — it writes its tickets straight in and reports itself as `import.completed`.',
+    fires: 'A ticket was filed from the board, through the API, or by an agent. An import does not fire this — it writes its tickets straight in and reports itself as `import.completed`.',
     dataKey: 'ticket',
     holds: 'The new ticket in full.'
   },
@@ -97,9 +97,9 @@ export const WEBHOOK_EVENTS: readonly WebhookEventDoc[] = [
   {
     event: 'import.completed',
     operation: 'import.run',
-    fires: 'A TestFlight sync finished — including when it finished badly.',
+    fires: 'A TestFlight or Jira sync finished — including when it finished badly.',
     dataKey: 'run',
-    holds: 'The run: how many tickets were imported, skipped and failed, and why it stopped. The imported tickets do not arrive as `ticket.created` — read the import lane if the workflow needs them.'
+    holds: 'The run: which provider it pulled from, how many tickets were imported, skipped and failed, and why it stopped. The imported tickets do not arrive as `ticket.created` — read the import lane if the workflow needs them.'
   }
 ] as const
 

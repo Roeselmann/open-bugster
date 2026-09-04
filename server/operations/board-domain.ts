@@ -3,6 +3,8 @@ import { dirname, join, resolve } from 'node:path'
 import { createError } from 'h3'
 import { z } from 'zod'
 import { AppleApiError, syncTestFlight, verifyTestFlightAccess } from '../utils/app-store-connect'
+import { JiraApiError, syncJira, verifyJiraAccess } from '../utils/jira'
+import { tokenLabel } from '../utils/jira-policy'
 import { getServerConfig } from '../utils/config'
 import { SecretBoxError } from '../utils/secret-box'
 import { boardViewer, isInstanceAdmin, requireWorkspaceAccess } from '../utils/access'
@@ -10,12 +12,12 @@ import { listAudit } from '../utils/audit'
 import {
   CategoryNameTakenError, LaneDeleteError, boardMembers, boardRoleFor, countBoardAdmins, countBoards,
   createBoard, createComment, createLane, defaultWorkspaceId, deleteBoard, deleteCategory, deleteComment, deleteLane, duplicateBoard, findBoard, findBoardSummary,
-  boardSyncCredentials, clearBoardPrivateKey, findCategory, findLane, importLaneFor, latestSyncRun, listBoards, listCategories, listComments, listLabels, listLanes,
-  listUsers, moveBoardToWorkspace, personById, removeBoardMember, reorderLanes, setBoardMember, setBoardPrivateKey, ticketTypeBelongsToBoard, updateBoard, updateCategory, updateComment, updateLane
+  boardJiraCredentials, boardSyncCredentials, clearBoardJiraToken, clearBoardPrivateKey, findCategory, findLane, importLaneFor, latestSyncRun, listBoards, listCategories, listComments, listLabels, listLanes,
+  listUsers, moveBoardToWorkspace, personById, removeBoardMember, reorderLanes, setBoardJiraToken, setBoardMember, setBoardPrivateKey, ticketTypeBelongsToBoard, updateBoard, updateCategory, updateComment, updateLane
 } from '../utils/db'
 import {
   boardCreateSchema, boardMemberSchema, boardUpdateSchema, categoryUpdateSchema, commentSaveSchema, connectionTestSchema,
-  importRequestSchema, laneCreateSchema, laneOrderSchema, laneUpdateSchema
+  importRequestSchema, jiraConnectionTestSchema, jiraTokenSchema, laneCreateSchema, laneOrderSchema, laneUpdateSchema
 } from '../utils/validation'
 import { createdId, defineOperation, type OperationContext } from './types'
 import { orNotFound } from './run'
@@ -148,37 +150,34 @@ export const boardDelete = defineOperation({
   }
 })
 
+/** Turns what a sync or connection test threw into the HTTP error the caller should see. */
+function integrationFailure(error: unknown, fallback: string): never {
+  if (error instanceof AppleApiError || error instanceof JiraApiError) throw createError({ statusCode: error.statusCode, statusMessage: error.message })
+  if (error instanceof SecretBoxError) throw createError({ statusCode: 500, statusMessage: error.message })
+  throw createError({ statusCode: 500, statusMessage: error instanceof Error ? error.message : fallback })
+}
+
 export const importRun = defineOperation({
   name: 'import.run',
-  summary: 'Pull the newest TestFlight feedback onto a board',
+  summary: 'Pull the newest items of one of a board’s connections — TestFlight or Jira — onto it',
   input: importRequestSchema,
-  // A sync spends the board's App Store Connect key and writes tickets into the import lane
-  // under the board's own name, so it belongs to whoever owns those credentials.
+  // A sync spends the board's credentials and writes tickets into the import lane under the
+  // board's own name, so it belongs to whoever owns those credentials.
   requires: { scope: 'board', role: 'admin', boardId: boardOf },
-  audit: { targetType: 'board', targetId: input => input.boardId },
+  audit: { targetType: 'board', targetId: input => input.boardId, changes: ['provider'] },
   run: async (_ctx, input) => {
     const importLane = importLaneFor(input.boardId)
     if (!importLane) throw createError({ statusCode: 409, statusMessage: 'This board has no import lane.' })
-    const credentials = boardSyncCredentials(input.boardId)!
+    const attachmentsPath = getServerConfig().attachmentsPath
     try {
-      return {
-        run: await syncTestFlight({
-          boardId: input.boardId,
-          laneId: importLane.id,
-          issuerId: credentials.issuerId,
-          keyId: credentials.keyId,
-          appId: credentials.appId,
-          privateKeyPem: credentials.privateKeyPem,
-          syncLimit: credentials.syncLimit,
-          autoAuthor: credentials.autoAuthor,
-          importTypeId: credentials.importTypeId,
-          attachmentsPath: getServerConfig().attachmentsPath
-        })
+      if (input.provider === 'jira') {
+        const credentials = boardJiraCredentials(input.boardId)!
+        return { run: await syncJira({ boardId: input.boardId, laneId: importLane.id, ...credentials, attachmentsPath }) }
       }
+      const credentials = boardSyncCredentials(input.boardId)!
+      return { run: await syncTestFlight({ boardId: input.boardId, laneId: importLane.id, ...credentials, attachmentsPath }) }
     } catch (error) {
-      if (error instanceof AppleApiError) throw createError({ statusCode: error.statusCode, statusMessage: error.message })
-      if (error instanceof SecretBoxError) throw createError({ statusCode: 500, statusMessage: error.message })
-      throw createError({ statusCode: 500, statusMessage: error instanceof Error ? error.message : 'TestFlight sync failed.' })
+      integrationFailure(error, `${input.provider === 'jira' ? 'Jira' : 'TestFlight'} sync failed.`)
     }
   }
 })
@@ -458,9 +457,57 @@ export const boardTestConnection = defineOperation({
         })
       }
     } catch (error) {
-      if (error instanceof AppleApiError) throw createError({ statusCode: error.statusCode, statusMessage: error.message })
-      if (error instanceof SecretBoxError) throw createError({ statusCode: 500, statusMessage: error.message })
-      throw createError({ statusCode: 500, statusMessage: error instanceof Error ? error.message : 'The connection test failed.' })
+      integrationFailure(error, 'The connection test failed.')
+    }
+  }
+})
+
+/* ── jira ───────────────────────────────────────────────────────────────── */
+
+export const jiraTokenSet = defineOperation({
+  name: 'jira.setToken',
+  summary: 'Store a board’s Jira API token',
+  input: jiraTokenSchema.extend({ boardId: id }),
+  requires: { scope: 'board', role: 'admin', boardId: boardOf },
+  // No `changes`: the only field is the token, and it must never reach the log.
+  audit: { targetType: 'board', targetId: input => input.boardId },
+  run: (ctx, input) => ({
+    board: orNotFound(setBoardJiraToken(input.boardId, input.token, tokenLabel(input.token), boardViewer(ctx.account)), 'Board')
+  })
+})
+
+export const jiraTokenClear = defineOperation({
+  name: 'jira.clearToken',
+  summary: 'Remove a board’s Jira API token',
+  input: z.object({ boardId: id }),
+  requires: { scope: 'board', role: 'admin', boardId: boardOf },
+  audit: { targetType: 'board', targetId: input => input.boardId },
+  run: (ctx, input) => ({
+    board: orNotFound(clearBoardJiraToken(input.boardId, boardViewer(ctx.account)), 'Board')
+  })
+})
+
+export const jiraTestConnection = defineOperation({
+  name: 'jira.testConnection',
+  summary: 'Check that a board’s Jira credentials and JQL work',
+  input: jiraConnectionTestSchema.extend({ boardId: id }),
+  requires: { scope: 'board', role: 'admin', boardId: boardOf },
+  audit: { targetType: 'board', targetId: input => input.boardId },
+  run: async (_ctx, input) => {
+    // As with TestFlight: the form's draft values are what gets tested; only the token is
+    // write-only and therefore always comes from the vault.
+    const stored = boardJiraCredentials(input.boardId)!
+    try {
+      return {
+        connection: await verifyJiraAccess({
+          siteUrl: input.siteUrl ?? stored.siteUrl,
+          email: input.email ?? stored.email,
+          jql: input.jql ?? stored.jql,
+          token: stored.token
+        })
+      }
+    } catch (error) {
+      integrationFailure(error, 'The connection test failed.')
     }
   }
 })
@@ -469,11 +516,11 @@ export const boardTestConnection = defineOperation({
 
 export const importStatus = defineOperation({
   name: 'import.status',
-  summary: 'Read the most recent TestFlight sync for a board',
-  input: z.object({ boardId: id }),
+  summary: 'Read the most recent sync of one of a board’s connections',
+  input: importRequestSchema,
   requires: { scope: 'board', role: 'viewer', boardId: boardOf },
   audit: false,
-  run: (_ctx, input) => ({ run: latestSyncRun(input.boardId) })
+  run: (_ctx, input) => ({ run: latestSyncRun(input.boardId, input.provider) })
 })
 
 /* ── the audit trail ────────────────────────────────────────────────────── */

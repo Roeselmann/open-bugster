@@ -45,6 +45,7 @@ const ticketSample = {
     priority: 'high',
     dueDate: '2026-09-04',
     buildNumber: '1.8.2 (441)',
+    link: null,
     source: 'testflight',
     externalId: 'apple_fb_9f21…',
     createdAt: '2026-08-28T08:44:10.000Z',

@@ -7,6 +7,18 @@ describe('ticket validation', () => {
     expect(result).toEqual({ boardId: 'board-1', title: 'Fix login', description: '', priority: 'medium', buildNumber: '42', labels: ['Auth'], todos: [], placement: 'bottom' })
   })
 
+  it('accepts a web address as the link and nothing else', () => {
+    expect(ticketUpdateSchema.parse({ link: '  https://example.com/spec ' })).toEqual({ link: 'https://example.com/spec' })
+    expect(ticketUpdateSchema.parse({ link: 'http://localhost:4010/browse/APP-1' })).toEqual({ link: 'http://localhost:4010/browse/APP-1' })
+    // Blank means none, and an import keeps its link editable.
+    expect(ticketUpdateSchema.parse({ link: '   ' })).toEqual({ link: null })
+    expect(ticketUpdateSchema.parse({ link: null })).toEqual({ link: null })
+    expect(importedTicketUpdateSchema.parse({ link: 'https://example.com' })).toEqual({ link: 'https://example.com' })
+    expect(ticketUpdateSchema.safeParse({ link: 'example.com' }).success).toBe(false)
+    expect(ticketUpdateSchema.safeParse({ link: 'javascript:alert(1)' }).success).toBe(false)
+    expect(ticketUpdateSchema.safeParse({ link: 'https://exa mple.com' }).success).toBe(false)
+  })
+
   it('places a new ticket at the bottom unless told otherwise', () => {
     expect(ticketCreateSchema.parse({ boardId: 'board-1', title: 'T' }).placement).toBe('bottom')
     expect(ticketCreateSchema.parse({ boardId: 'board-1', title: 'T', placement: 'top' }).placement).toBe('top')

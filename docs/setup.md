@@ -4,7 +4,7 @@ Open-Bugster is one container and one data volume. From nothing to a working boa
 
 ## Using it
 
-**You need** Docker on the machine that will host it, and, only if you want to import TestFlight feedback, an App Store Connect API key (see [app-store-connect.md](app-store-connect.md)). The board works fine without one.
+**You need** Docker on the machine that will host it, and, only if you want to import TestFlight feedback, an App Store Connect API key (see [app-store-connect.md](app-store-connect.md)), or, for issues from Jira Cloud, an Atlassian API token (see [jira.md](jira.md)). The board works fine without either.
 
 1. **Get the code.**
 
@@ -23,7 +23,7 @@ Open-Bugster is one container and one data volume. From nothing to a working boa
 
 3. **Sign in** at `http://<host>:3000` with that email and password. From here on the database is the only source of truth: the bootstrap variables are never read again, and passwords are changed in the app.
 
-4. **Set up the board.** Rename it, adjust its lanes, and, if you have an API key, enter the credentials under **Board settings → Integration**, press **Test connection**, then **TestFlight Sync** in the header.
+4. **Set up the board.** Rename it, adjust its lanes, and, if you have an API key, enter the credentials under **Board settings → TestFlight** or **Board settings → Jira**, press **Test connection**, then the sync button in the header.
 
 5. **Invite your team.** **Users** in the account menu creates an account and shows a one-time link to pass on. Then add them to the board under **Board settings → Users**, as viewer, editor, or administrator.
 

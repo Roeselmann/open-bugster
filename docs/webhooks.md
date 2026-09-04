@@ -16,7 +16,7 @@ The events:
 | `ticket.transferred` | A ticket moves onto another board of the workspace; sent to the board it left. |
 | `ticket.archived`, `ticket.restored` | A ticket leaves or returns to the board. |
 | `comment.added` | A comment is posted. |
-| `import.completed` | A TestFlight sync finishes. |
+| `import.completed` | A TestFlight or Jira sync finishes; `run.provider` says which. |
 
 Each delivery is a JSON body with the event name, a timestamp, the board, and a `data` object holding the ticket, comment, or import run. The exact shape of each event is documented inside the app under the reference panel next to the event picker.
 

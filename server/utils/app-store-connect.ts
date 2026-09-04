@@ -3,9 +3,9 @@ import { basename, extname, join } from 'node:path'
 import { importPKCS8, SignJWT } from 'jose'
 import { addAttachment, createSyncRun, finishSyncRun, hasExternalTicket, insertImportedTicket, latestSyncRun } from './db'
 import { computeImportCutoff, isWithinImportWindow, titleFromFeedback } from './import-policy'
+import { acquireSyncLock } from './sync-lock'
 
 const APPLE_API = 'https://api.appstoreconnect.apple.com'
-const syncingBoards = new Set<string>()
 
 type AppleResource = {
   id: string
@@ -204,13 +204,14 @@ export async function syncTestFlight(config: {
   importTypeId: string | null
   attachmentsPath: string
 }) {
-  if (syncingBoards.has(config.boardId)) throw new AppleApiError(409, 'A TestFlight sync is already in progress for this board.')
+  const release = acquireSyncLock(config.boardId, 'testflight')
+  if (!release) throw new AppleApiError(409, 'A TestFlight sync is already in progress for this board.')
   if (!config.issuerId || !config.keyId || !config.appId || !config.privateKeyPem) {
+    release()
     throw new AppleApiError(503, 'The App Store Connect configuration of this board is incomplete.')
   }
-  syncingBoards.add(config.boardId)
-  const previous = latestSyncRun(config.boardId, true)
-  const run = createSyncRun(config.boardId)
+  const previous = latestSyncRun(config.boardId, 'testflight', true)
+  const run = createSyncRun(config.boardId, 'testflight')
   let imported = 0
   let skipped = 0
   let failed = 0
@@ -240,7 +241,7 @@ export async function syncTestFlight(config: {
     finishSyncRun(config.boardId, run.id, 'failed', imported, skipped, failed + 1, message)
     throw error
   } finally {
-    syncingBoards.delete(config.boardId)
+    release()
   }
 }
 

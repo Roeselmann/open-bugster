@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { History } from '@lucide/vue'
 import type { ActivityKind, TicketActivityEntry } from '~~/shared/types/domain'
+import { providerLabel } from '~~/shared/utils/ticket-source'
 
 const props = defineProps<{ ticketId: string; refreshKey?: number }>()
 
@@ -21,7 +22,7 @@ async function load() {
 watch(() => [props.ticketId, props.refreshKey], load, { immediate: true })
 
 const sentences: Record<ActivityKind, (entry: TicketActivityEntry) => string> = {
-  created: entry => (entry.payload.source ? `imported this ${entry.payload.source} from TestFlight` : `created this ticket in ${entry.payload.lane || 'the board'}`),
+  created: entry => (entry.payload.source ? `imported this ${entry.payload.source} from ${providerLabel(entry.payload.provider)}` : `created this ticket in ${entry.payload.lane || 'the board'}`),
   moved: entry => `moved it from ${entry.payload.from || 'a lane'} to ${entry.payload.to || 'another lane'}`,
   assigned: entry => `assigned it to ${personName(entry, 'to')}`,
   unassigned: () => 'removed the assignee',
@@ -47,8 +48,10 @@ function sentence(entry: TicketActivityEntry) {
   return sentences[entry.kind]?.(entry) || entry.kind
 }
 
+// An entry without an actor was written by an import; the payload says which one, and the
+// entries from before there was a choice were all TestFlight.
 function actor(entry: TicketActivityEntry) {
-  return entry.actor ? displayName(entry.actor) : 'TestFlight'
+  return entry.actor ? displayName(entry.actor) : providerLabel(entry.payload.provider)
 }
 
 /**

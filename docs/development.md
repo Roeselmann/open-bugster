@@ -22,7 +22,7 @@ ATTACHMENTS_PATH=./data/local/attachments
 npm run dev
 ```
 
-The directories, the SQLite file, and a default board are created automatically. `data`, `.env`, and `secrets` are excluded from Git and must not be committed. A board works without App Store Connect credentials; the sync then reports a clear configuration error.
+The directories, the SQLite file, and a default board are created automatically. `data`, `.env`, and `secrets` are excluded from Git and must not be committed. A board works without App Store Connect or Jira credentials; a sync then reports a clear configuration error.
 
 Any number of data sets can live side by side; switching is a matter of pointing both paths at another directory while the dev server is stopped. To work with a copy of the Docker data, stop the container first so the SQLite file, its WAL, and the attachments form a consistent snapshot:
 

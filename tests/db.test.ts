@@ -45,6 +45,11 @@ describe('ticket persistence', () => {
     expect(ticket.labels.map(label => label.name)).toEqual(['API'])
 
     expect(db.updateTicket(ticket.id, { buildNumber: '43' })).toMatchObject({ buildNumber: '43' })
+    expect(ticket.link).toBeNull()
+    expect(db.updateTicket(ticket.id, { link: 'https://example.com/spec' })).toMatchObject({ link: 'https://example.com/spec' })
+    // An unrelated update keeps it; an explicit null clears it.
+    expect(db.updateTicket(ticket.id, { title: 'Still linked' })).toMatchObject({ link: 'https://example.com/spec' })
+    expect(db.updateTicket(ticket.id, { link: null })).toMatchObject({ link: null })
 
     expect(db.moveTicket(ticket.id, laneIdByName['In Progress']!, 0)?.laneId).toBe(laneIdByName['In Progress'])
     expect(db.archiveTicket(ticket.id)?.archivedAt).toBeTruthy()

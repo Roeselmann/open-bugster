@@ -4,7 +4,7 @@
 
 # Open-Bugster
 
-Open-Bugster is a lightweight, self-hosted Kanban board that is meant to be driven by other software as much as by people. It started as the shortest path from TestFlight feedback to a ticket — App Store Connect is still the one integration that ships built in — but everything the board can do is also a REST endpoint, an MCP tool, and an outgoing webhook, so any application, script, or AI agent can work the same board with the same permissions.
+Open-Bugster is a lightweight, self-hosted Kanban board that is meant to be driven by other software as much as by people. It started as the shortest path from TestFlight feedback to a ticket — App Store Connect and Jira Cloud are the two integrations that ship built in — but everything the board can do is also a REST endpoint, an MCP tool, and an outgoing webhook, so any application, script, or AI agent can work the same board with the same permissions.
 
 ## Features
 
@@ -48,10 +48,13 @@ Open-Bugster is a lightweight, self-hosted Kanban board that is meant to be driv
 - **Give machines their own identity**  
   Scoped tokens, service identities for pipelines and jobs, and an audit trail that records which agent acted through which channel—so automation is accountable rather than anonymous.
 
-### The integration that ships with it
+### The integrations that ship with it
 
 - **Import TestFlight feedback**  
   Screenshots and crash reports land as tickets, with tester, device, system, build, and the original comment attached—per board, on that board's own App Store Connect credentials.
+
+- **Import Jira issues**  
+  A JQL query and an API token per board pull issues onto it once—title, description, comments, priority, reporter, attachments—and from then on the ticket is worked here. Nothing is written back to Jira.
 
 ## The idea behind Open-Bugster
 
@@ -84,7 +87,7 @@ Open-Bugster is one container and one data volume. You need Docker on the machin
 
 3. **Sign in** at `http://<host>:3000` with that email and password, rename the default board, and invite your team from **Users** in the account menu.
 
-The first start creates the database, the default board, the owner account, and the machine secrets, and the bootstrap variables are never read again. Everything beyond this—configuring through `.env`, managing the secrets yourself, HTTPS, where data lives, and what to do when nobody can sign in—is in [docs/setup.md](docs/setup.md). Connecting a board to TestFlight is in [docs/app-store-connect.md](docs/app-store-connect.md).
+The first start creates the database, the default board, the owner account, and the machine secrets, and the bootstrap variables are never read again. Everything beyond this—configuring through `.env`, managing the secrets yourself, HTTPS, where data lives, and what to do when nobody can sign in—is in [docs/setup.md](docs/setup.md). Connecting a board to TestFlight is in [docs/app-store-connect.md](docs/app-store-connect.md), to Jira in [docs/jira.md](docs/jira.md).
 
 ## Documentation
 
@@ -104,3 +107,4 @@ One document per feature, each written for people who want an overview and for a
 | [MCP server](docs/mcp-server.md) | The tools for AI agents and their annotations. |
 | [Webhooks](docs/webhooks.md) | Signed outgoing events, retries, destination screening. |
 | [App Store Connect](docs/app-store-connect.md) | The TestFlight import, credentials, and encryption. |
+| [Jira](docs/jira.md) | The one-way Jira Cloud import: API token, JQL, and what arrives on the board. |

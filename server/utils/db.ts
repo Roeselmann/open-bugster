@@ -4,7 +4,7 @@ import { dirname, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type {
   ActivityKind, AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardRole, BoardSummary, Category, CategoryColor,
-  CategorySummary, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
+  CategorySummary, IntegrationProvider, JiraIntegration, JiraIssue, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
   TicketPriority, TicketSource, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary,
   UserAccount, UserBoardMembership, UserRole, UserStatus, Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
 } from '../../shared/types/domain'
@@ -32,15 +32,23 @@ CREATE TABLE IF NOT EXISTS boards (
   name TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   position INTEGER NOT NULL,
-  asc_issuer_id TEXT NOT NULL DEFAULT '',
-  asc_key_id TEXT NOT NULL DEFAULT '',
-  asc_app_id TEXT NOT NULL DEFAULT '',
-  asc_private_key TEXT,
-  asc_key_filename TEXT,
-  asc_key_uploaded_at TEXT,
   sync_limit INTEGER NOT NULL DEFAULT 100,
   auto_author INTEGER NOT NULL DEFAULT 1 CHECK (auto_author IN (0, 1)),
   created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS board_integrations (
+  id TEXT PRIMARY KEY,
+  board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL CHECK (provider IN ('testflight', 'jira')),
+  /* The settings a browser may see, as JSON. Secrets never go in here. */
+  config TEXT NOT NULL DEFAULT '{}',
+  /* The one secret a provider needs — a .p8, an API token — sealed by secret-box. */
+  secret TEXT,
+  secret_label TEXT,
+  secret_updated_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (board_id, provider)
 );
 CREATE TABLE IF NOT EXISTS lanes (
   id TEXT PRIMARY KEY,
@@ -66,7 +74,8 @@ CREATE TABLE IF NOT EXISTS tickets (
   priority TEXT NOT NULL CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
   due_date TEXT,
   build_number TEXT,
-  source TEXT NOT NULL CHECK (source IN ('manual', 'testflight_screenshot', 'testflight_crash')),
+  link TEXT,
+  source TEXT NOT NULL CHECK (source IN ('manual', 'testflight_screenshot', 'testflight_crash', 'jira_issue')),
   external_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -105,6 +114,24 @@ CREATE TABLE IF NOT EXISTS apple_feedback (
   build_version TEXT,
   build_bundle_id TEXT,
   source_created_at TEXT NOT NULL,
+  raw_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS jira_issues (
+  ticket_id TEXT PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE,
+  issue_id TEXT NOT NULL,
+  issue_key TEXT NOT NULL,
+  project_key TEXT,
+  issue_type TEXT,
+  status TEXT,
+  status_category TEXT,
+  jira_priority TEXT,
+  reporter_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  reporter_name TEXT,
+  assignee_name TEXT,
+  url TEXT NOT NULL,
+  labels_json TEXT NOT NULL DEFAULT '[]',
+  source_created_at TEXT NOT NULL,
+  source_updated_at TEXT,
   raw_json TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS attachments (
@@ -162,6 +189,7 @@ CREATE TABLE IF NOT EXISTS ticket_activity (
 CREATE TABLE IF NOT EXISTS sync_runs (
   id TEXT PRIMARY KEY,
   board_id TEXT REFERENCES boards(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL DEFAULT 'testflight',
   started_at TEXT NOT NULL,
   finished_at TEXT,
   status TEXT NOT NULL CHECK (status IN ('running', 'success', 'partial', 'failed')),
@@ -273,6 +301,8 @@ export function getDb() {
   // Last of the email-era migrations: every one above still speaks in email columns.
   ensurePersonIdentity(database)
   // From here on, person ids only.
+  // After the person-id rebuild, which lists the ticket columns by hand and would drop a newer one.
+  ensureTicketLink(database)
   ensureActorContext(database)
   ensureAuditLog(database)
   // Before `personIndexes` below, which puts `idx_users_kind` back after the table rebuild.
@@ -286,6 +316,12 @@ export function getDb() {
   ensureTicketTypes(database)
   // After `ensureTicketTypes`: the column references the table that migration creates.
   ensureBoardImportType(database)
+  // The import sources grow beyond TestFlight: credentials move off the board row, runs and
+  // tickets learn which provider they came from. Before `boardIndexes`, which the tickets
+  // rebuild below would otherwise have to put back itself.
+  ensureBoardIntegrations(database)
+  ensureSyncRunProvider(database)
+  ensureTicketSourceJira(database)
   // Not in `boardIndexes`: that block also runs inside `ensureBoards`, before an upgrading
   // database has been given the ticket_activity table. Serves the board-wide digest query.
   database.exec('CREATE INDEX IF NOT EXISTS idx_ticket_activity_created ON ticket_activity(created_at DESC)')
@@ -635,6 +671,13 @@ export function ensureTicketBuildNumber(db: Database.Database) {
   return !hasBuildNumber
 }
 
+/** An optional reference elsewhere on every ticket. After the rebuilds that list columns by hand. */
+export function ensureTicketLink(db: Database.Database) {
+  const hasLink = tableColumns(db, 'tickets').has('link')
+  if (!hasLink) db.exec('ALTER TABLE tickets ADD COLUMN link TEXT')
+  return !hasLink
+}
+
 export function ensureManualAttachmentKind(db: Database.Database) {
   const table = db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'attachments'").get() as { sql: string } | undefined
   if (!table || table.sql.includes("'file'")) return false
@@ -681,12 +724,6 @@ export function ensureBoards(db: Database.Database) {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       position INTEGER NOT NULL,
-      asc_issuer_id TEXT NOT NULL DEFAULT '',
-      asc_key_id TEXT NOT NULL DEFAULT '',
-      asc_app_id TEXT NOT NULL DEFAULT '',
-      asc_private_key TEXT,
-      asc_key_filename TEXT,
-      asc_key_uploaded_at TEXT,
       sync_limit INTEGER NOT NULL DEFAULT 100,
       created_at TEXT NOT NULL
     );
@@ -715,17 +752,22 @@ export function ensureBoards(db: Database.Database) {
   try {
     db.exec('BEGIN IMMEDIATE')
 
-    db.prepare(`INSERT INTO boards (id, name, position, asc_issuer_id, asc_key_id, asc_app_id, asc_private_key, asc_key_filename, asc_key_uploaded_at, created_at)
-      VALUES (?, 'Workboard', 0, ?, ?, ?, ?, ?, ?, ?)`).run(
-      boardId,
-      config.ascIssuerId,
-      config.ascKeyId,
-      config.ascAppId,
-      legacyKey && secretKeyAvailable() ? encryptSecret(legacyKey.pem) : null,
-      legacyKey && secretKeyAvailable() ? legacyKey.filename : null,
-      legacyKey && secretKeyAvailable() ? now : null,
-      now
-    )
+    db.prepare("INSERT INTO boards (id, name, position, created_at) VALUES (?, 'Workboard', 0, ?)").run(boardId, now)
+    // The single-board era's ASC_* variables become the Workboard's TestFlight connection.
+    const sealedKey = legacyKey && secretKeyAvailable() ? legacyKey : null
+    if (config.ascIssuerId || config.ascKeyId || config.ascAppId || sealedKey) {
+      db.prepare(`INSERT INTO board_integrations (id, board_id, provider, config, secret, secret_label, secret_updated_at, created_at, updated_at)
+        VALUES (?, ?, 'testflight', ?, ?, ?, ?, ?, ?)`).run(
+        randomUUID(),
+        boardId,
+        JSON.stringify({ issuerId: config.ascIssuerId, keyId: config.ascKeyId, appId: config.ascAppId }),
+        sealedKey ? encryptSecret(sealedKey.pem) : null,
+        sealedKey ? sealedKey.filename : null,
+        sealedKey ? now : null,
+        now,
+        now
+      )
+    }
 
     const insertLane = db.prepare('INSERT INTO lanes (id, board_id, name, position, is_import) VALUES (?, ?, ?, ?, ?)')
     defaultLanes.forEach((lane, position) => {
@@ -1702,10 +1744,97 @@ export function ensureWebhooks(db: Database.Database) {
   return !existed
 }
 
+/**
+ * Moves a board's App Store Connect credentials off the `boards` row and into
+ * `board_integrations`, one row per board and provider. A second import source then costs a
+ * row rather than six columns. The `asc_*` columns are dropped once their values are across.
+ */
+export function ensureBoardIntegrations(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS board_integrations (
+      id TEXT PRIMARY KEY,
+      board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL CHECK (provider IN ('testflight', 'jira')),
+      config TEXT NOT NULL DEFAULT '{}',
+      secret TEXT,
+      secret_label TEXT,
+      secret_updated_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (board_id, provider)
+    );
+  `)
+  if (!tableColumns(db, 'boards').has('asc_issuer_id')) return false
+  type LegacyRow = {
+    id: string; asc_issuer_id: string; asc_key_id: string; asc_app_id: string
+    asc_private_key: string | null; asc_key_filename: string | null; asc_key_uploaded_at: string | null
+  }
+  const rows = db.prepare('SELECT id, asc_issuer_id, asc_key_id, asc_app_id, asc_private_key, asc_key_filename, asc_key_uploaded_at FROM boards').all() as LegacyRow[]
+  const now = new Date().toISOString()
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO board_integrations (id, board_id, provider, config, secret, secret_label, secret_updated_at, created_at, updated_at)
+    VALUES (?, ?, 'testflight', ?, ?, ?, ?, ?, ?)
+  `)
+  db.transaction(() => {
+    for (const row of rows) {
+      if (!(row.asc_issuer_id || row.asc_key_id || row.asc_app_id || row.asc_private_key)) continue
+      // The key is already sealed; it moves as it is.
+      insert.run(randomUUID(), row.id, JSON.stringify({ issuerId: row.asc_issuer_id, keyId: row.asc_key_id, appId: row.asc_app_id }),
+        row.asc_private_key, row.asc_key_filename, row.asc_key_uploaded_at, now, now)
+    }
+    for (const column of ['asc_issuer_id', 'asc_key_id', 'asc_app_id', 'asc_private_key', 'asc_key_filename', 'asc_key_uploaded_at']) {
+      db.exec(`ALTER TABLE boards DROP COLUMN ${column}`)
+    }
+  })()
+  return true
+}
+
+/** Every sync run names the provider it pulled from; the ones before there was a choice were TestFlight. */
+export function ensureSyncRunProvider(db: Database.Database) {
+  const had = tableColumns(db, 'sync_runs').has('provider')
+  if (!had) db.exec("ALTER TABLE sync_runs ADD COLUMN provider TEXT NOT NULL DEFAULT 'testflight'")
+  db.exec('CREATE INDEX IF NOT EXISTS idx_sync_runs_board_provider ON sync_runs(board_id, provider, started_at DESC)')
+  return !had
+}
+
+/**
+ * Widens the CHECK on `tickets.source` to admit `jira_issue`. SQLite cannot alter a
+ * constraint, so the table is rebuilt from its own stored definition — which keeps every
+ * column a later migration added — and its indexes are put back afterwards.
+ */
+export function ensureTicketSourceJira(db: Database.Database) {
+  const definition = db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'tickets'").get() as { sql: string } | undefined
+  if (!definition || definition.sql.includes("'jira_issue'")) return false
+  const indexes = (db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'tickets' AND sql IS NOT NULL").all() as Array<{ sql: string }>).map(row => row.sql)
+  const create = definition.sql
+    .replace(/^CREATE TABLE\s+"?tickets"?\s*\(/i, 'CREATE TABLE tickets_migration (')
+    .replace("'testflight_crash')", "'testflight_crash', 'jira_issue')")
+  if (!create.startsWith('CREATE TABLE tickets_migration') || !create.includes("'jira_issue'")) {
+    throw new Error('The tickets table definition was not recognised; the Jira migration did not run.')
+  }
+  const columns = [...tableColumns(db, 'tickets')].join(', ')
+  db.pragma('foreign_keys = OFF')
+  try {
+    db.exec('BEGIN IMMEDIATE')
+    db.exec(create)
+    db.exec(`INSERT INTO tickets_migration (${columns}) SELECT ${columns} FROM tickets`)
+    db.exec('DROP TABLE tickets')
+    db.exec('ALTER TABLE tickets_migration RENAME TO tickets')
+    for (const sql of indexes) db.exec(sql)
+    db.exec('COMMIT')
+  } catch (error) {
+    if (db.inTransaction) db.exec('ROLLBACK')
+    throw error
+  } finally {
+    db.pragma('foreign_keys = ON')
+  }
+  const foreignKeyErrors = db.pragma('foreign_key_check') as unknown[]
+  if (foreignKeyErrors.length) throw new Error('The SQLite migration created invalid foreign keys.')
+  return true
+}
+
 type BoardRow = {
   id: string; name: string; description: string; position: number
-  asc_issuer_id: string; asc_key_id: string; asc_app_id: string
-  asc_private_key: string | null; asc_key_filename: string | null; asc_key_uploaded_at: string | null
   sync_limit: number; auto_author: number; import_type_id: string | null; created_at: string
   // Nullable in the column (SQLite cannot add NOT NULL after the fact), never null in
   // practice: `ensureWorkspaces` adopts every orphan on start.
@@ -1718,7 +1847,7 @@ type LaneRow = { id: string; board_id: string; name: string; position: number; i
 
 type TicketRow = {
   id: string; ticket_number: number; board_id: string; lane_id: string; title: string; description: string
-  position: number; priority: TicketPriority; due_date: string | null; build_number: string | null
+  position: number; priority: TicketPriority; due_date: string | null; build_number: string | null; link: string | null
   source: TicketSource; external_id: string | null; created_at: string; updated_at: string; archived_at: string | null
   category_id: string | null; author_id: string | null; assignee_id: string | null; type_id: string | null
 }
@@ -1753,14 +1882,76 @@ function toBoard(row: BoardRow): Board {
   return { id: row.id, workspaceId: row.workspace_id, name: row.name, description: row.description, position: row.position, syncLimit: row.sync_limit, autoAuthor: Boolean(row.auto_author), importTypeId: row.import_type_id ?? null, createdAt: row.created_at }
 }
 
-function toCredentials(row: BoardRow): BoardCredentials {
+type IntegrationRow = {
+  id: string; board_id: string; provider: IntegrationProvider; config: string
+  secret: string | null; secret_label: string | null; secret_updated_at: string | null
+  created_at: string; updated_at: string
+}
+
+function integrationRow(boardId: string, provider: IntegrationProvider): IntegrationRow | undefined {
+  return getDb().prepare('SELECT * FROM board_integrations WHERE board_id = ? AND provider = ?').get(boardId, provider) as IntegrationRow | undefined
+}
+
+/** The non-secret settings of a connection. Only strings live in here, so anything else reads as absent. */
+function integrationConfig(row: IntegrationRow | undefined): Record<string, string> {
+  if (!row) return {}
+  try {
+    const parsed = JSON.parse(row.config) as Record<string, unknown>
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+  } catch {
+    return {}
+  }
+}
+
+interface IntegrationPatch {
+  /** Merged over the stored settings; a key set to '' clears it. */
+  config?: Record<string, string>
+  /** Present means replace the secret — with null to remove it. Absent leaves it alone. */
+  secret?: string | null
+  secretLabel?: string | null
+}
+
+function upsertIntegration(boardId: string, provider: IntegrationProvider, patch: IntegrationPatch) {
+  const db = getDb()
+  const existing = integrationRow(boardId, provider)
+  const now = new Date().toISOString()
+  const config = JSON.stringify({ ...integrationConfig(existing), ...(patch.config || {}) })
+  const replaceSecret = 'secret' in patch
+  const secret = replaceSecret ? patch.secret ?? null : existing?.secret ?? null
+  const secretLabel = replaceSecret ? patch.secretLabel ?? null : existing?.secret_label ?? null
+  const secretUpdatedAt = replaceSecret ? (patch.secret ? now : null) : existing?.secret_updated_at ?? null
+  if (existing) {
+    db.prepare('UPDATE board_integrations SET config = ?, secret = ?, secret_label = ?, secret_updated_at = ?, updated_at = ? WHERE id = ?')
+      .run(config, secret, secretLabel, secretUpdatedAt, now, existing.id)
+  } else {
+    db.prepare('INSERT INTO board_integrations (id, board_id, provider, config, secret, secret_label, secret_updated_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(randomUUID(), boardId, provider, config, secret, secretLabel, secretUpdatedAt, now, now)
+  }
+}
+
+function toCredentials(boardId: string): BoardCredentials {
+  const row = integrationRow(boardId, 'testflight')
+  const config = integrationConfig(row)
   return {
-    issuerId: row.asc_issuer_id,
-    keyId: row.asc_key_id,
-    appId: row.asc_app_id,
-    keyFilename: row.asc_key_filename,
-    keyUploadedAt: row.asc_key_uploaded_at,
-    complete: Boolean(row.asc_issuer_id && row.asc_key_id && row.asc_app_id && row.asc_private_key)
+    issuerId: config.issuerId || '',
+    keyId: config.keyId || '',
+    appId: config.appId || '',
+    keyFilename: row?.secret_label ?? null,
+    keyUploadedAt: row?.secret_updated_at ?? null,
+    complete: Boolean(config.issuerId && config.keyId && config.appId && row?.secret)
+  }
+}
+
+function toJiraIntegration(boardId: string): JiraIntegration {
+  const row = integrationRow(boardId, 'jira')
+  const config = integrationConfig(row)
+  return {
+    siteUrl: config.siteUrl || '',
+    email: config.email || '',
+    jql: config.jql || '',
+    tokenLabel: row?.secret_label ?? null,
+    tokenUpdatedAt: row?.secret_updated_at ?? null,
+    complete: Boolean(config.siteUrl && config.email && config.jql && row?.secret)
   }
 }
 
@@ -2045,8 +2236,8 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
       // once — the per-row MAX subquery `createTicket` uses would rescan for every ticket.
       let nextNumber = (db.prepare('SELECT COALESCE(MAX(ticket_number), 0) AS value FROM tickets').get() as { value: number }).value
       const insertTicket = db.prepare(`
-        INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, source, external_id, created_at, updated_at, archived_at, author_id, assignee_id, category_id, type_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, link, source, external_id, created_at, updated_at, archived_at, author_id, assignee_id, category_id, type_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       const labelsOf = db.prepare('SELECT label_id FROM ticket_labels WHERE ticket_id = ?')
       const attachLabel = db.prepare('INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)')
@@ -2065,7 +2256,7 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
         nextNumber += 1
         insertTicket.run(
           ticketId, nextNumber, id, laneIds.get(ticket.lane_id)!, ticket.title, ticket.description,
-          ticket.position, ticket.priority, ticket.due_date, ticket.build_number, ticket.source,
+          ticket.position, ticket.priority, ticket.due_date, ticket.build_number, ticket.link, ticket.source,
           ticket.external_id, ticket.created_at, ticket.updated_at, ticket.archived_at,
           ticket.author_id, ticket.assignee_id, ticket.category_id ? categoryIds.get(ticket.category_id) ?? null : null,
           ticket.type_id
@@ -2122,7 +2313,8 @@ function toBoardSummary(row: BoardRow, viewer?: BoardViewer | null): BoardSummar
   const own = viewer ? members.find(member => member.userId === viewer.userId)?.role || null : null
   return {
     ...toBoard(row),
-    credentials: toCredentials(row),
+    credentials: toCredentials(row.id),
+    jira: toJiraIntegration(row.id),
     lanes: listLanes(row.id),
     ticketCount: (getDb().prepare('SELECT COUNT(*) AS value FROM tickets WHERE board_id = ? AND archived_at IS NULL').get(row.id) as { value: number }).value,
     members,
@@ -2208,24 +2400,35 @@ export interface BoardUpdateInput {
   autoAuthor?: boolean
   /** Omitted leaves it alone; null clears it. */
   importTypeId?: string | null
+  /** The Jira connection's settings; the token has its own route. */
+  jira?: { siteUrl?: string; email?: string; jql?: string }
 }
 
 export function updateBoard(id: string, input: BoardUpdateInput, viewer?: BoardViewer | null): BoardSummary | null {
   const db = getDb()
   const row = db.prepare('SELECT * FROM boards WHERE id = ?').get(id) as BoardRow | undefined
   if (!row) return null
-  db.prepare('UPDATE boards SET name = ?, description = ?, asc_issuer_id = ?, asc_key_id = ?, asc_app_id = ?, sync_limit = ?, auto_author = ?, import_type_id = ? WHERE id = ?').run(
-    input.name ?? row.name,
-    input.description ?? row.description,
-    input.issuerId ?? row.asc_issuer_id,
-    input.keyId ?? row.asc_key_id,
-    input.appId ?? row.asc_app_id,
-    input.syncLimit ?? row.sync_limit,
-    input.autoAuthor === undefined ? row.auto_author : Number(input.autoAuthor),
-    input.importTypeId === undefined ? row.import_type_id : input.importTypeId,
-    id
-  )
+  db.transaction(() => {
+    db.prepare('UPDATE boards SET name = ?, description = ?, sync_limit = ?, auto_author = ?, import_type_id = ? WHERE id = ?').run(
+      input.name ?? row.name,
+      input.description ?? row.description,
+      input.syncLimit ?? row.sync_limit,
+      input.autoAuthor === undefined ? row.auto_author : Number(input.autoAuthor),
+      input.importTypeId === undefined ? row.import_type_id : input.importTypeId,
+      id
+    )
+    const testflight = pick({ issuerId: input.issuerId, keyId: input.keyId, appId: input.appId })
+    if (testflight) upsertIntegration(id, 'testflight', { config: testflight })
+    const jira = input.jira && pick({ siteUrl: input.jira.siteUrl, email: input.jira.email, jql: input.jira.jql })
+    if (jira) upsertIntegration(id, 'jira', { config: jira })
+  })()
   return findBoardSummary(id, viewer)
+}
+
+/** The keys that were actually sent, or null when none were. */
+function pick(values: Record<string, string | undefined>): Record<string, string> | null {
+  const present = Object.entries(values).filter((entry): entry is [string, string] => entry[1] !== undefined)
+  return present.length ? Object.fromEntries(present) : null
 }
 
 /** Returns the ids of the deleted tickets so the caller can drop their attachment folders. */
@@ -2238,32 +2441,62 @@ export function deleteBoard(id: string): { ticketIds: string[] } | null {
 }
 
 export function setBoardPrivateKey(id: string, pem: string, filename: string, viewer?: BoardViewer | null): BoardSummary | null {
-  const db = getDb()
   if (!findBoard(id)) return null
-  db.prepare('UPDATE boards SET asc_private_key = ?, asc_key_filename = ?, asc_key_uploaded_at = ? WHERE id = ?')
-    .run(encryptSecret(pem), filename, new Date().toISOString(), id)
+  upsertIntegration(id, 'testflight', { secret: encryptSecret(pem), secretLabel: filename })
   return findBoardSummary(id, viewer)
 }
 
 export function clearBoardPrivateKey(id: string, viewer?: BoardViewer | null): BoardSummary | null {
-  const db = getDb()
   if (!findBoard(id)) return null
-  db.prepare('UPDATE boards SET asc_private_key = NULL, asc_key_filename = NULL, asc_key_uploaded_at = NULL WHERE id = ?').run(id)
+  upsertIntegration(id, 'testflight', { secret: null })
   return findBoardSummary(id, viewer)
+}
+
+/** `label` is what the settings page shows in the token's place; it must not reveal the token. */
+export function setBoardJiraToken(id: string, token: string, label: string, viewer?: BoardViewer | null): BoardSummary | null {
+  if (!findBoard(id)) return null
+  upsertIntegration(id, 'jira', { secret: encryptSecret(token), secretLabel: label })
+  return findBoardSummary(id, viewer)
+}
+
+export function clearBoardJiraToken(id: string, viewer?: BoardViewer | null): BoardSummary | null {
+  if (!findBoard(id)) return null
+  upsertIntegration(id, 'jira', { secret: null })
+  return findBoardSummary(id, viewer)
+}
+
+/** The import options every provider shares, read once per sync. */
+function importOptions(row: BoardRow) {
+  return { syncLimit: row.sync_limit, autoAuthor: Boolean(row.auto_author), importTypeId: row.import_type_id ?? null }
 }
 
 /** Server-only: decrypts the stored key. Never expose the result over the API. */
 export function boardSyncCredentials(id: string): { issuerId: string; keyId: string; appId: string; privateKeyPem: string | null; syncLimit: number; autoAuthor: boolean; importTypeId: string | null } | null {
   const row = getDb().prepare('SELECT * FROM boards WHERE id = ?').get(id) as BoardRow | undefined
   if (!row) return null
+  const integration = integrationRow(id, 'testflight')
+  const config = integrationConfig(integration)
   return {
-    issuerId: row.asc_issuer_id,
-    keyId: row.asc_key_id,
-    appId: row.asc_app_id,
-    privateKeyPem: row.asc_private_key ? decryptSecret(row.asc_private_key) : null,
-    syncLimit: row.sync_limit,
-    autoAuthor: Boolean(row.auto_author),
-    importTypeId: row.import_type_id ?? null
+    issuerId: config.issuerId || '',
+    keyId: config.keyId || '',
+    appId: config.appId || '',
+    privateKeyPem: integration?.secret ? decryptSecret(integration.secret) : null,
+    ...importOptions(row)
+  }
+}
+
+/** Server-only: decrypts the stored API token. Never expose the result over the API. */
+export function boardJiraCredentials(id: string): { siteUrl: string; email: string; jql: string; token: string | null; syncLimit: number; autoAuthor: boolean; importTypeId: string | null } | null {
+  const row = getDb().prepare('SELECT * FROM boards WHERE id = ?').get(id) as BoardRow | undefined
+  if (!row) return null
+  const integration = integrationRow(id, 'jira')
+  const config = integrationConfig(integration)
+  return {
+    siteUrl: config.siteUrl || '',
+    email: config.email || '',
+    jql: config.jql || '',
+    token: integration?.secret ? decryptSecret(integration.secret) : null,
+    ...importOptions(row)
   }
 }
 
@@ -2378,6 +2611,7 @@ function hydrateTicket(row: TicketRow): Ticket {
   const type = fullType ? toTicketTypeRef(fullType) : null
   const labels = db.prepare(`SELECT l.id, l.name FROM labels l JOIN ticket_labels tl ON tl.label_id = l.id WHERE tl.ticket_id = ? ORDER BY l.name`).all(row.id) as Label[]
   const feedbackRow = db.prepare('SELECT * FROM apple_feedback WHERE ticket_id = ?').get(row.id) as Record<string, string | null> | undefined
+  const jiraRow = db.prepare('SELECT * FROM jira_issues WHERE ticket_id = ?').get(row.id) as JiraIssueRow | undefined
   const attachmentRows = db.prepare('SELECT id, kind, filename, mime_type, size FROM attachments WHERE ticket_id = ? ORDER BY created_at').all(row.id) as Array<{ id: string; kind: Attachment['kind']; filename: string; mime_type: string; size: number }>
   const todoRows = db.prepare('SELECT id, text, completed, position FROM ticket_todos WHERE ticket_id = ? ORDER BY position').all(row.id) as Array<{ id: string; text: string; completed: number; position: number }>
   const commentCount = (db.prepare('SELECT COUNT(*) AS value FROM ticket_comments WHERE ticket_id = ?').get(row.id) as { value: number }).value
@@ -2419,6 +2653,7 @@ function hydrateTicket(row: TicketRow): Ticket {
     priority: row.priority,
     dueDate: row.due_date,
     buildNumber: row.build_number || feedback?.buildVersion || null,
+    link: row.link ?? null,
     source: row.source,
     externalId: row.external_id,
     createdAt: row.created_at,
@@ -2431,6 +2666,7 @@ function hydrateTicket(row: TicketRow): Ticket {
     type,
     labels,
     feedback,
+    jira: jiraRow ? toJiraIssue(jiraRow) : null,
     attachments,
     todos
   }
@@ -2700,6 +2936,7 @@ export interface TicketInput {
   priority?: TicketPriority
   dueDate?: string | null
   buildNumber?: string | null
+  link?: string | null
   labels?: string[]
   laneId?: string
   categoryName?: string | null
@@ -2739,10 +2976,10 @@ export function createTicket(boardId: string, input: TicketInput, author: Person
     const categoryId = resolveCategoryId(boardId, input.categoryName)
     // Appended first either way; a ticket asked to the top is then shuffled with the lane.
     const position = nextPosition(lane.id)
-    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, source, created_at, updated_at, author_id, assignee_id, category_id, type_id)
-      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?)`).run(
+    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, link, source, created_at, updated_at, author_id, assignee_id, category_id, type_id)
+      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?)`).run(
       id, boardId, lane.id, input.title, input.description || '', position, input.priority || 'medium',
-      input.dueDate || null, input.buildNumber || null, now, now,
+      input.dueDate || null, input.buildNumber || null, input.link || null, now, now,
       author?.id || null, input.assigneeId || null, categoryId, input.typeId || null
     )
     if (input.placement === 'top') {
@@ -2770,12 +3007,13 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
   const typeId = input.typeId === undefined ? existing.type?.id || null : input.typeId || null
   getDb().transaction(() => {
     const categoryId = input.categoryName === undefined ? existing.category?.id || null : resolveCategoryId(existing.boardId, input.categoryName)
-    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, due_date = ?, build_number = ?, assignee_id = ?, author_id = ?, category_id = ?, type_id = ?, updated_at = ? WHERE id = ?`).run(
+    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, due_date = ?, build_number = ?, link = ?, assignee_id = ?, author_id = ?, category_id = ?, type_id = ?, updated_at = ? WHERE id = ?`).run(
       input.title ?? existing.title,
       input.description ?? existing.description,
       priority,
       dueDate,
       input.buildNumber === undefined ? (existing.source === 'manual' ? existing.buildNumber : null) : input.buildNumber || null,
+      input.link === undefined ? existing.link : input.link || null,
       assigneeId,
       authorId,
       categoryId,
@@ -2898,15 +3136,13 @@ export function restoreTicket(id: string, actor: Actor | null = null): Ticket | 
   return findTicket(id)
 }
 
-export function latestSyncRun(boardId: string, successOnly = false): SyncRun | null {
-  const row = getDb().prepare(`
-    SELECT * FROM sync_runs
-    WHERE board_id = ? ${successOnly ? "AND status IN ('success','partial')" : ''}
-    ORDER BY started_at DESC LIMIT 1
-  `).get(boardId) as Record<string, string | number | null> | undefined
-  return row ? {
+type SyncRunRow = Record<string, string | number | null>
+
+function toSyncRun(row: SyncRunRow): SyncRun {
+  return {
     id: row.id as string,
     boardId: row.board_id as string,
+    provider: (row.provider as IntegrationProvider | null) || 'testflight',
     startedAt: row.started_at as string,
     finishedAt: row.finished_at as string | null,
     status: row.status as SyncRun['status'],
@@ -2914,26 +3150,41 @@ export function latestSyncRun(boardId: string, successOnly = false): SyncRun | n
     skippedCount: row.skipped_count as number,
     failedCount: row.failed_count as number,
     errorMessage: row.error_message as string | null
-  } : null
+  }
 }
 
-export function createSyncRun(boardId: string): SyncRun {
+export function latestSyncRun(boardId: string, provider: IntegrationProvider = 'testflight', successOnly = false): SyncRun | null {
+  const row = getDb().prepare(`
+    SELECT * FROM sync_runs
+    WHERE board_id = ? AND provider = ? ${successOnly ? "AND status IN ('success','partial')" : ''}
+    ORDER BY started_at DESC LIMIT 1
+  `).get(boardId, provider) as SyncRunRow | undefined
+  return row ? toSyncRun(row) : null
+}
+
+export function syncRunById(id: string): SyncRun | null {
+  const row = getDb().prepare('SELECT * FROM sync_runs WHERE id = ?').get(id) as SyncRunRow | undefined
+  return row ? toSyncRun(row) : null
+}
+
+export function createSyncRun(boardId: string, provider: IntegrationProvider = 'testflight'): SyncRun {
   const id = randomUUID()
-  getDb().prepare("INSERT INTO sync_runs (id, board_id, started_at, status) VALUES (?, ?, ?, 'running')").run(id, boardId, new Date().toISOString())
-  return latestSyncRun(boardId)!
+  getDb().prepare("INSERT INTO sync_runs (id, board_id, provider, started_at, status) VALUES (?, ?, ?, ?, 'running')").run(id, boardId, provider, new Date().toISOString())
+  return syncRunById(id)!
 }
 
-export function finishSyncRun(boardId: string, id: string, status: SyncRun['status'], imported: number, skipped: number, failed: number, error: string | null) {
+export function finishSyncRun(_boardId: string, id: string, status: SyncRun['status'], imported: number, skipped: number, failed: number, error: string | null) {
   getDb().prepare('UPDATE sync_runs SET finished_at = ?, status = ?, imported_count = ?, skipped_count = ?, failed_count = ?, error_message = ? WHERE id = ?')
     .run(new Date().toISOString(), status, imported, skipped, failed, error, id)
-  return latestSyncRun(boardId)!
+  return syncRunById(id)!
 }
 
 export function hasExternalTicket(boardId: string, externalId: string) {
   return Boolean(getDb().prepare('SELECT 1 FROM tickets WHERE board_id = ? AND external_id = ?').get(boardId, externalId))
 }
 
-export interface ImportedTicketInput {
+/** A TestFlight submission on its way to becoming a ticket. */
+export interface TestFlightImportInput {
   boardId: string
   laneId: string
   externalId: string
@@ -2955,37 +3206,118 @@ export interface ImportedTicketInput {
   typeId?: string | null
 }
 
+/** A Jira issue on its way to becoming a ticket. */
+export interface JiraImportInput {
+  source: 'jira_issue'
+  boardId: string
+  laneId: string
+  /** Jira's numeric issue id, which survives a move between projects; the key is metadata. */
+  externalId: string
+  title: string
+  /** Already Markdown: the issue's text, with Jira's comments folded in below it. */
+  description: string
+  priority: TicketPriority
+  /** Null when Jira withheld the address, as it does for most accounts. */
+  reporterEmail: string | null
+  reporterName: string | null
+  autoAuthor?: boolean
+  typeId?: string | null
+  issue: Omit<JiraIssue, 'reporter' | 'reporterName'>
+  raw: unknown
+}
+
+export type ImportedTicketInput = TestFlightImportInput | JiraImportInput
+
+function isJiraImport(input: ImportedTicketInput): input is JiraImportInput {
+  return 'source' in input && input.source === 'jira_issue'
+}
+
+/** "Grace Hopper" into the two columns a contact has. Nothing for an empty name. */
+function splitName(name: string | null | undefined): { firstName: string; lastName: string } | undefined {
+  const parts = name?.trim().split(/\s+/).filter(Boolean) || []
+  return parts.length ? { firstName: parts[0]!, lastName: parts.slice(1).join(' ') } : undefined
+}
+
 export function insertImportedTicket(input: ImportedTicketInput): Ticket {
   const db = getDb()
   const id = randomUUID()
   const now = new Date().toISOString()
   const position = nextPosition(input.laneId)
-  // Apple gives us an address, so the tester always gets a row. Attributing the ticket to
-  // them is a separate question: only somebody who already has an account here can be its
-  // author, and only while the board asks for it.
-  const testerId = input.testerEmail ? upsertContactByEmail(input.testerEmail) : null
-  const authorId = input.autoAuthor !== false && personById(testerId)?.isAccount ? testerId : null
+  const jira = isJiraImport(input)
+  // The source names a person, so they get a row whenever it also gives us an address.
+  // Attributing the ticket to them is a separate question: only somebody who already has an
+  // account here can be its author, and only while the board asks for it.
+  const contactEmail = jira ? input.reporterEmail : input.testerEmail
+  const contactId = contactEmail ? upsertContactByEmail(contactEmail, jira ? splitName(input.reporterName) : undefined) : null
+  const authorId = input.autoAuthor !== false && personById(contactId)?.isAccount ? contactId : null
   // Resolved rather than trusted: a sync reads the board's settings once and may still be
   // running when somebody deletes the type. An import must never fail over a type; it
   // simply arrives untyped, exactly as the board would be configured a moment later.
   const type = input.typeId ? findTicketType(input.typeId) : null
+  const source: TicketSource = jira ? 'jira_issue' : input.type === 'crash' ? 'testflight_crash' : 'testflight_screenshot'
+  const priority: TicketPriority = jira ? input.priority : input.type === 'crash' ? 'high' : 'medium'
+  const provider: IntegrationProvider = jira ? 'jira' : 'testflight'
   db.transaction(() => {
-    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, source, external_id, created_at, updated_at, author_id, type_id)
-      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      id, input.boardId, input.laneId, input.title, position, input.type === 'crash' ? 'high' : 'medium',
-      input.type === 'crash' ? 'testflight_crash' : 'testflight_screenshot', input.externalId, now, now, authorId, type?.id ?? null
+    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, link, source, external_id, created_at, updated_at, author_id, type_id)
+      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      id, input.boardId, input.laneId, input.title, jira ? input.description : '', position, priority,
+      // The issue itself is the reference an imported ticket carries; a person may change it later.
+      jira ? input.issue.url : null,
+      source, input.externalId, now, now, authorId, type?.id ?? null
     )
-    db.prepare(`INSERT INTO apple_feedback (ticket_id, feedback_type, comment, tester_id, device_model, os_version, locale, build_id, build_version, build_bundle_id, source_created_at, raw_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      id, input.type, input.comment, testerId, input.deviceModel, input.osVersion, input.locale,
-      input.buildId, input.buildVersion, input.buildBundleId, input.sourceCreatedAt, JSON.stringify(input.raw)
-    )
-    setTicketLabels(id, input.boardId, ['TestFlight', input.type === 'crash' ? 'Crash' : 'Screenshot'])
-    // No actor: the ticket came from Apple, not from anyone signed in here.
-    recordActivity(id, null, 'created', { source: input.type })
-    if (type) recordActivity(id, null, 'type', { from: null, to: type.name })
+    if (jira) {
+      const issue = input.issue
+      db.prepare(`INSERT INTO jira_issues (ticket_id, issue_id, issue_key, project_key, issue_type, status, status_category, jira_priority, reporter_id, reporter_name, assignee_name, url, labels_json, source_created_at, source_updated_at, raw_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        id, issue.issueId, issue.issueKey, issue.projectKey, issue.issueType, issue.status, issue.statusCategory, issue.jiraPriority,
+        contactId, input.reporterName, issue.assigneeName, issue.url, JSON.stringify(issue.labels), issue.sourceCreatedAt, issue.sourceUpdatedAt, JSON.stringify(input.raw)
+      )
+      setTicketLabels(id, input.boardId, ['Jira', ...(issue.issueType ? [issue.issueType] : [])])
+      recordActivity(id, null, 'created', { source: 'issue', provider })
+    } else {
+      db.prepare(`INSERT INTO apple_feedback (ticket_id, feedback_type, comment, tester_id, device_model, os_version, locale, build_id, build_version, build_bundle_id, source_created_at, raw_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        id, input.type, input.comment, contactId, input.deviceModel, input.osVersion, input.locale,
+        input.buildId, input.buildVersion, input.buildBundleId, input.sourceCreatedAt, JSON.stringify(input.raw)
+      )
+      setTicketLabels(id, input.boardId, ['TestFlight', input.type === 'crash' ? 'Crash' : 'Screenshot'])
+      // No actor: the ticket came from Apple, not from anyone signed in here.
+      recordActivity(id, null, 'created', { source: input.type, provider })
+    }
+    if (type) recordActivity(id, null, 'type', { from: null, to: type.name, provider })
   })()
   return findTicket(id)!
+}
+
+type JiraIssueRow = {
+  ticket_id: string; issue_id: string; issue_key: string; project_key: string | null; issue_type: string | null
+  status: string | null; status_category: string | null; jira_priority: string | null; reporter_id: string | null
+  reporter_name: string | null; assignee_name: string | null; url: string; labels_json: string
+  source_created_at: string; source_updated_at: string | null; raw_json: string
+}
+
+function toJiraIssue(row: JiraIssueRow): JiraIssue {
+  let labels: string[] = []
+  try {
+    const parsed = JSON.parse(row.labels_json) as unknown
+    if (Array.isArray(parsed)) labels = parsed.filter((value): value is string => typeof value === 'string')
+  } catch { /* a malformed list is no labels, not a broken ticket */ }
+  return {
+    issueId: row.issue_id,
+    issueKey: row.issue_key,
+    projectKey: row.project_key,
+    issueType: row.issue_type,
+    status: row.status,
+    statusCategory: row.status_category,
+    jiraPriority: row.jira_priority,
+    reporter: personById(row.reporter_id),
+    reporterName: row.reporter_name,
+    assigneeName: row.assignee_name,
+    url: row.url,
+    labels,
+    sourceCreatedAt: row.source_created_at,
+    sourceUpdatedAt: row.source_updated_at
+  }
 }
 
 export function addAttachment(ticketId: string, kind: Attachment['kind'], filename: string, mimeType: string, size: number, relativePath: string) {

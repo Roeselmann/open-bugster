@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, Download, FileText, GripVertical, Image, ListTodo, MessageSquare, Paperclip, Pencil, Plus, Save, Shapes, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, Download, ExternalLink, FileText, GripVertical, Image, Link as LinkIcon, ListTodo, MessageSquare, Paperclip, Pencil, Plus, Save, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogClose,
   DialogContent,
@@ -16,7 +16,7 @@ import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; deletingAttachmentId?: string | null; initialLaneId?: string | null; initialPlacement?: 'top' | 'bottom'; laneTicketCount?: number; /** Other boards of the workspace the ticket may be moved onto. */ boards?: BoardSummary[] }>(), { canEdit: true, initialLaneId: null, initialPlacement: 'bottom', laneTicketCount: 0, boards: () => [] })
 const emit = defineEmits<{
   close: []
-  save: [payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; typeId?: string | null; laneId?: string; placement?: 'top' | 'bottom'; todos: TicketTodoInput[]; attachments: File[]; stayOpen?: boolean }]
+  save: [payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; link?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; typeId?: string | null; laneId?: string; placement?: 'top' | 'bottom'; todos: TicketTodoInput[]; attachments: File[]; stayOpen?: boolean }]
   commented: []
   notify: [type: 'success' | 'error', text: string]
   move: [ticket: Ticket, laneId: string]
@@ -27,7 +27,7 @@ const emit = defineEmits<{
   saveDescription: [ticket: Ticket, description: string]
 }>()
 
-const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '', typeId: 'none', laneId: '', placement: 'bottom' as 'top' | 'bottom' })
+const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', link: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '', typeId: 'none', laneId: '', placement: 'bottom' as 'top' | 'bottom' })
 interface EditableTodo extends TicketTodoInput { key: string }
 const todos = ref<EditableTodo[]>([])
 let todoSequence = 0
@@ -63,7 +63,11 @@ const person = computed(() => {
   const author = props.ticket?.author
   if (author) return { name: displayName(author), email: author.email || '', role: 'Author' }
   const tester = props.ticket?.feedback?.tester
-  return tester ? { name: displayName(tester), email: tester.email || '', role: 'TestFlight tester' } : null
+  if (tester) return { name: displayName(tester), email: tester.email || '', role: 'TestFlight tester' }
+  // Jira rarely shares an address, so its reporter is usually a name without a row here.
+  const jira = props.ticket?.jira
+  if (jira?.reporter) return { name: displayName(jira.reporter), email: jira.reporter.email || '', role: 'Jira reporter' }
+  return jira?.reporterName ? { name: jira.reporterName, email: '', role: 'Jira reporter' } : null
 })
 
 // reka-ui refuses an empty `SelectItem` value, so "nobody" needs a sentinel. No id can
@@ -136,6 +140,7 @@ watch(() => props.ticket, (ticket, previous) => {
   form.priority = ticket?.priority || 'medium'
   form.dueDate = ticket?.dueDate || ''
   form.buildNumber = ticket?.buildNumber || ''
+  form.link = ticket?.link || ''
   form.assigneeId = ticket?.assignee?.id || UNASSIGNED
   form.authorId = ticket?.author?.id || UNASSIGNED
   commentsOpen.value = (ticket?.commentCount || 0) > 0
@@ -160,7 +165,7 @@ function submit(options: { stayOpen?: boolean } = {}) {
   // Sent only by somebody allowed to set it — the API rejects it from anyone else.
   const authorFields = canAttribute.value ? { authorId: form.authorId === UNASSIGNED ? null : form.authorId } : {}
   const placementFields = isEdit.value ? {} : { laneId: form.laneId || undefined, placement: form.placement }
-  emit('save', { ...shared, ...manualFields, ...authorFields, ...placementFields, title: form.title.trim(), description: form.description, priority: form.priority, dueDate: form.dueDate || null, labels: [...form.labels], categoryName: form.categoryName.trim() || null, typeId: form.typeId === NO_TYPE ? null : form.typeId, stayOpen: options.stayOpen === true })
+  emit('save', { ...shared, ...manualFields, ...authorFields, ...placementFields, title: form.title.trim(), description: form.description, priority: form.priority, dueDate: form.dueDate || null, link: form.link.trim() || null, labels: [...form.labels], categoryName: form.categoryName.trim() || null, typeId: form.typeId === NO_TYPE ? null : form.typeId, stayOpen: options.stayOpen === true })
 }
 
 function focusTodo(key: string) {
@@ -653,6 +658,21 @@ function focusTitle(event: Event) {
             </label>
 
             <div class="block">
+              <label for="ticket-link" class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><LinkIcon :size="14" /> Link</label>
+              <div class="flex items-center gap-2">
+                <input id="ticket-link" v-model="form.link" type="url" maxlength="2000" inputmode="url" spellcheck="false" class="focus-ring surface-strong h-11 min-w-0 flex-1 rounded-xl px-3 text-sm outline-none" placeholder="https://… — an issue, a document, anything this ticket refers to" :readonly="!canEdit">
+                <a
+                  v-if="ticket?.link"
+                  :href="ticket.link"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="focus-ring flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-[var(--line)] px-3 text-sm font-semibold hover:bg-[var(--panel)]"
+                  :title="ticket.link"
+                ><ExternalLink :size="15" aria-hidden="true" /> Open</a>
+              </div>
+            </div>
+
+            <div class="block">
               <label for="ticket-category" class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Tag :size="14" /> Category</label>
               <UiCombobox
                 id="ticket-category"
@@ -747,6 +767,32 @@ function focusTitle(event: Event) {
                 <p class="muted mb-1 text-[11px] font-semibold uppercase tracking-wider">Original message</p>
                 <p class="whitespace-pre-wrap text-xs leading-relaxed">{{ ticket.feedback.comment }}</p>
               </div>
+            </section>
+
+            <section v-if="ticket?.jira" class="rounded-2xl bg-[var(--accent-soft)] p-4 sm:p-5">
+              <div class="mb-4 flex items-center gap-2 text-sm font-bold"><SquareKanban :size="17" /> Jira issue</div>
+              <dl class="grid grid-cols-2 gap-x-5 gap-y-4 text-xs">
+                <div>
+                  <dt class="muted mb-1">Issue</dt>
+                  <dd class="font-semibold">
+                    <a :href="ticket.jira.url" target="_blank" rel="noopener noreferrer" class="focus-ring inline-flex items-center gap-1 rounded underline decoration-dotted hover:text-[var(--accent)]">
+                      {{ ticket.jira.issueKey }} <ExternalLink :size="11" aria-hidden="true" />
+                    </a>
+                  </dd>
+                </div>
+                <div><dt class="muted mb-1">Project</dt><dd class="font-semibold">{{ ticket.jira.projectKey || '–' }}</dd></div>
+                <div><dt class="muted mb-1">Type</dt><dd class="font-semibold">{{ ticket.jira.issueType || '–' }}</dd></div>
+                <div><dt class="muted mb-1">Status in Jira</dt><dd class="font-semibold">{{ ticket.jira.status || '–' }}<span v-if="ticket.jira.statusCategory && ticket.jira.statusCategory !== ticket.jira.status" class="muted"> · {{ ticket.jira.statusCategory }}</span></dd></div>
+                <div><dt class="muted mb-1">Priority in Jira</dt><dd class="font-semibold">{{ ticket.jira.jiraPriority || '–' }}</dd></div>
+                <div><dt class="muted mb-1">Reporter</dt><dd class="truncate font-semibold" :title="ticket.jira.reporter?.email || ''">{{ ticket.jira.reporter ? displayName(ticket.jira.reporter) : ticket.jira.reporterName || '–' }}</dd></div>
+                <div><dt class="muted mb-1">Assignee in Jira</dt><dd class="truncate font-semibold">{{ ticket.jira.assigneeName || '–' }}</dd></div>
+                <div><dt class="muted mb-1">Created</dt><dd class="font-semibold">{{ date(ticket.jira.sourceCreatedAt) }}</dd></div>
+              </dl>
+              <div v-if="ticket.jira.labels.length" class="mt-4 border-t border-[color-mix(in_srgb,var(--accent)_20%,transparent)] pt-4">
+                <p class="muted mb-1 text-[11px] font-semibold uppercase tracking-wider">Labels in Jira</p>
+                <p class="text-xs leading-relaxed">{{ ticket.jira.labels.join(', ') }}</p>
+              </div>
+              <p class="muted mt-4 text-[11px] leading-relaxed">Imported once; the ticket is carried on here and Jira is not updated.</p>
             </section>
 
             <TicketActivity v-if="ticket" :ticket-id="ticket.id" :refresh-key="commentRefreshKey" />

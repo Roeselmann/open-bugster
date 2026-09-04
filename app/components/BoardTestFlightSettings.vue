@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { CircleCheck, CircleX, KeyRound, LoaderCircle, PlugZap, Save, Shapes, Trash2, Upload } from '@lucide/vue'
-import type { BoardSummary, TestFlightConnection, TicketTypeSummary } from '~~/shared/types/domain'
+import { CircleCheck, CircleX, KeyRound, LoaderCircle, PlugZap, Save, Trash2, Upload } from '@lucide/vue'
+import type { BoardSummary, TestFlightConnection } from '~~/shared/types/domain'
 
 const props = defineProps<{ board: BoardSummary }>()
 const emit = defineEmits<{ changed: []; notify: [type: 'success' | 'error', text: string] }>()
@@ -9,11 +9,6 @@ const emit = defineEmits<{ changed: []; notify: [type: 'success' | 'error', text
 const NO_TYPE = 'none'
 const form = reactive({ issuerId: '', keyId: '', appId: '', syncLimit: 100, autoAuthor: true, importTypeId: NO_TYPE })
 
-const boardId = computed(() => props.board.id)
-const { data: typeData } = await useFetch<{ types: TicketTypeSummary[] }>('/api/ticket-types', { query: { boardId }, watch: [boardId] })
-const ticketTypes = computed(() => typeData.value?.types || [])
-const typeOptions = computed(() => [{ value: NO_TYPE, label: 'No type' }, ...ticketTypes.value.map(type => ({ value: type.id, label: type.name }))])
-const selectedType = computed(() => ticketTypes.value.find(type => type.id === form.importTypeId) || null)
 const saving = ref(false)
 const uploading = ref(false)
 const removingKey = ref(false)
@@ -21,14 +16,20 @@ const testing = ref(false)
 const testResult = ref<{ ok: true; app: TestFlightConnection } | { ok: false; message: string } | null>(null)
 const keyInput = ref<HTMLInputElement | null>(null)
 
-watchEffect(() => {
-  form.issuerId = props.board.credentials.issuerId
-  form.keyId = props.board.credentials.keyId
-  form.appId = props.board.credentials.appId
-  form.syncLimit = props.board.syncLimit
-  form.autoAuthor = props.board.autoAuthor
-  form.importTypeId = props.board.importTypeId || NO_TYPE
-})
+// Reloaded from the board only when a saved value changes. Uploading the key refreshes the
+// board too, and must not throw away ids typed but not yet saved.
+watch(
+  () => [props.board.credentials.issuerId, props.board.credentials.keyId, props.board.credentials.appId, props.board.syncLimit, props.board.autoAuthor, props.board.importTypeId] as const,
+  ([issuerId, keyId, appId, syncLimit, autoAuthor, importTypeId]) => {
+    form.issuerId = issuerId
+    form.keyId = keyId
+    form.appId = appId
+    form.syncLimit = syncLimit
+    form.autoAuthor = autoAuthor
+    form.importTypeId = importTypeId || NO_TYPE
+  },
+  { immediate: true }
+)
 
 // A stale "connected" badge next to edited credentials would be misleading.
 watch(() => [form.issuerId, form.keyId, form.appId, props.board.credentials.keyUploadedAt], () => {
@@ -174,48 +175,12 @@ async function removeKey() {
         </div>
       </div>
 
-      <label class="block max-w-xs">
-        <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Submissions per sync</span>
-        <input
-          v-model.number="form.syncLimit"
-          type="number"
-          min="1"
-          max="2000"
-          step="1"
-          class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
-        >
-        <span class="muted mt-2 block text-[11px] leading-relaxed">
-          Each sync checks this many of the newest submissions per feedback type — screenshots and crashes counted separately — and imports the ones that are not on the board yet.
-        </span>
-      </label>
-
-      <label class="flex max-w-xl cursor-pointer items-start gap-3">
-        <input v-model="form.autoAuthor" type="checkbox" class="focus-ring mt-0.5 size-4 shrink-0 cursor-pointer accent-[var(--accent)]">
-        <span>
-          <span class="block text-xs font-bold uppercase tracking-[.08em]">Attribute imports to their tester</span>
-          <span class="muted mt-2 block text-[11px] leading-relaxed">
-            When the tester of an imported submission already has an account here, record them as the ticket's author. Testers without an account are noted on the ticket either way, and a board admin can set the author by hand at any time.
-          </span>
-        </span>
-      </label>
-
-      <div class="block max-w-xs">
-        <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Shapes :size="14" /> Type for imported tickets</span>
-        <div class="flex items-center gap-2">
-          <TicketTypeBadge v-if="selectedType" :type="selectedType" untitled />
-          <div class="min-w-0 flex-1">
-            <UiSelect
-              :model-value="form.importTypeId"
-              :options="typeOptions"
-              aria-label="Type for imported tickets"
-              @update:model-value="form.importTypeId = $event"
-            />
-          </div>
-        </div>
-        <span class="muted mt-2 block text-[11px] leading-relaxed">
-          Every screenshot and crash the sync brings in gets this type. Applies to future imports only; tickets already on the board keep theirs. If the type is deleted later, imports simply arrive untyped.
-        </span>
-      </div>
+      <BoardImportOptions
+        v-model:sync-limit="form.syncLimit"
+        v-model:auto-author="form.autoAuthor"
+        v-model:import-type-id="form.importTypeId"
+        :board-id="board.id"
+      />
 
       <div class="flex flex-wrap items-center gap-3">
         <p v-if="board.credentials.complete" class="flex items-center gap-1.5 text-sm font-semibold text-emerald-600">

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowDownToLine, ArrowUpToLine, CalendarClock, Check, ChevronDown, ChevronUp, Image, ListTodo, MessageSquare, Tag, TestTubeDiagonal, TriangleAlert, UserRound } from '@lucide/vue'
+import { ArrowDownToLine, ArrowUpToLine, CalendarClock, Check, ChevronDown, ChevronUp, Image, Link as LinkIcon, ListTodo, MessageSquare, SquareKanban, Tag, TestTubeDiagonal, TriangleAlert, UserRound } from '@lucide/vue'
 import type { Lane, Ticket } from '~~/shared/types/domain'
 import { CATEGORY_TONE_CLASSES } from '~~/shared/utils/constants'
 
@@ -27,7 +27,7 @@ const dateFormatter = new Intl.DateTimeFormat('en', {
 })
 
 const cardDateText = computed(() => {
-  const rawDate = props.ticket.feedback?.sourceCreatedAt || props.ticket.createdAt
+  const rawDate = props.ticket.feedback?.sourceCreatedAt || props.ticket.jira?.sourceCreatedAt || props.ticket.createdAt
 
   if (!rawDate) return null
   const date = new Date(rawDate)
@@ -38,11 +38,22 @@ const imageAttachment = computed(() => props.showScreenshot
   ? props.ticket.attachments.find(attachment => attachment.mimeType.startsWith('image/')) || null
   : null)
 const authorText = computed(() => {
-  const author = props.ticket.author || props.ticket.feedback?.tester
-  return author ? displayName(author) : null
+  const author = props.ticket.author || props.ticket.feedback?.tester || props.ticket.jira?.reporter
+  if (author) return displayName(author)
+  // Jira usually withholds the address, so the reporter is often only a name.
+  return props.ticket.jira?.reporterName || null
 })
-const authorTitle = computed(() => props.ticket.author?.email || props.ticket.feedback?.tester?.email || '')
+const authorTitle = computed(() => props.ticket.author?.email || props.ticket.feedback?.tester?.email || props.ticket.jira?.reporter?.email || '')
 const completedTodoCount = computed(() => props.ticket.todos.filter(todo => todo.completed).length)
+// The host is enough to tell where a link leads; the whole address is in the title.
+const linkHost = computed(() => {
+  if (!props.ticket.link) return null
+  try {
+    return new URL(props.ticket.link).hostname.replace(/^www\./, '')
+  } catch {
+    return props.ticket.link
+  }
+})
 const laneOptions = computed(() => props.lanes.map(lane => ({ value: lane.id, label: lane.name })))
 
 // The phone has no drag between cards, so the card offers the four reorder steps itself.
@@ -84,10 +95,11 @@ const reorderButtons = computed(() => [
         <div class="flex flex-wrap items-center gap-2">
           <PriorityPill :priority="ticket.priority" />
           <span v-if="ticket.category" class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold" :class="CATEGORY_TONE_CLASSES[ticket.category.color]"><Tag :size="11" /> {{ ticket.category.name }}</span>
-          <span v-if="ticket.source !== 'manual'" class="muted flex items-center gap-1 text-[11px] font-semibold">
+          <span v-if="ticket.source !== 'manual'" class="muted flex items-center gap-1 text-[11px] font-semibold" :title="ticket.jira?.url || ''">
             <TriangleAlert v-if="ticket.source === 'testflight_crash'" :size="13" />
+            <SquareKanban v-else-if="ticket.source === 'jira_issue'" :size="13" />
             <Image v-else :size="13" />
-            {{ ticket.source === 'testflight_crash' ? 'Crash' : 'Feedback' }}
+            {{ ticket.source === 'testflight_crash' ? 'Crash' : ticket.source === 'jira_issue' ? (ticket.jira?.issueKey || 'Jira') : 'Feedback' }}
           </span>
         </div>
 
@@ -131,6 +143,16 @@ const reorderButtons = computed(() => [
           </div>
           <div class="flex items-center gap-3" :class="authorText || cardDateText ? 'mt-2' : ''">
             <span v-if="ticket.buildNumber" class="flex min-w-0 items-center gap-1"><TestTubeDiagonal :size="13" class="shrink-0" /> <span class="truncate">Build {{ ticket.buildNumber }}</span></span>
+            <a
+              v-if="ticket.link"
+              :href="ticket.link"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="focus-ring flex min-w-0 items-center gap-1 rounded hover:text-[var(--accent)] hover:underline"
+              :title="ticket.link"
+              draggable="false"
+              @click.stop
+            ><LinkIcon :size="13" class="shrink-0" /> <span class="truncate">{{ linkHost }}</span></a>
             <span v-if="ticket.commentCount" class="flex shrink-0 items-center gap-1" :title="`${ticket.commentCount} comments`"><MessageSquare :size="13" /> {{ ticket.commentCount }}</span>
             <span class="ml-auto flex shrink-0 items-center gap-2">
               <UiAvatar v-if="ticket.assignee" :person="ticket.assignee" size="sm" :muted="ticket.assignee.status !== 'active'" />

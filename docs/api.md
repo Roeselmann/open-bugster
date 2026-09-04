@@ -78,7 +78,7 @@ Lists are paged with a cursor, errors are `application/problem+json` with a stab
 ## Surfaces
 
 - **Internal routes:** `server/api/tokens/index.get.ts`, `index.post.ts`, `[id].delete.ts`; `server/api/services/index.get.ts`, `index.post.ts`, `[id].patch.ts`; `server/api/boards/[id]/audit.get.ts`; `server/api/mcp-info.get.ts`.
-- **REST v1:** the full table in `routes.ts`, grouped as workspaces, boards, lanes, members, tickets, attachments, comments, categories and labels, and the TestFlight import. Deliberately absent: user administration, tokens, service identities, App Store Connect credentials, webhooks, and the audit log.
+- **REST v1:** the full table in `routes.ts`, grouped as workspaces, boards, lanes, members, tickets, attachments, comments, categories and labels, and the imports (`GET`/`POST /boards/{boardId}/import`, TestFlight or Jira by `provider`). Deliberately absent: user administration, tokens, service identities, App Store Connect and Jira credentials, webhooks, and the audit log.
 - **MCP:** `whoami` shows the principal, agent label, and scopes behind a token.
 - **Webhooks:** none of the operations here emit events.
 

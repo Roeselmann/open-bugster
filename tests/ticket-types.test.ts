@@ -215,7 +215,7 @@ describe('ticket types', () => {
       const typeId = db.boardSyncCredentials(board.id)!.importTypeId
       const ticket = db.insertImportedTicket(feedback(board.id, lane.id, 'fb-1', typeId))
       expect(ticket.type).toMatchObject({ id: typeIds.Email, name: 'Email' })
-      expect(db.listActivity(ticket.id).map(entry => [entry.kind, entry.payload])).toContainEqual(['type', { from: null, to: 'Email' }])
+      expect(db.listActivity(ticket.id).map(entry => [entry.kind, entry.payload])).toContainEqual(['type', { from: null, to: 'Email', provider: 'testflight' }])
       expect(db.insertImportedTicket(feedback(board.id, lane.id, 'fb-2', null)).type).toBeNull()
     })
 

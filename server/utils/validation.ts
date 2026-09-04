@@ -1,7 +1,8 @@
 import { createError } from 'h3'
 import { z } from 'zod'
-import { boardRoles, categoryColors, ticketTypeColors, ticketTypeIconNames, userRoles, userStatuses, workspaceRoles } from '../../shared/types/domain'
+import { boardRoles, categoryColors, integrationProviders, ticketTypeColors, ticketTypeIconNames, userRoles, userStatuses, workspaceRoles } from '../../shared/types/domain'
 import { TICKET_TYPE_ICON_DATA_URL_MAX } from '../../shared/utils/constants'
+import { isJiraSiteUrl, normalizeSiteUrl } from './jira-policy'
 
 /** Email is the identity key, so it is normalised the same way everywhere it is accepted. */
 const emailSchema = z.email('A valid email address is required.').trim().toLowerCase().max(160)
@@ -24,6 +25,9 @@ const ticketShape = {
   assigneeId: idSchema.nullable(),
   dueDate: z.iso.date().nullable(),
   buildNumber: z.string().trim().max(100).nullable(),
+  /** A web address or nothing; an empty string reads as nothing. */
+  link: z.string().trim().max(2000).transform(value => value || null).nullable()
+    .refine(value => value === null || /^https?:\/\/\S+$/i.test(value), 'A link has to start with http:// or https://.'),
   labels: z.array(labelSchema).max(12),
   categoryName: z.string().trim().max(30).nullable(),
   /** A type of the board's workspace; null leaves the ticket untyped. */
@@ -40,6 +44,7 @@ export const ticketCreateSchema = z.object({
   assigneeId: ticketShape.assigneeId.optional(),
   dueDate: ticketShape.dueDate.optional(),
   buildNumber: ticketShape.buildNumber.optional(),
+  link: ticketShape.link.optional(),
   labels: ticketShape.labels.default([]),
   categoryName: ticketShape.categoryName.optional(),
   typeId: ticketShape.typeId.optional(),
@@ -100,11 +105,25 @@ export const boardUpdateSchema = z.object({
   syncLimit: z.number().int().min(1, 'Sync at least one submission.').max(2000, 'At most 2000 submissions per sync.'),
   autoAuthor: z.boolean(),
   /** A type of the board's workspace; null clears it. Omitted leaves it as it is. */
-  importTypeId: idSchema.nullable()
+  importTypeId: idSchema.nullable(),
+  /** The Jira connection minus its token, which travels on its own route like the .p8 does. */
+  jira: z.object({
+    // A pasted issue link is reduced to its site first, so it does not fail for its path.
+    siteUrl: z.string().trim().max(200).transform(normalizeSiteUrl).refine(value => value === '' || isJiraSiteUrl(value), 'Enter the Jira site as https://<team>.atlassian.net.'),
+    email: z.string().trim().max(200),
+    jql: z.string().trim().max(2000, 'A JQL query is at most 2000 characters.')
+  }).partial()
 }).partial()
 
 /** The connection test checks the credentials the user has on screen, so they travel in the request. */
 export const connectionTestSchema = boardUpdateSchema.pick({ issuerId: true, keyId: true, appId: true })
+
+/** Same idea for Jira: the form's draft values, with the token always coming from the vault. */
+export const jiraConnectionTestSchema = boardUpdateSchema.shape.jira.unwrap()
+
+export const jiraTokenSchema = z.object({
+  token: z.string().trim().min(1, 'Paste the API token.').max(1024)
+})
 
 export const categoryUpdateSchema = z.object({
   name: z.string().trim().min(1, 'A category name is required.').max(30),
@@ -159,7 +178,9 @@ export const laneOrderSchema = z.object({
 })
 
 export const importRequestSchema = z.object({
-  boardId: idSchema
+  boardId: idSchema,
+  /** Which of the board's connections to pull from. Absent means TestFlight, as before there was a choice. */
+  provider: z.enum(integrationProviders).default('testflight')
 })
 
 export const loginSchema = z.object({
