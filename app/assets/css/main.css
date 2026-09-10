@@ -36,8 +36,12 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-button, input, textarea, select { font: inherit; }
-button { cursor: pointer; }
+/* In the base layer on purpose: an unlayered rule here would beat every Tailwind utility,
+   and a button's `text-sm` would silently stay at the body's 16px. */
+@layer base {
+  button, input, textarea, select { font: inherit; }
+  button { cursor: pointer; }
+}
 
 ::selection { background: var(--accent-soft); color: var(--ink); }
 

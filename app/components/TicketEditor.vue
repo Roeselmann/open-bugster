@@ -169,6 +169,10 @@ function toggleTransfer() {
   transferOpen.value = !transferOpen.value
   if (transferOpen.value && !props.boards.some(board => board.id === targetBoardId.value)) targetBoardId.value = props.boards[0]?.id || ''
 }
+// The small pills beside a field label ("Assign to me", "Move to board"): one look for both.
+const labelPill = 'focus-ring flex h-5 items-center gap-1 rounded-full border px-2 text-[11px] font-semibold leading-none transition'
+const labelPillIdle = 'muted border-[var(--line)] hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]'
+const labelPillActive = 'border-[var(--ink)] bg-[var(--ink)] text-[var(--canvas)]'
 const priorityOptions = Object.entries(PRIORITY_LABELS).map(([value, label]) => ({ value, label }))
 const categoryOptions = computed(() => (props.categories || []).map(category => category.name))
 // Same sentinel trick as `UNASSIGNED`: "no type" needs a value the select can hold.
@@ -698,12 +702,11 @@ function focusTitle(event: Event) {
                 <button
                   v-if="canEdit && boards.length"
                   type="button"
-                  class="focus-ring flex h-6 items-center gap-1 rounded-full border px-2 text-[11px] font-semibold transition"
-                  :class="transferOpen ? 'border-[var(--ink)] bg-[var(--ink)] text-[var(--canvas)]' : 'muted border-[var(--line)] hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]'"
+                  :class="[labelPill, transferOpen ? labelPillActive : labelPillIdle]"
                   :aria-expanded="transferOpen"
                   @click="toggleTransfer"
                 >
-                  <X v-if="transferOpen" :size="12" aria-hidden="true" /><ArrowRightLeft v-else :size="12" aria-hidden="true" />
+                  <X v-if="transferOpen" :size="11" aria-hidden="true" /><ArrowRightLeft v-else :size="11" aria-hidden="true" />
                   {{ transferOpen ? 'Cancel' : 'Move to board' }}
                 </button>
               </div>
@@ -775,7 +778,7 @@ function focusTitle(event: Event) {
               <div class="block">
                 <div class="mb-2 flex h-5 items-center justify-between gap-2">
                   <span class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><UserRound :size="14" /> Assignee</span>
-                  <button v-if="canAssignSelf" type="button" class="focus-ring rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-[var(--accent)] hover:bg-[var(--accent-soft)]" @click="assignToMe">Assign to me</button>
+                  <button v-if="canAssignSelf" type="button" :class="[labelPill, labelPillIdle]" @click="assignToMe"><UserRound :size="11" aria-hidden="true" /> Assign to me</button>
                 </div>
                 <UiSelect
                   :model-value="form.assigneeId"
