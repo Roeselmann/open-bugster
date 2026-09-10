@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, Download, ExternalLink, FileText, GripVertical, Image, Link as LinkIcon, ListTodo, MessageSquare, Paperclip, Pencil, Plus, Save, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, CircleAlert, Download, ExternalLink, FileText, GripVertical, Image, Link as LinkIcon, ListTodo, LoaderCircle, MessageSquare, Paperclip, Plus, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogClose,
   DialogContent,
@@ -10,13 +10,18 @@ import {
   DialogTitle,
   VisuallyHidden,
 } from 'reka-ui'
-import type { Attachment, BoardMember, Category, LabelSummary, Lane, Ticket, TicketPriority, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
+import type { Attachment, BoardMember, Category, LabelSummary, Lane, Ticket, TicketPatch, TicketPriority, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 
-const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; deletingAttachmentId?: string | null; initialLaneId?: string | null; initialPlacement?: 'top' | 'bottom'; laneTicketCount?: number; /** Other boards of the workspace the ticket may be moved onto. */ boards?: BoardSummary[] }>(), { canEdit: true, initialLaneId: null, initialPlacement: 'bottom', laneTicketCount: 0, boards: () => [] })
+const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; /** How the last field-by-field save went; shown in the footer of an existing ticket. */ saveState?: 'idle' | 'saving' | 'saved' | 'error'; deletingAttachmentId?: string | null; initialLaneId?: string | null; initialPlacement?: 'top' | 'bottom'; laneTicketCount?: number; /** Other boards of the workspace the ticket may be moved onto. */ boards?: BoardSummary[] }>(), { canEdit: true, saveState: 'idle', initialLaneId: null, initialPlacement: 'bottom', laneTicketCount: 0, boards: () => [] })
 const emit = defineEmits<{
   close: []
-  save: [payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; link?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; typeId?: string | null; laneId?: string; placement?: 'top' | 'bottom'; todos: TicketTodoInput[]; attachments: File[]; stayOpen?: boolean }]
+  /** Creates a new ticket. An existing one never comes through here: its fields save themselves via `patch`. */
+  save: [payload: TicketPatch & { laneId?: string; placement?: 'top' | 'bottom'; todos: TicketTodoInput[]; attachments: File[]; stayOpen?: boolean }]
+  /** One or more fields of an existing ticket, sent the moment they change. */
+  patch: [ticket: Ticket, changes: TicketPatch]
+  /** Files added to an existing ticket, uploaded right away. */
+  upload: [ticket: Ticket, files: File[]]
   commented: []
   notify: [type: 'success' | 'error', text: string]
   move: [ticket: Ticket, laneId: string]
@@ -25,19 +30,43 @@ const emit = defineEmits<{
   archive: [ticket: Ticket]
   removeAttachment: [attachment: Attachment]
   saveDescription: [ticket: Ticket, description: string]
+  saveTitle: [ticket: Ticket, title: string]
 }>()
 
 const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', link: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '', typeId: 'none', laneId: '', placement: 'bottom' as 'top' | 'bottom' })
 interface EditableTodo extends TicketTodoInput { key: string }
 const todos = ref<EditableTodo[]>([])
+// The category value whose save is still on its way, see `commitCategory`.
+let categoryInFlight: string | null | undefined
 let todoSequence = 0
 const isEdit = computed(() => Boolean(props.ticket))
 const isManual = computed(() => !props.ticket || props.ticket.source === 'manual')
 const titleInput = ref<HTMLTextAreaElement | null>(null)
 const descriptionInput = ref<HTMLTextAreaElement | null>(null)
 
-// A saved description opens as rendered Markdown; the textarea only shows on request, or
-// right away when there is nothing to read yet.
+// Title and description are the two fields with a Save button of their own: one writes in
+// them for a while, and the description flips to rendered Markdown, so a change should be
+// deliberate. Everything else saves the moment it changes (see `commit`). Both open as text
+// on a click and start out open on a new ticket, which has nothing to show yet.
+const editingTitle = ref(true)
+const hasSavedTitle = computed(() => Boolean(props.ticket?.title?.trim()))
+const titleChanged = computed(() => form.title.trim() !== (props.ticket?.title || ''))
+function editTitle() {
+  if (!props.canEdit) return
+  editingTitle.value = true
+  nextTick(() => titleInput.value?.focus())
+}
+function cancelTitle() {
+  form.title = props.ticket?.title || ''
+  editingTitle.value = false
+}
+function saveTitle() {
+  const title = form.title.trim()
+  if (!props.ticket || !title) return
+  if (title === props.ticket.title) return void (editingTitle.value = false)
+  emit('saveTitle', props.ticket, title)
+}
+
 const editingDescription = ref(true)
 // Whitespace counts as nothing: a description of blanks would otherwise open as an empty
 // preview with only an Edit button, and the field would look broken.
@@ -75,6 +104,19 @@ const person = computed(() => {
 const UNASSIGNED = 'unassigned'
 const memberOptions = computed(() => (props.members || []).map(member => ({ value: member.userId, label: displayName(member) })))
 const assigneeOptions = computed(() => [{ value: UNASSIGNED, label: 'Unassigned' }, ...memberOptions.value])
+// The shortcut beside the label: only for a member of this board, and only while the
+// ticket is not theirs already.
+const { user } = useAuth()
+const canAssignSelf = computed(() => {
+  const id = user.value?.id
+  return Boolean(props.canEdit && id && form.assigneeId !== id && (props.members || []).some(member => member.userId === id))
+})
+function assignToMe() {
+  const id = user.value?.id
+  if (!id || !canAssignSelf.value) return
+  form.assigneeId = id
+  commit({ assigneeId: id })
+}
 
 /**
  * Attribution is a claim about who reported something, so correcting it stays with the
@@ -112,16 +154,21 @@ const atTop = computed(() => (props.ticket?.position ?? 0) === 0)
 const atBottom = computed(() => (props.ticket?.position ?? 0) >= props.laneTicketCount - 1)
 const placementOptions = [{ value: 'top', label: 'Top of lane' }, { value: 'bottom', label: 'Bottom of lane' }]
 
-// Moving onto another board: pick the board, then one of its lanes, then say so with a
-// button — unlike the lane select, this leaves the board and must not happen by accident.
-const THIS_BOARD = 'this'
-const targetBoardId = ref(THIS_BOARD)
+// Moving onto another board hides behind a small pill beside the lane: pick the board, then
+// one of its lanes, then say so with a button — unlike the lane select, this leaves the
+// board and must not happen by accident.
+const transferOpen = ref(false)
+const targetBoardId = ref('')
 const targetLaneId = ref('')
-const boardOptions = computed(() => [{ value: THIS_BOARD, label: 'This board' }, ...props.boards.map(board => ({ value: board.id, label: board.name }))])
-const targetBoard = computed(() => props.boards.find(board => board.id === targetBoardId.value) || null)
+const boardOptions = computed(() => props.boards.map(board => ({ value: board.id, label: board.name })))
+const targetBoard = computed(() => transferOpen.value ? props.boards.find(board => board.id === targetBoardId.value) || null : null)
 const targetLaneOptions = computed(() => (targetBoard.value?.lanes || []).filter(lane => !lane.isImport).map(lane => ({ value: lane.id, label: lane.name })))
 watch(targetBoard, (board) => { targetLaneId.value = board?.lanes.find(lane => !lane.isImport)?.id || '' })
-watch(() => props.ticket?.id, () => { targetBoardId.value = THIS_BOARD })
+watch(() => props.ticket?.id, () => { transferOpen.value = false })
+function toggleTransfer() {
+  transferOpen.value = !transferOpen.value
+  if (transferOpen.value && !props.boards.some(board => board.id === targetBoardId.value)) targetBoardId.value = props.boards[0]?.id || ''
+}
 const priorityOptions = Object.entries(PRIORITY_LABELS).map(([value, label]) => ({ value, label }))
 const categoryOptions = computed(() => (props.categories || []).map(category => category.name))
 // Same sentinel trick as `UNASSIGNED`: "no type" needs a value the select can hold.
@@ -131,41 +178,121 @@ const selectedType = computed(() => (props.ticketTypes || []).find(type => type.
 // The picker works on names here: an unknown one is created when the ticket is saved.
 const labelOptions = computed(() => (props.labels || []).map(label => ({ value: label.name, label: label.name })))
 
+// Runs on every save too, since the parent hands back the server's ticket as a new object.
+// A save of one field must not throw away what is being typed in another: the two text
+// fields keep their draft while open, and the to-do rows keep their keys (and the focus)
+// unless the list itself came back different — which is also how a failed save rolls back.
 watch(() => props.ticket, (ticket, previous) => {
+  const sameTicket = Boolean(previous && ticket && previous.id === ticket.id)
   const keepFiles = pendingFiles.value.length > 0 && (!previous || previous.id === ticket?.id)
   if (!keepFiles) pendingFiles.value = []
-  form.title = ticket?.title || ''
-  form.description = ticket?.description || ''
-  editingDescription.value = !ticket?.description?.trim()
+  const savedTitle = ticket?.title || ''
+  if (!sameTicket || !editingTitle.value || form.title.trim() === savedTitle) {
+    form.title = savedTitle
+    editingTitle.value = !savedTitle.trim()
+  }
+  const savedDescription = ticket?.description || ''
+  if (!sameTicket || !editingDescription.value || form.description === savedDescription) {
+    form.description = savedDescription
+    editingDescription.value = !savedDescription.trim()
+  }
   form.priority = ticket?.priority || 'medium'
   form.dueDate = ticket?.dueDate || ''
   form.buildNumber = ticket?.buildNumber || ''
   form.link = ticket?.link || ''
   form.assigneeId = ticket?.assignee?.id || UNASSIGNED
   form.authorId = ticket?.author?.id || UNASSIGNED
-  commentsOpen.value = (ticket?.commentCount || 0) > 0
+  if (!sameTicket) commentsOpen.value = (ticket?.commentCount || 0) > 0
   form.labels = ticket?.labels.map(label => label.name) || []
   form.categoryName = ticket?.category?.name || ''
+  categoryInFlight = undefined
   form.typeId = ticket?.type?.id || NO_TYPE
   // Only a new ticket picks its lane and position here; an existing one is moved through the lane select.
   form.laneId = ticket ? ticket.laneId : (props.initialLaneId || props.lanes[0]?.id || '')
   form.placement = ticket ? 'bottom' : props.initialPlacement
-  todos.value = (ticket?.todos || []).map(todo => ({ key: `todo-${++todoSequence}`, text: todo.text, completed: todo.completed }))
+  const savedTodos = (ticket?.todos || []).map(todo => ({ text: todo.text, completed: todo.completed }))
+  if (!sameTicket || JSON.stringify(savedTodos) !== JSON.stringify(payload.todos())) {
+    todos.value = savedTodos.map(todo => ({ key: `todo-${++todoSequence}`, ...todo }))
+  }
 }, { immediate: true })
+
+// The form's sentinels and blanks, turned into what the API expects. Used both by the
+// single-field saves and by creating a ticket, so the two never disagree.
+const payload = {
+  assigneeId: () => form.assigneeId === UNASSIGNED ? null : form.assigneeId,
+  authorId: () => form.authorId === UNASSIGNED ? null : form.authorId,
+  typeId: () => form.typeId === NO_TYPE ? null : form.typeId,
+  dueDate: () => form.dueDate || null,
+  link: () => form.link.trim() || null,
+  buildNumber: () => form.buildNumber.trim() || null,
+  categoryName: () => form.categoryName.trim() || null,
+  labels: () => [...form.labels],
+  todos: () => todos.value.map(todo => ({ text: todo.text.trim(), completed: todo.completed })).filter(todo => todo.text),
+}
+
+/**
+ * Saves the given fields of an existing ticket right away. A new ticket keeps them in the
+ * form until it is created, so nothing happens there.
+ */
+function commit(changes: TicketPatch) {
+  if (props.ticket && props.canEdit) emit('patch', props.ticket, changes)
+}
+
+// Text inputs save when they are left. Leaving one untouched must not cost a request (and an
+// audit line), so the cleaned value is compared with what the ticket already has.
+function commitLink() {
+  if (payload.link() !== (props.ticket?.link || null)) commit({ link: payload.link() })
+}
+function commitBuildNumber() {
+  if (payload.buildNumber() !== (props.ticket?.buildNumber || null)) commit({ buildNumber: payload.buildNumber() })
+}
+// Picking an option and then leaving the field both ask for a save; the second may come
+// before the first has been answered, so the value in flight counts as saved already.
+function commitCategory() {
+  const next = payload.categoryName()
+  const current = categoryInFlight !== undefined ? categoryInFlight : (props.ticket?.category?.name || null)
+  if (next === current) return
+  categoryInFlight = next
+  commit({ categoryName: next })
+}
+// The category combobox reports every keystroke, so a typed name saves on Enter or once the
+// focus has left it — including its popover, which lives in a portal outside the wrapper.
+// Picking an option from the list saves at once (see `@select` in the template).
+function leaveCategory(event: FocusEvent) {
+  const wrapper = event.currentTarget as HTMLElement
+  setTimeout(() => {
+    const active = document.activeElement
+    if (active && (wrapper.contains(active) || active.closest('[data-reka-combobox-content], [role="listbox"]'))) return
+    commitCategory()
+  }, 0)
+}
+function commitTodos() {
+  const next = payload.todos()
+  const saved = (props.ticket?.todos || []).map(todo => ({ text: todo.text, completed: todo.completed }))
+  if (JSON.stringify(next) !== JSON.stringify(saved)) commit({ todos: next })
+}
+
+// Escape (or anything else that unmounts the drawer) takes the focus away without a blur,
+// so a value typed into one of these fields would otherwise be lost. Each commit compares
+// with the ticket first, so an untouched field costs nothing here.
+function flushPendingCommits() {
+  if (!props.ticket || !props.canEdit) return
+  commitLink()
+  commitBuildNumber()
+  commitCategory()
+  commitTodos()
+}
+onBeforeUnmount(flushPendingCommits)
 
 // `stayOpen` is the small Save beside a new ticket's description: the ticket is created like
 // with the big one, but the editor stays and shows it, so writing can go on.
 function submit(options: { stayOpen?: boolean } = {}) {
-  if (!form.title.trim()) return
-  const cleanTodos = todos.value
-    .map(todo => ({ text: todo.text.trim(), completed: todo.completed }))
-    .filter(todo => todo.text)
-  const shared = { todos: cleanTodos, attachments: [...pendingFiles.value], assigneeId: form.assigneeId === UNASSIGNED ? null : form.assigneeId }
-  const manualFields = isManual.value ? { buildNumber: form.buildNumber.trim() || null } : {}
+  if (isEdit.value || !form.title.trim()) return
+  const shared = { todos: payload.todos(), attachments: [...pendingFiles.value], assigneeId: payload.assigneeId() }
+  const manualFields = isManual.value ? { buildNumber: payload.buildNumber() } : {}
   // Sent only by somebody allowed to set it — the API rejects it from anyone else.
-  const authorFields = canAttribute.value ? { authorId: form.authorId === UNASSIGNED ? null : form.authorId } : {}
-  const placementFields = isEdit.value ? {} : { laneId: form.laneId || undefined, placement: form.placement }
-  emit('save', { ...shared, ...manualFields, ...authorFields, ...placementFields, title: form.title.trim(), description: form.description, priority: form.priority, dueDate: form.dueDate || null, link: form.link.trim() || null, labels: [...form.labels], categoryName: form.categoryName.trim() || null, typeId: form.typeId === NO_TYPE ? null : form.typeId, stayOpen: options.stayOpen === true })
+  const authorFields = canAttribute.value ? { authorId: payload.authorId() } : {}
+  emit('save', { ...shared, ...manualFields, ...authorFields, laneId: form.laneId || undefined, placement: form.placement, title: form.title.trim(), description: form.description, priority: form.priority, dueDate: payload.dueDate(), link: payload.link(), labels: payload.labels(), categoryName: payload.categoryName(), typeId: payload.typeId(), stayOpen: options.stayOpen === true })
 }
 
 function focusTodo(key: string) {
@@ -183,6 +310,7 @@ function removeTodo(index: number) {
   const fallback = todos.value[index + 1]?.key || todos.value[index - 1]?.key
   todos.value.splice(index, 1)
   if (fallback) focusTodo(fallback)
+  commitTodos()
 }
 
 function moveTodo(index: number, delta: number) {
@@ -192,6 +320,7 @@ function moveTodo(index: number, delta: number) {
   if (!todo) return
   todos.value.splice(target, 0, todo)
   nextTick(() => document.querySelector<HTMLButtonElement>(`[data-todo-handle="${todo.key}"]`)?.focus())
+  commitTodos()
 }
 
 const draggingTodoKey = ref<string | null>(null)
@@ -327,6 +456,7 @@ function finishTodoDrag(event?: PointerEvent) {
     if (todo) todos.value.splice(Math.max(0, Math.min(targetIndex, todos.value.length)), 0, todo)
   }
   cleanupTodoDrag()
+  commitTodos()
 }
 
 function cancelTodoDrag(event?: PointerEvent) {
@@ -366,7 +496,9 @@ function addFiles(files: FileList | File[]) {
   if (merged.length > 10) return void (fileError.value = 'A maximum of 10 files is allowed per upload.')
   if (merged.some(file => file.size > 25 * 1024 * 1024)) return void (fileError.value = 'One file is larger than 25 MB.')
   if (merged.reduce((sum, file) => sum + file.size, 0) > 100 * 1024 * 1024) return void (fileError.value = 'The total upload is larger than 100 MB.')
-  pendingFiles.value = merged
+  // An existing ticket takes the files right away; a new one holds them until it is created.
+  if (props.ticket) emit('upload', props.ticket, additions)
+  else pendingFiles.value = merged
 }
 
 function chooseFiles(event: Event) {
@@ -410,7 +542,7 @@ function focusTitle(event: Event) {
         @open-auto-focus="focusTitle"
       >
         <VisuallyHidden>
-          <DialogDescription>{{ isEdit ? 'Edit and save the ticket.' : 'Create a new ticket.' }}</DialogDescription>
+          <DialogDescription>{{ isEdit ? 'Edit the ticket. Changes are saved as you make them.' : 'Create a new ticket.' }}</DialogDescription>
         </VisuallyHidden>
         <form class="flex min-h-full flex-col" @submit.prevent="submit()">
           <header class="sticky top-0 z-10 grid grid-cols-[1fr_auto_1fr] items-center gap-3 border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_92%,transparent)] px-5 py-4 backdrop-blur-xl sm:px-7">
@@ -433,30 +565,57 @@ function focusTitle(event: Event) {
 
           <div class="flex-1" :class="commentsOpen ? 'lg:grid lg:grid-cols-2 lg:items-start' : ''">
           <div class="space-y-6 px-5 py-6 sm:px-7">
-            <label class="block">
-              <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Title</span>
-              <textarea ref="titleInput" v-model="form.title" :maxlength="isManual ? 160 : 10000" required rows="2" class="focus-ring surface-strong min-h-20 w-full resize-none overflow-hidden rounded-xl px-3.5 py-3 text-[15px] leading-snug outline-none [field-sizing:content]" placeholder="What needs to be done?" />
-            </label>
+            <div class="block">
+              <div class="mb-2 flex items-center justify-between gap-3">
+                <label for="ticket-title" class="block text-xs font-bold uppercase tracking-[.08em]">Title</label>
+                <div v-if="canEdit && isEdit && (editingTitle || titleChanged)" class="flex items-center gap-2">
+                  <button v-if="hasSavedTitle" type="button" class="focus-ring flex h-7 items-center gap-1.5 rounded-lg border border-[var(--line)] px-2.5 text-xs font-semibold" @click="cancelTitle">
+                    <X :size="14" /> Cancel
+                  </button>
+                  <button type="button" :disabled="saving || saveState === 'saving' || !form.title.trim()" class="focus-ring flex h-7 items-center gap-1.5 rounded-lg bg-[var(--ink)] px-2.5 text-xs font-semibold text-[var(--canvas)] disabled:opacity-50" @click="saveTitle">
+                    <Check :size="14" /> Save
+                  </button>
+                </div>
+              </div>
+              <textarea
+                v-if="editingTitle || !isEdit"
+                id="ticket-title"
+                ref="titleInput"
+                v-model="form.title"
+                :maxlength="isManual ? 160 : 10000"
+                required
+                rows="2"
+                class="focus-ring surface-strong min-h-20 w-full resize-none overflow-hidden rounded-xl px-3.5 py-3 text-[15px] leading-snug outline-none [field-sizing:content]"
+                placeholder="What needs to be done?"
+                @keydown.enter.prevent="isEdit ? saveTitle() : undefined"
+                @keydown.esc.stop="isEdit && hasSavedTitle ? cancelTitle() : undefined"
+              />
+              <div
+                v-else
+                class="surface-strong min-h-20 w-full whitespace-pre-wrap rounded-xl px-3.5 py-3 text-[15px] font-semibold leading-snug"
+                :class="canEdit ? 'focus-ring cursor-text' : ''"
+                :role="canEdit ? 'button' : undefined"
+                :tabindex="canEdit ? 0 : undefined"
+                :title="canEdit ? 'Click to edit' : undefined"
+                @click="editTitle"
+                @keydown.enter.prevent="editTitle"
+              >{{ form.title }}</div>
+            </div>
 
             <div class="block">
               <div class="mb-2 flex items-center justify-between gap-3">
                 <label for="ticket-description" class="block text-xs font-bold uppercase tracking-[.08em]">Description</label>
-                <div v-if="canEdit && isEdit" class="flex items-center gap-2">
-                  <template v-if="editingDescription || form.description !== (ticket?.description || '')">
-                    <button v-if="hasSavedDescription" type="button" class="focus-ring flex h-7 items-center gap-1.5 rounded-lg border border-[var(--line)] px-2.5 text-xs font-semibold" @click="cancelDescription">
-                      <X :size="14" /> Cancel
-                    </button>
-                    <button type="button" :disabled="saving" class="focus-ring flex h-7 items-center gap-1.5 rounded-lg bg-[var(--ink)] px-2.5 text-xs font-semibold text-[var(--canvas)] disabled:opacity-50" @click="saveDescription">
-                      <Check :size="14" /> Save
-                    </button>
-                  </template>
-                  <button v-else type="button" class="focus-ring flex h-7 items-center gap-1.5 rounded-lg border border-[var(--line)] px-2.5 text-xs font-semibold" @click="editDescription">
-                    <Pencil :size="14" /> Edit
+                <div v-if="canEdit && isEdit && (editingDescription || form.description !== (ticket?.description || ''))" class="flex items-center gap-2">
+                  <button v-if="hasSavedDescription" type="button" class="focus-ring flex h-7 items-center gap-1.5 rounded-lg border border-[var(--line)] px-2.5 text-xs font-semibold" @click="cancelDescription">
+                    <X :size="14" /> Cancel
+                  </button>
+                  <button type="button" :disabled="saving || saveState === 'saving'" class="focus-ring flex h-7 items-center gap-1.5 rounded-lg bg-[var(--ink)] px-2.5 text-xs font-semibold text-[var(--canvas)] disabled:opacity-50" @click="saveDescription">
+                    <Check :size="14" /> Save
                   </button>
                 </div>
-                <!-- A new ticket: this creates it and keeps the editor open on it, unlike the Save below. -->
+                <!-- A new ticket: this creates it and keeps the editor open on it, unlike the Create button below. -->
                 <button
-                  v-else-if="canEdit && form.description.trim()"
+                  v-else-if="canEdit && !isEdit && form.description.trim()"
                   type="button"
                   :disabled="saving || !form.title.trim()"
                   :title="form.title.trim() ? 'Create the ticket and keep editing' : 'A title is needed first'"
@@ -503,7 +662,7 @@ function focusTitle(event: Event) {
                         @keydown.alt.up.prevent="moveTodo(todoIndexOf(item.key), -1)"
                         @keydown.alt.down.prevent="moveTodo(todoIndexOf(item.key), 1)"
                       ><GripVertical :size="17" /></button>
-                      <input v-model="item.completed" type="checkbox" class="focus-ring size-4 shrink-0 cursor-pointer accent-[var(--accent)]" :aria-label="`Mark to-do “${item.text || todoIndexOf(item.key) + 1}” as completed`">
+                      <input v-model="item.completed" type="checkbox" class="focus-ring size-4 shrink-0 cursor-pointer accent-[var(--accent)]" :aria-label="`Mark to-do “${item.text || todoIndexOf(item.key) + 1}” as completed`" @change="commitTodos()">
                       <input
                         v-model="item.text"
                         :data-todo-input="item.key"
@@ -512,6 +671,7 @@ function focusTitle(event: Event) {
                         :class="item.completed ? 'muted line-through' : ''"
                         placeholder="What needs to be done?"
                         @keydown.enter.prevent="addTodo(todoIndexOf(item.key) + 1)"
+                        @blur="commitTodos()"
                       >
                       <button type="button" class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10" :aria-label="`Delete to-do ${todoIndexOf(item.key) + 1}`" @click="removeTodo(todoIndexOf(item.key))"><Trash2 :size="15" /></button>
                     </div>
@@ -533,25 +693,21 @@ function focusTitle(event: Event) {
 
 
             <div v-if="ticket" class="block border-t border-[var(--line)] pt-6">
-              <template v-if="canEdit && boards.length">
-                <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Board</span>
-                <div class="mb-4"><UiSelect :model-value="targetBoardId" :options="boardOptions" aria-label="Board" @update:model-value="targetBoardId = $event" /></div>
-              </template>
-              <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Lane</span>
-              <div v-if="targetBoard" class="flex items-center gap-2">
-                <div class="min-w-0 flex-1">
-                  <UiSelect :model-value="targetLaneId" :options="targetLaneOptions" aria-label="Lane on the destination board" @update:model-value="targetLaneId = $event" />
-                </div>
+              <div class="mb-2 flex h-5 items-center justify-between gap-2">
+                <span class="text-xs font-bold uppercase tracking-[.08em]">Lane</span>
                 <button
+                  v-if="canEdit && boards.length"
                   type="button"
-                  class="focus-ring flex h-10 shrink-0 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"
-                  :disabled="!targetLaneId || saving"
-                  @click="emit('transfer', ticket, targetBoard.id, targetLaneId)"
+                  class="focus-ring flex h-6 items-center gap-1 rounded-full border px-2 text-[11px] font-semibold transition"
+                  :class="transferOpen ? 'border-[var(--ink)] bg-[var(--ink)] text-[var(--canvas)]' : 'muted border-[var(--line)] hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]'"
+                  :aria-expanded="transferOpen"
+                  @click="toggleTransfer"
                 >
-                  <ArrowRightLeft :size="16" aria-hidden="true" /> Move to {{ targetBoard.name }}
+                  <X v-if="transferOpen" :size="12" aria-hidden="true" /><ArrowRightLeft v-else :size="12" aria-hidden="true" />
+                  {{ transferOpen ? 'Cancel' : 'Move to board' }}
                 </button>
               </div>
-              <div v-else class="flex items-center gap-2">
+              <div class="flex items-center gap-2">
                 <div class="min-w-0 flex-1">
                   <UiSelect
                     :model-value="ticket.laneId"
@@ -584,8 +740,24 @@ function focusTitle(event: Event) {
                   <ArrowDownToLine :size="16" aria-hidden="true" />
                 </button>
               </div>
-              <span v-if="targetBoard" class="muted mt-1.5 block text-[11px]">The ticket leaves this board. Labels and category come along; an assignee who is no member over there is dropped.</span>
-              <span v-else-if="canEdit" class="muted mt-1.5 block text-[11px]">Lane and position are saved as soon as you change them.</span>
+              <!-- The transfer, folded out by the pill: destination board and lane, then one deliberate button. -->
+              <div v-if="targetBoard" class="surface-strong mt-3 rounded-xl p-3">
+                <div class="grid gap-2 sm:grid-cols-2">
+                  <UiSelect :model-value="targetBoardId" :options="boardOptions" aria-label="Destination board" compact @update:model-value="targetBoardId = $event" />
+                  <UiSelect :model-value="targetLaneId" :options="targetLaneOptions" aria-label="Lane on the destination board" compact @update:model-value="targetLaneId = $event" />
+                </div>
+                <div class="mt-2 flex items-center justify-between gap-3">
+                  <span class="muted text-[11px]">The ticket leaves this board. Labels and category come along; an assignee who is no member over there is dropped.</span>
+                  <button
+                    type="button"
+                    class="focus-ring flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-[var(--ink)] px-3 text-xs font-semibold text-[var(--canvas)] disabled:opacity-50"
+                    :disabled="!targetLaneId || saving"
+                    @click="emit('transfer', ticket, targetBoard.id, targetLaneId)"
+                  >
+                    <ArrowRightLeft :size="14" aria-hidden="true" /> Move to {{ targetBoard.name }}
+                  </button>
+                </div>
+              </div>
             </div>
             <div v-else class="grid gap-4 border-t border-[var(--line)] pt-6 sm:grid-cols-2">
               <div class="block">
@@ -599,14 +771,35 @@ function focusTitle(event: Event) {
               </div>
             </div>
 
-            <div class="block">
-              <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><UserRound :size="14" /> Assignee</span>
-              <UiSelect
-                :model-value="form.assigneeId"
-                :options="assigneeOptions"
-                aria-label="Assignee"
-                @update:model-value="form.assigneeId = $event"
-              />
+            <div class="grid gap-4 sm:grid-cols-2">
+              <div class="block">
+                <div class="mb-2 flex h-5 items-center justify-between gap-2">
+                  <span class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><UserRound :size="14" /> Assignee</span>
+                  <button v-if="canAssignSelf" type="button" class="focus-ring rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-[var(--accent)] hover:bg-[var(--accent-soft)]" @click="assignToMe">Assign to me</button>
+                </div>
+                <UiSelect
+                  :model-value="form.assigneeId"
+                  :options="assigneeOptions"
+                  aria-label="Assignee"
+                  :disabled="!canEdit"
+                  @update:model-value="form.assigneeId = $event; commit({ assigneeId: payload.assigneeId() })"
+                />
+              </div>
+              <div class="block">
+                <span class="mb-2 flex h-5 items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Shapes :size="14" /> Type</span>
+                <div class="flex items-center gap-2">
+                  <TicketTypeBadge v-if="selectedType" :type="selectedType" untitled />
+                  <div class="min-w-0 flex-1">
+                    <UiSelect
+                      :model-value="form.typeId"
+                      :options="typeOptions"
+                      aria-label="Type"
+                      :disabled="!canEdit"
+                      @update:model-value="form.typeId = $event; commit({ typeId: payload.typeId() })"
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div v-if="canAttribute" class="block">
@@ -615,25 +808,9 @@ function focusTitle(event: Event) {
                 :model-value="form.authorId"
                 :options="authorOptions"
                 aria-label="Author"
-                @update:model-value="form.authorId = $event"
+                @update:model-value="form.authorId = $event; commit({ authorId: payload.authorId() })"
               />
               <p class="muted mt-2 text-xs">Who really reported this. Imports name their tester automatically when that person already has an account.</p>
-            </div>
-
-            <div class="block">
-              <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Shapes :size="14" /> Type</span>
-              <div class="flex items-center gap-2">
-                <TicketTypeBadge v-if="selectedType" :type="selectedType" untitled />
-                <div class="min-w-0 flex-1">
-                  <UiSelect
-                    :model-value="form.typeId"
-                    :options="typeOptions"
-                    aria-label="Type"
-                    @update:model-value="form.typeId = $event"
-                  />
-                </div>
-              </div>
-              <span class="muted mt-1.5 block text-[11px]">Optional · Types are set up in the workspace settings.</span>
             </div>
 
             <div class="grid gap-4 sm:grid-cols-2">
@@ -643,24 +820,25 @@ function focusTitle(event: Event) {
                   :model-value="form.priority"
                   :options="priorityOptions"
                   aria-label="Priority"
-                  @update:model-value="form.priority = $event as TicketPriority"
+                  :disabled="!canEdit"
+                  @update:model-value="form.priority = $event as TicketPriority; commit({ priority: form.priority })"
                 />
               </div>
               <label class="block">
                 <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Calendar :size="14" /> Due date</span>
-                <input v-model="form.dueDate" type="date" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none">
+                <input v-model="form.dueDate" type="date" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none" :readonly="!canEdit" @change="commit({ dueDate: payload.dueDate() })">
               </label>
             </div>
 
             <label v-if="isManual" class="block">
               <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><TestTubeDiagonal :size="14" /> Build number</span>
-              <input v-model="form.buildNumber" maxlength="100" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none" placeholder="e.g. 42 or 1.4.0 (42)">
+              <input v-model="form.buildNumber" maxlength="100" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none" placeholder="e.g. 42 or 1.4.0 (42)" :readonly="!canEdit" @blur="commitBuildNumber" @keydown.enter.prevent="commitBuildNumber">
             </label>
 
             <div class="block">
               <label for="ticket-link" class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><LinkIcon :size="14" /> Link</label>
               <div class="flex items-center gap-2">
-                <input id="ticket-link" v-model="form.link" type="url" maxlength="2000" inputmode="url" spellcheck="false" class="focus-ring surface-strong h-11 min-w-0 flex-1 rounded-xl px-3 text-sm outline-none" placeholder="https://… — an issue, a document, anything this ticket refers to" :readonly="!canEdit">
+                <input id="ticket-link" v-model="form.link" type="url" maxlength="2000" inputmode="url" spellcheck="false" class="focus-ring surface-strong h-11 min-w-0 flex-1 rounded-xl px-3 text-sm outline-none" placeholder="https://… — an issue, a document, anything this ticket refers to" :readonly="!canEdit" @blur="commitLink" @keydown.enter.prevent="commitLink">
                 <a
                   v-if="ticket?.link"
                   :href="ticket.link"
@@ -674,29 +852,33 @@ function focusTitle(event: Event) {
 
             <div class="block">
               <label for="ticket-category" class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Tag :size="14" /> Category</label>
-              <UiCombobox
-                id="ticket-category"
-                :model-value="form.categoryName"
-                :options="categoryOptions"
-                aria-label="Category"
-                placeholder="Select or enter a new category"
-                @update:model-value="form.categoryName = $event"
-              />
-              <span class="muted mt-1.5 block text-[11px]">Optional · New names are created when you save.</span>
+              <div @focusout="leaveCategory" @keydown.enter.prevent="nextTick(commitCategory)">
+                <UiCombobox
+                  id="ticket-category"
+                  :model-value="form.categoryName"
+                  :options="categoryOptions"
+                  aria-label="Category"
+                  placeholder="Select or enter a new category"
+                  @update:model-value="form.categoryName = $event"
+                  @select="form.categoryName = $event; commitCategory()"
+                />
+              </div>
+              <span class="muted mt-1.5 block text-[11px]">Optional · {{ isEdit ? 'A new name is created as soon as you leave the field.' : 'New names are created when the ticket is created.' }}</span>
             </div>
 
             <div class="block">
               <label for="ticket-labels" class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Tags :size="14" /> Labels</label>
               <UiMultiCombobox
                 id="ticket-labels"
-                v-model="form.labels"
+                :model-value="form.labels"
                 :options="labelOptions"
+                @update:model-value="form.labels = $event; commit({ labels: payload.labels() })"
                 allow-create
                 aria-label="Labels"
                 placeholder="Select or type a new label"
                 empty-text="No labels on this board yet."
               />
-              <span class="muted mt-1.5 block text-[11px]">New names are created when you save · a label no ticket uses any more is removed.</span>
+              <span class="muted mt-1.5 block text-[11px]">{{ isEdit ? 'New names are created right away' : 'New names are created when the ticket is created' }} · a label no ticket uses any more is removed.</span>
             </div>
 
             <section v-if="ticket?.attachments.length" class="space-y-3">
@@ -815,10 +997,16 @@ function focusTitle(event: Event) {
           <footer class="sticky bottom-0 flex items-center gap-3 border-t border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_92%,transparent)] px-5 py-4 backdrop-blur-xl sm:px-7">
             <button v-if="ticket && canEdit" type="button" class="focus-ring flex h-10 items-center gap-2 rounded-xl px-3 text-sm font-semibold text-rose-600 hover:bg-rose-500/10" @click="emit('archive', ticket)"><Archive :size="16" /> Archive</button>
             <p v-if="!canEdit" class="muted text-sm">You can read and comment on this board.</p>
+            <!-- An existing ticket has no Save: every field saved itself, and this says how that went. -->
+            <span v-if="isEdit && canEdit" class="ml-auto flex items-center gap-1.5 text-xs font-semibold" :class="saveState === 'error' ? 'text-rose-600' : 'muted'" role="status" aria-live="polite">
+              <template v-if="saveState === 'saving'"><LoaderCircle :size="14" class="animate-spin" aria-hidden="true" /> Saving…</template>
+              <template v-else-if="saveState === 'saved'"><Check :size="14" aria-hidden="true" /> Saved</template>
+              <template v-else-if="saveState === 'error'"><CircleAlert :size="14" aria-hidden="true" /> Could not save</template>
+            </span>
             <DialogClose as-child>
-              <button type="button" class="focus-ring ml-auto h-10 rounded-xl px-4 text-sm font-semibold hover:bg-[var(--panel-strong)]">{{ canEdit ? 'Cancel' : 'Close' }}</button>
+              <button type="button" class="focus-ring h-10 rounded-xl px-4 text-sm font-semibold hover:bg-[var(--panel-strong)]" :class="isEdit && canEdit ? '' : 'ml-auto'">{{ canEdit && !isEdit ? 'Cancel' : 'Close' }}</button>
             </DialogClose>
-            <button v-if="canEdit" type="submit" :disabled="saving || !form.title.trim()" class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"><Save :size="16" /> {{ saving ? 'Saving…' : 'Save' }}</button>
+            <button v-if="canEdit && !isEdit" type="submit" :disabled="saving || !form.title.trim()" class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"><Plus :size="16" /> {{ saving ? 'Creating…' : 'Create' }}</button>
           </footer>
         </form>
       </DialogContent>

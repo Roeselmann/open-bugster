@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Check, RefreshCcw, Search, Settings2, X } from '@lucide/vue'
-import type { Attachment, CategorySummary, IntegrationProvider, LabelSummary, SyncRun, Ticket, TicketPriority, TicketTodoInput, TicketTypeSummary } from '~~/shared/types/domain'
+import type { Attachment, CategorySummary, IntegrationProvider, LabelSummary, SyncRun, Ticket, TicketPatch, TicketTodoInput, TicketTypeSummary } from '~~/shared/types/domain'
 import { PROVIDER_LABELS } from '~~/shared/utils/ticket-source'
 import { TICKET_TYPES_KEY } from '~/utils/ticketTypes'
 
@@ -86,6 +86,14 @@ const selected = ref<Ticket | null>(null)
 const editorOpen = ref(false)
 const deletingAttachmentId = ref<string | null>(null)
 const saving = ref(false)
+/** The editor's footer word for its field-by-field saves: nothing, in flight, done, or failed. */
+const saveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
+let saveStateTimer: ReturnType<typeof setTimeout> | null = null
+function showSaveState(state: 'saving' | 'saved' | 'error') {
+  if (saveStateTimer) clearTimeout(saveStateTimer)
+  saveState.value = state
+  if (state !== 'saving') saveStateTimer = setTimeout(() => { if (saveState.value === state) saveState.value = 'idle' }, state === 'saved' ? 2000 : 5000)
+}
 /** Which connection is syncing right now; one at a time keeps the counts readable. */
 const syncing = ref<IntegrationProvider | null>(null)
 const confirmation = ref<PendingConfirmation | null>(null)
@@ -283,41 +291,26 @@ function openTicket(ticket: Ticket) {
   editorOpen.value = true
 }
 
-async function saveTicket(payload: { title?: string; description?: string; priority?: TicketPriority; dueDate?: string | null; buildNumber?: string | null; link?: string | null; assigneeId?: string | null; authorId?: string | null; labels?: string[]; categoryName?: string | null; typeId?: string | null; laneId?: string; placement?: 'top' | 'bottom'; todos: TicketTodoInput[]; attachments: File[]; stayOpen?: boolean }) {
+// Only new tickets come through here: an existing one saves each field on its own (see `patchTicketFromEditor`).
+async function saveTicket(payload: TicketPatch & { laneId?: string; placement?: 'top' | 'bottom'; todos: TicketTodoInput[]; attachments: File[]; stayOpen?: boolean }) {
   saving.value = true
-  const wasEdit = Boolean(selected.value)
   try {
     const { attachments, laneId, placement, stayOpen, ...ticketPayload } = payload
-    const response = selected.value
-      ? await $fetch<{ ticket: Ticket }>(`/api/tickets/${selected.value.id}`, { method: 'PATCH', body: ticketPayload })
-      : await $fetch<{ ticket: Ticket }>('/api/tickets', { method: 'POST', body: { ...ticketPayload, boardId: boardId.value, laneId: laneId || newTicketLaneId.value || undefined, placement: placement || newTicketPlacement.value } })
+    const response = await $fetch<{ ticket: Ticket }>('/api/tickets', { method: 'POST', body: { ...ticketPayload, boardId: boardId.value, laneId: laneId || newTicketLaneId.value || undefined, placement: placement || newTicketPlacement.value } })
     selected.value = response.ticket
-    const index = tickets.value.findIndex(ticket => ticket.id === response.ticket.id)
-    if (index >= 0) {
-      tickets.value[index] = response.ticket
-    } else {
-      tickets.value.push(response.ticket)
-      // A ticket placed at the top made the server renumber its lane; mirror that here, as moveTicket does.
-      if (response.ticket.position === 0) {
-        tickets.value
-          .filter(item => item.laneId === response.ticket.laneId && item.id !== response.ticket.id)
-          .sort((a, b) => a.position - b.position)
-          .forEach((item, itemIndex) => { item.position = itemIndex + 1 })
-      }
+    tickets.value.push(response.ticket)
+    // A ticket placed at the top made the server renumber its lane; mirror that here, as moveTicket does.
+    if (response.ticket.position === 0) {
+      tickets.value
+        .filter(item => item.laneId === response.ticket.laneId && item.id !== response.ticket.id)
+        .sort((a, b) => a.position - b.position)
+        .forEach((item, itemIndex) => { item.position = itemIndex + 1 })
     }
-
-    if (attachments.length) {
-      const formData = new FormData()
-      attachments.forEach(file => formData.append('files', file))
-      const upload = await $fetch<{ ticket: Ticket }>(`/api/tickets/${response.ticket.id}/attachments`, { method: 'POST', body: formData })
-      selected.value = upload.ticket
-      const uploadedIndex = tickets.value.findIndex(ticket => ticket.id === upload.ticket.id)
-      if (uploadedIndex >= 0) tickets.value[uploadedIndex] = upload.ticket
-    }
+    if (attachments.length) await uploadAttachments(response.ticket, attachments)
     await Promise.all([refreshCategories(), refreshLabels(), refreshBoards()])
     // The small Save beside the description keeps the editor on the ticket it just created.
     if (!stayOpen) editorOpen.value = false
-    notify('success', wasEdit ? 'Ticket updated.' : 'Ticket created.')
+    notify('success', 'Ticket created.')
   } catch (error) {
     notify('error', errorText(error))
   } finally {
@@ -426,19 +419,64 @@ async function transferTicketFromEditor(ticket: Ticket, targetBoardId: string, l
   }
 }
 
-// The Save beside the description field: only that field, and the dialog stays open showing the rendered result.
-async function saveDescriptionFromEditor(ticket: Ticket, description: string) {
-  saving.value = true
+/** Puts the server's version of a ticket into the board and, when it is open, the editor. */
+function replaceTicket(ticket: Ticket) {
+  if (selected.value?.id === ticket.id) selected.value = ticket
+  const index = tickets.value.findIndex(item => item.id === ticket.id)
+  if (index >= 0) tickets.value[index] = ticket
+}
+
+async function uploadAttachments(ticket: Ticket, files: File[]) {
+  const formData = new FormData()
+  files.forEach(file => formData.append('files', file))
+  const upload = await $fetch<{ ticket: Ticket }>(`/api/tickets/${ticket.id}/attachments`, { method: 'POST', body: formData })
+  replaceTicket(upload.ticket)
+}
+
+/**
+ * Every field in the editor saves itself the moment it changes, one small PATCH each. They
+ * run one after another: two quick changes would otherwise race, and the later reply could
+ * carry the older value back into the board. On failure the ticket is handed back to the
+ * editor untouched but as a fresh object, so its form falls back to what the server has.
+ */
+let patchQueue: Promise<unknown> = Promise.resolve()
+function patchTicketFromEditor(ticket: Ticket, changes: TicketPatch, successMessage?: string) {
+  const run = async () => {
+    showSaveState('saving')
+    try {
+      const response = await $fetch<{ ticket: Ticket }>(`/api/tickets/${ticket.id}`, { method: 'PATCH', body: changes })
+      replaceTicket(response.ticket)
+      if (changes.categoryName !== undefined) await refreshCategories()
+      if (changes.labels !== undefined) await refreshLabels()
+      showSaveState('saved')
+      if (successMessage) notify('success', successMessage)
+    } catch (error) {
+      showSaveState('error')
+      notify('error', errorText(error))
+      if (selected.value?.id === ticket.id) selected.value = { ...(tickets.value.find(item => item.id === ticket.id) || ticket) }
+    }
+  }
+  patchQueue = patchQueue.then(run, run)
+  return patchQueue
+}
+
+// Title and description have their own Save button, so they also say when it worked.
+function saveTitleFromEditor(ticket: Ticket, title: string) {
+  return patchTicketFromEditor(ticket, { title }, 'Title saved.')
+}
+function saveDescriptionFromEditor(ticket: Ticket, description: string) {
+  return patchTicketFromEditor(ticket, { description }, 'Description saved.')
+}
+
+// Files dropped on an existing ticket go up right away, like every other field.
+async function uploadAttachmentsFromEditor(ticket: Ticket, files: File[]) {
+  showSaveState('saving')
   try {
-    const response = await $fetch<{ ticket: Ticket }>(`/api/tickets/${ticket.id}`, { method: 'PATCH', body: { description } })
-    if (selected.value?.id === response.ticket.id) selected.value = response.ticket
-    const index = tickets.value.findIndex(item => item.id === response.ticket.id)
-    if (index >= 0) tickets.value[index] = response.ticket
-    notify('success', 'Description saved.')
+    await uploadAttachments(ticket, files)
+    showSaveState('saved')
   } catch (error) {
+    showSaveState('error')
     notify('error', errorText(error))
-  } finally {
-    saving.value = false
   }
 }
 
@@ -579,7 +617,7 @@ async function sync(provider: IntegrationProvider) {
       <div v-else class="scrollbar-thin overflow-x-auto max-md:hidden"><KanbanBoard :board-id="board.id" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" @open="openTicket" @move="moveTicket" @create="newTicket" /></div>
     </main>
 
-    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :deleting-attachment-id="deletingAttachmentId" :initial-lane-id="newTicketLaneId" :initial-placement="newTicketPlacement" :lane-ticket-count="selectedLaneTicketCount" :boards="transferableBoards" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @reorder="reorderTicketFromEditor" @transfer="transferTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @save-description="saveDescriptionFromEditor" @commented="refresh()" @notify="notify" />
+    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :save-state="saveState" :deleting-attachment-id="deletingAttachmentId" :initial-lane-id="newTicketLaneId" :initial-placement="newTicketPlacement" :lane-ticket-count="selectedLaneTicketCount" :boards="transferableBoards" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @reorder="reorderTicketFromEditor" @transfer="transferTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @save-description="saveDescriptionFromEditor" @save-title="saveTitleFromEditor" @patch="patchTicketFromEditor" @upload="uploadAttachmentsFromEditor" @commented="refresh()" @notify="notify" />
 
     <UiConfirmDialog
       v-if="confirmation"

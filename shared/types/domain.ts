@@ -311,6 +311,25 @@ export interface TicketTodoInput {
   completed: boolean
 }
 
+/**
+ * What the ticket editor sends when one or more fields change. Every key is optional: the
+ * API keeps whatever is left out, so a single-field save is just `{ priority: 'high' }`.
+ */
+export interface TicketPatch {
+  title?: string
+  description?: string
+  priority?: TicketPriority
+  dueDate?: string | null
+  buildNumber?: string | null
+  link?: string | null
+  assigneeId?: string | null
+  authorId?: string | null
+  labels?: string[]
+  categoryName?: string | null
+  typeId?: string | null
+  todos?: TicketTodoInput[]
+}
+
 export interface TicketTodo extends TicketTodoInput {
   id: string
   position: number

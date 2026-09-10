@@ -29,10 +29,22 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
+  /** An option was picked from the list (or confirmed with Enter), as opposed to typed. */
+  select: [value: string]
 }>()
 
+function clean(value: unknown) {
+  return String(value ?? '').slice(0, props.maxLength)
+}
+
 function updateValue(value: unknown) {
-  emit('update:modelValue', String(value ?? '').slice(0, props.maxLength))
+  emit('update:modelValue', clean(value))
+}
+
+function selectValue(value: unknown) {
+  const cleaned = clean(value)
+  emit('update:modelValue', cleaned)
+  emit('select', cleaned)
 }
 </script>
 
@@ -43,7 +55,7 @@ function updateValue(value: unknown) {
     :reset-search-term-on-select="false"
     open-on-click
     open-on-focus
-    @update:model-value="updateValue"
+    @update:model-value="selectValue"
   >
     <ComboboxAnchor class="surface-strong focus-within:border-[color-mix(in_srgb,var(--line)_55%,var(--accent))] relative flex h-11 w-full items-center rounded-xl transition">
       <ComboboxInput
