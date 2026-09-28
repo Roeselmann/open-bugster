@@ -20,7 +20,7 @@ interface RegisteredTool {
     annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; openWorldHint?: boolean }
     inputSchema?: Record<string, unknown>
   }
-  handler: (args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text: string }> }>
+  handler: (args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> }>
 }
 
 describe('the MCP tool surface', () => {
@@ -37,7 +37,7 @@ describe('the MCP tool surface', () => {
     const tool = tools.get(name)
     if (!tool) throw new Error(`no tool named ${name}`)
     const result = await tool.handler(args)
-    return JSON.parse(result.content[0]!.text)
+    return JSON.parse(result.content[0]!.text!)
   }
 
   beforeAll(async () => {
@@ -75,7 +75,7 @@ describe('the MCP tool surface', () => {
       // Selection accuracy falls off well before thirty options. If this grows past the low
       // teens, the answer is a better-shaped tool, not another one.
       expect(tools.size).toBeGreaterThanOrEqual(8)
-      expect(tools.size).toBeLessThanOrEqual(14)
+      expect(tools.size).toBeLessThanOrEqual(15)
     })
 
     it('describes every tool, at length enough to be useful', () => {
@@ -89,7 +89,7 @@ describe('the MCP tool surface', () => {
     it('tells clients which tools only read, so no approval gate lands on a lookup', () => {
       // The spec's default is "assume the worst": a tool without annotations counts as
       // write-capable and destructive, and cautious clients gate it behind an approval.
-      const reads = ['whoami', 'list_boards', 'board_overview', 'search_tickets', 'get_ticket', 'list_lanes', 'whats_new']
+      const reads = ['whoami', 'list_boards', 'board_overview', 'search_tickets', 'get_ticket', 'get_attachment', 'list_lanes', 'whats_new']
       for (const tool of tools.values()) {
         expect(tool.config.annotations?.readOnlyHint, tool.name).toBe(reads.includes(tool.name))
       }
@@ -103,7 +103,7 @@ describe('the MCP tool surface', () => {
       expect([...tools.keys()]).toEqual(expect.arrayContaining([
         'whoami', 'list_boards', 'board_overview', 'search_tickets', 'get_ticket',
         'create_ticket', 'update_ticket', 'move_ticket', 'comment_on_ticket', 'archive_ticket',
-        'whats_new', 'add_attachment', 'restore_ticket'
+        'whats_new', 'add_attachment', 'get_attachment', 'restore_ticket'
       ]))
       // Nothing named after an operation, and no administration.
       for (const name of tools.keys()) {
@@ -348,6 +348,7 @@ describe('the MCP tool surface', () => {
       const full = await call('get_ticket', { ticketId: created.id })
       expect(full.attachments).toHaveLength(1)
       expect(full.attachments[0].url).toBe(`/api/v1/attachments/${attachment.id}`)
+      expect(full.attachments[0].id).toBe(attachment.id)
     })
 
     it('names an extensionless URL from its content type', async () => {
@@ -360,6 +361,80 @@ describe('the MCP tool surface', () => {
       const created = await call('create_ticket', { boardId, laneId, title: 'No file here' })
       await expect(call('add_attachment', { ticketId: created.id, url: `${origin}/gone.png` }))
         .rejects.toMatchObject({ statusCode: 422, statusMessage: 'The URL answered 404.' })
+    })
+  })
+
+  describe('viewing attachments', () => {
+    let fixture: Server
+    let origin = ''
+    let screenshot: Buffer
+
+    beforeAll(async () => {
+      const sharp = (await import('sharp')).default
+      // Shaped like a TestFlight screenshot: tall, and larger than the default preview.
+      screenshot = await sharp({ create: { width: 1200, height: 2600, channels: 4, background: { r: 30, g: 120, b: 200, alpha: 0.5 } } }).png().toBuffer()
+      fixture = createServer((request, response) => {
+        if (request.url === '/screenshot.png') {
+          response.writeHead(200, { 'content-type': 'image/png' })
+          response.end(screenshot)
+        } else if (request.url === '/report.pdf') {
+          response.writeHead(200, { 'content-type': 'application/pdf' })
+          response.end(Buffer.from('%PDF-1.4\n%fixture\n'))
+        } else {
+          response.writeHead(404)
+          response.end()
+        }
+      })
+      await new Promise<void>(resolve => fixture.listen(0, '127.0.0.1', resolve))
+      origin = `http://127.0.0.1:${(fixture.address() as AddressInfo).port}`
+    })
+
+    afterAll(() => new Promise<void>(resolve => { fixture.close(() => resolve()) }))
+
+    it('shows an image scaled down and re-encoded as JPEG', async () => {
+      const sharp = (await import('sharp')).default
+      const created = await call('create_ticket', { boardId, laneId, title: 'Feedback with a screenshot' })
+      const attachment = await call('add_attachment', { ticketId: created.id, url: `${origin}/screenshot.png` })
+
+      const result = await tools.get('get_attachment')!.handler({ attachmentId: attachment.id })
+      const [image, text] = result.content
+      expect(image).toMatchObject({ type: 'image', mimeType: 'image/jpeg' })
+      const meta = await sharp(Buffer.from(image!.data!, 'base64')).metadata()
+      expect(meta).toMatchObject({ format: 'jpeg', height: 1500 })
+      expect(meta.width).toBeLessThan(1200)
+      expect(JSON.parse(text!.text!)).toMatchObject({ id: attachment.id, filename: 'screenshot.png', mimeType: 'image/png' })
+
+      const small = await tools.get('get_attachment')!.handler({ attachmentId: attachment.id, maxDimension: 400 })
+      expect((await sharp(Buffer.from(small.content[0]!.data!, 'base64')).metadata()).height).toBe(400)
+    })
+
+    it('returns only the details of a file that is not an image', async () => {
+      const created = await call('create_ticket', { boardId, laneId, title: 'Feedback with a report' })
+      const attachment = await call('add_attachment', { ticketId: created.id, url: `${origin}/report.pdf` })
+      const result = await tools.get('get_attachment')!.handler({ attachmentId: attachment.id })
+      expect(result.content).toHaveLength(1)
+      expect(JSON.parse(result.content[0]!.text!)).toMatchObject({ id: attachment.id, filename: 'report.pdf', mimeType: 'application/pdf' })
+    })
+
+    it('answers an unknown id and a file out of reach alike', async () => {
+      await expect(call('get_attachment', { attachmentId: 'no-such-attachment' }))
+        .rejects.toMatchObject({ statusCode: 404, statusMessage: 'Attachment not found.' })
+
+      const created = await call('create_ticket', { boardId, laneId, title: 'On the main board' })
+      const attachment = await call('add_attachment', { ticketId: created.id, url: `${origin}/screenshot.png` })
+      const { registerTools } = await import('../server/mcp/tools')
+      const pinned = new Map<string, RegisteredTool>()
+      const server = {
+        registerTool(name: string, config: RegisteredTool['config'], handler: RegisteredTool['handler']) {
+          pinned.set(name, { name, config, handler })
+        }
+      }
+      const elsewhere = db.createBoard('Out of reach')
+      registerTools(server as never, actorModule.actorFor(db.findUser(ownerId)!, {
+        channel: 'mcp', tokenId: 'tok_4', scopes: ['read'], boardScope: elsewhere.id
+      }))
+      await expect(pinned.get('get_attachment')!.handler({ attachmentId: attachment.id }))
+        .rejects.toMatchObject({ statusCode: 404, statusMessage: 'Attachment not found.' })
     })
   })
 

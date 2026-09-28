@@ -4,6 +4,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { run, type AnyOperation } from '~~/server/operations'
 import * as ops from '~~/server/operations'
 import type { Actor } from '~~/server/utils/actor'
+import { resolveAttachmentFile } from '~~/server/utils/attachment-file'
+import { DEFAULT_PREVIEW_DIMENSION, imagePreview } from '~~/server/utils/image-preview'
 import type { BoardSummary, LaneSummary, Ticket, TicketActivityEntry, TicketComment, TicketTypeSummary, WorkspaceSummary } from '~~/shared/types/domain'
 
 /**
@@ -232,6 +234,8 @@ export function registerTools(server: McpServer, actor: Actor) {
       // session cookie, so the token this tool holds could see an attachment listed and
       // fetch none of them. This one answers to the same bearer token.
       attachments: ticket.attachments.map(file => ({
+        // What get_attachment takes, so an image can be looked at without parsing the url.
+        id: file.id,
         filename: file.filename,
         mimeType: file.mimeType,
         size: file.size,
@@ -247,6 +251,42 @@ export function registerTools(server: McpServer, actor: Actor) {
         at: entry.createdAt
       }))
     })
+  })
+
+  server.registerTool('get_attachment', {
+    title: 'View an attachment',
+    description:
+      'Look at a ticket attachment — above all the screenshots TestFlight feedback arrives with, '
+      + 'which the url in get_ticket cannot show you. An image comes back as an image you can see, '
+      + 'scaled down to maxDimension and re-encoded as JPEG. Any other file (PDF, log, Office '
+      + 'document) returns only its filename, type and size. Takes the id from get_ticket attachments.',
+    annotations: readsOnly,
+    inputSchema: {
+      attachmentId: z.string().describe('The `id` of an entry in get_ticket\'s `attachments`.'),
+      maxDimension: z.number().int().min(200).max(4000).optional()
+        .describe(`Longest side of the returned image in pixels. Defaults to ${DEFAULT_PREVIEW_DIMENSION}; a smaller image costs less context.`)
+    }
+  }, async ({ attachmentId, maxDimension }) => {
+    type AttachmentRow = { id: string; filename: string; mime_type: string; size: number; relative_path: string }
+    let attachment: AttachmentRow
+    try {
+      ({ attachment } = await call<{ attachment: AttachmentRow }>(ops.attachmentGet, { attachmentId }))
+    } catch (error) {
+      // A file on a board this token cannot see answers exactly like one that does not exist:
+      // "Board not found" would confirm the id is real.
+      if ((error as { statusCode?: number }).statusCode === 404) throw createError({ statusCode: 404, statusMessage: 'Attachment not found.' })
+      throw error
+    }
+    const details = { id: attachment.id, filename: attachment.filename, mimeType: attachment.mime_type, size: attachment.size }
+    if (!attachment.mime_type.startsWith('image/')) return reply({ ...details, note: 'Not an image, so only its details are returned.' })
+    const preview = await imagePreview(await resolveAttachmentFile(attachment.relative_path), maxDimension)
+    if (!preview) return reply({ ...details, note: 'This image format cannot be converted for viewing, so only its details are returned.' })
+    return {
+      content: [
+        { type: 'image' as const, data: preview.toString('base64'), mimeType: 'image/jpeg' },
+        { type: 'text' as const, text: JSON.stringify(details, null, 2) }
+      ]
+    }
   })
 
   server.registerTool('create_ticket', {
