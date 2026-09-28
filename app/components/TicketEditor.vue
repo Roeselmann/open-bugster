@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, CircleAlert, Download, ExternalLink, FileText, GripVertical, Image, Link as LinkIcon, ListTodo, LoaderCircle, MessageSquare, Paperclip, Plus, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, CircleAlert, Download, ExternalLink, FileText, GripVertical, Image, Link as LinkIcon, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogClose,
   DialogContent,
@@ -111,6 +111,12 @@ const canAssignSelf = computed(() => {
   const id = user.value?.id
   return Boolean(props.canEdit && id && form.assigneeId !== id && (props.members || []).some(member => member.userId === id))
 })
+// Shown beside the assignee: whoever reported an existing ticket, and for a new one the
+// person about to file it.
+const author = computed(() => {
+  if (props.ticket) return person.value
+  return user.value ? { name: displayName(user.value), email: user.value.email || '', role: 'Author' } : null
+})
 function assignToMe() {
   const id = user.value?.id
   if (!id || !canAssignSelf.value) return
@@ -154,7 +160,7 @@ const atTop = computed(() => (props.ticket?.position ?? 0) === 0)
 const atBottom = computed(() => (props.ticket?.position ?? 0) >= props.laneTicketCount - 1)
 const placementOptions = [{ value: 'top', label: 'Top of lane' }, { value: 'bottom', label: 'Bottom of lane' }]
 
-// Moving onto another board hides behind a small pill beside the lane: pick the board, then
+// Moving onto another board hides behind a small button beside the lane: pick the board, then
 // one of its lanes, then say so with a button — unlike the lane select, this leaves the
 // board and must not happen by accident.
 const transferOpen = ref(false)
@@ -169,10 +175,11 @@ function toggleTransfer() {
   transferOpen.value = !transferOpen.value
   if (transferOpen.value && !props.boards.some(board => board.id === targetBoardId.value)) targetBoardId.value = props.boards[0]?.id || ''
 }
-// The small pills beside a field label ("Assign to me", "Move to board"): one look for both.
+// The small pill beside a field label ("Assign to me").
 const labelPill = 'focus-ring flex h-5 items-center gap-1 rounded-full border px-2 text-[11px] font-semibold leading-none transition'
 const labelPillIdle = 'muted border-[var(--line)] hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]'
-const labelPillActive = 'border-[var(--ink)] bg-[var(--ink)] text-[var(--canvas)]'
+// The icon buttons beside the lane in the header: to the top, to the bottom, to another board.
+const headerButton = 'focus-ring muted flex size-8 shrink-0 items-center justify-center rounded-lg border border-[var(--line)] transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--line)] disabled:hover:bg-transparent'
 const priorityOptions = Object.entries(PRIORITY_LABELS).map(([value, label]) => ({ value, label }))
 const categoryOptions = computed(() => (props.categories || []).map(category => category.name))
 // Same sentinel trick as `UNASSIGNED`: "no type" needs a value the select can hold.
@@ -549,26 +556,73 @@ function focusTitle(event: Event) {
           <DialogDescription>{{ isEdit ? 'Edit the ticket. Changes are saved as you make them.' : 'Create a new ticket.' }}</DialogDescription>
         </VisuallyHidden>
         <form class="flex min-h-full flex-col" @submit.prevent="submit()">
-          <header class="sticky top-0 z-10 grid grid-cols-[1fr_auto_1fr] items-center gap-3 border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_92%,transparent)] px-5 py-4 backdrop-blur-xl sm:px-7">
+          <header class="sticky top-0 z-10 flex items-center gap-3 border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_62%,var(--canvas))] px-5 py-4 sm:px-7">
             <DialogTitle as-child>
-              <h2 class="min-w-0 truncate text-xl font-bold tracking-[-.03em]">{{ ticket ? `Ticket #${ticket.ticketNumber}` : 'New ticket' }}</h2>
+              <h2 class="shrink-0 text-xl font-bold tracking-[-.03em]">
+                <template v-if="ticket"><span class="hidden sm:inline">Ticket </span>#{{ ticket.ticketNumber }}</template>
+                <template v-else>New ticket</template>
+              </h2>
             </DialogTitle>
-            <span
-              v-if="person"
-              class="surface-strong col-start-2 flex min-w-0 items-center gap-2 rounded-xl px-2.5 py-1"
-              :title="`${person.role} · ${person.email}`"
-            >
-              <UserRound :size="15" class="muted shrink-0" aria-hidden="true" />
-              <span class="truncate text-xs font-semibold">{{ person.name }}</span>
-              <span class="sr-only">({{ person.role }}, {{ person.email }})</span>
-            </span>
+            <!-- The lane, with what moves the ticket within it or off the board, rides in the header. -->
+            <div class="ml-auto flex min-w-0 max-w-xs flex-1 items-center gap-1.5">
+              <div class="min-w-0 flex-1">
+                <UiSelect
+                  v-if="ticket"
+                  :model-value="ticket.laneId"
+                  :options="laneOptions"
+                  :disabled="!canEdit"
+                  aria-label="Lane"
+                  compact
+                  @update:model-value="emit('move', ticket, $event)"
+                />
+                <UiSelect v-else :model-value="form.laneId" :options="laneOptions" aria-label="Lane" compact @update:model-value="form.laneId = $event" />
+              </div>
+              <template v-if="ticket && canEdit">
+                <button type="button" :class="headerButton" :disabled="atTop" aria-label="Move to top of lane" title="Move to top of lane" @click="emit('reorder', ticket, 'top')">
+                  <ArrowUpToLine :size="15" aria-hidden="true" />
+                </button>
+                <button type="button" :class="headerButton" :disabled="atBottom" aria-label="Move to bottom of lane" title="Move to bottom of lane" @click="emit('reorder', ticket, 'bottom')">
+                  <ArrowDownToLine :size="15" aria-hidden="true" />
+                </button>
+                <button
+                  v-if="boards.length"
+                  type="button"
+                  :class="[headerButton, transferOpen ? '!border-[var(--ink)] !bg-[var(--ink)] !text-[var(--canvas)]' : '']"
+                  :aria-expanded="transferOpen"
+                  :aria-label="transferOpen ? 'Cancel moving to another board' : 'Move to board'"
+                  :title="transferOpen ? 'Cancel' : 'Move to board'"
+                  @click="toggleTransfer"
+                >
+                  <ArrowRightLeft :size="15" aria-hidden="true" />
+                </button>
+              </template>
+            </div>
             <DialogClose as-child>
-              <button type="button" class="focus-ring col-start-3 grid size-10 place-items-center justify-self-end rounded-xl hover:bg-[var(--panel-strong)]" aria-label="Close"><X :size="20" /></button>
+              <button type="button" class="focus-ring grid size-10 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]" aria-label="Close"><X :size="20" /></button>
             </DialogClose>
           </header>
 
           <div class="flex-1" :class="commentsOpen ? 'lg:grid lg:grid-cols-2 lg:items-start' : ''">
           <div class="space-y-6 px-5 py-6 sm:px-7">
+            <!-- The transfer, folded out by the header button: destination board and lane, then one deliberate button. -->
+            <div v-if="ticket && targetBoard" class="surface-strong rounded-xl p-3">
+              <div class="grid gap-2 sm:grid-cols-2">
+                <UiSelect :model-value="targetBoardId" :options="boardOptions" aria-label="Destination board" compact @update:model-value="targetBoardId = $event" />
+                <UiSelect :model-value="targetLaneId" :options="targetLaneOptions" aria-label="Lane on the destination board" compact @update:model-value="targetLaneId = $event" />
+              </div>
+              <div class="mt-2 flex items-center justify-between gap-3">
+                <span class="muted text-[11px]">The ticket leaves this board. Labels and category come along; an assignee who is no member over there is dropped.</span>
+                <button
+                  type="button"
+                  class="focus-ring flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-[var(--ink)] px-3 text-xs font-semibold text-[var(--canvas)] disabled:opacity-50"
+                  :disabled="!targetLaneId || saving"
+                  @click="emit('transfer', ticket, targetBoard.id, targetLaneId)"
+                >
+                  <ArrowRightLeft :size="14" aria-hidden="true" /> Move to {{ targetBoard.name }}
+                </button>
+              </div>
+            </div>
+
             <div class="block">
               <div class="mb-2 flex items-center justify-between gap-3">
                 <label for="ticket-title" class="block text-xs font-bold uppercase tracking-[.08em]">Title</label>
@@ -696,98 +750,7 @@ function focusTitle(event: Event) {
             </section>
 
 
-            <div v-if="ticket" class="block border-t border-[var(--line)] pt-6">
-              <div class="mb-2 flex h-5 items-center justify-between gap-2">
-                <span class="text-xs font-bold uppercase tracking-[.08em]">Lane</span>
-                <button
-                  v-if="canEdit && boards.length"
-                  type="button"
-                  :class="[labelPill, transferOpen ? labelPillActive : labelPillIdle]"
-                  :aria-expanded="transferOpen"
-                  @click="toggleTransfer"
-                >
-                  <X v-if="transferOpen" :size="11" aria-hidden="true" /><ArrowRightLeft v-else :size="11" aria-hidden="true" />
-                  {{ transferOpen ? 'Cancel' : 'Move to board' }}
-                </button>
-              </div>
-              <div class="flex items-center gap-2">
-                <div class="min-w-0 flex-1">
-                  <UiSelect
-                    :model-value="ticket.laneId"
-                    :options="laneOptions"
-                    :disabled="!canEdit"
-                    aria-label="Lane"
-                    @update:model-value="emit('move', ticket, $event)"
-                  />
-                </div>
-                <button
-                  v-if="canEdit"
-                  type="button"
-                  class="focus-ring muted flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--line)] transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--line)] disabled:hover:bg-transparent"
-                  :disabled="atTop"
-                  aria-label="Move to top of lane"
-                  title="Move to top of lane"
-                  @click="emit('reorder', ticket, 'top')"
-                >
-                  <ArrowUpToLine :size="16" aria-hidden="true" />
-                </button>
-                <button
-                  v-if="canEdit"
-                  type="button"
-                  class="focus-ring muted flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--line)] transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--line)] disabled:hover:bg-transparent"
-                  :disabled="atBottom"
-                  aria-label="Move to bottom of lane"
-                  title="Move to bottom of lane"
-                  @click="emit('reorder', ticket, 'bottom')"
-                >
-                  <ArrowDownToLine :size="16" aria-hidden="true" />
-                </button>
-              </div>
-              <!-- The transfer, folded out by the pill: destination board and lane, then one deliberate button. -->
-              <div v-if="targetBoard" class="surface-strong mt-3 rounded-xl p-3">
-                <div class="grid gap-2 sm:grid-cols-2">
-                  <UiSelect :model-value="targetBoardId" :options="boardOptions" aria-label="Destination board" compact @update:model-value="targetBoardId = $event" />
-                  <UiSelect :model-value="targetLaneId" :options="targetLaneOptions" aria-label="Lane on the destination board" compact @update:model-value="targetLaneId = $event" />
-                </div>
-                <div class="mt-2 flex items-center justify-between gap-3">
-                  <span class="muted text-[11px]">The ticket leaves this board. Labels and category come along; an assignee who is no member over there is dropped.</span>
-                  <button
-                    type="button"
-                    class="focus-ring flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-[var(--ink)] px-3 text-xs font-semibold text-[var(--canvas)] disabled:opacity-50"
-                    :disabled="!targetLaneId || saving"
-                    @click="emit('transfer', ticket, targetBoard.id, targetLaneId)"
-                  >
-                    <ArrowRightLeft :size="14" aria-hidden="true" /> Move to {{ targetBoard.name }}
-                  </button>
-                </div>
-              </div>
-            </div>
-            <div v-else class="grid gap-4 border-t border-[var(--line)] pt-6 sm:grid-cols-2">
-              <div class="block">
-                <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Lane</span>
-                <UiSelect :model-value="form.laneId" :options="laneOptions" aria-label="Lane" @update:model-value="form.laneId = $event" />
-              </div>
-              <div class="block">
-                <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Position</span>
-                <UiSelect :model-value="form.placement" :options="placementOptions" aria-label="Position in lane" @update:model-value="form.placement = $event as 'top' | 'bottom'" />
-                <span class="muted mt-1.5 block text-[11px]">Top pushes the lane’s other tickets down.</span>
-              </div>
-            </div>
-
-            <div class="grid gap-4 sm:grid-cols-2">
-              <div class="block">
-                <div class="mb-2 flex h-5 items-center justify-between gap-2">
-                  <span class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><UserRound :size="14" /> Assignee</span>
-                  <button v-if="canAssignSelf" type="button" :class="[labelPill, labelPillIdle]" @click="assignToMe"><UserRound :size="11" aria-hidden="true" /> Assign to me</button>
-                </div>
-                <UiSelect
-                  :model-value="form.assigneeId"
-                  :options="assigneeOptions"
-                  aria-label="Assignee"
-                  :disabled="!canEdit"
-                  @update:model-value="form.assigneeId = $event; commit({ assigneeId: payload.assigneeId() })"
-                />
-              </div>
+            <div class="grid gap-4 border-t border-[var(--line)] pt-6" :class="ticket ? '' : 'sm:grid-cols-2'">
               <div class="block">
                 <span class="mb-2 flex h-5 items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Shapes :size="14" /> Type</span>
                 <div class="flex items-center gap-2">
@@ -803,17 +766,48 @@ function focusTitle(event: Event) {
                   </div>
                 </div>
               </div>
+              <div v-if="!ticket" class="block">
+                <span class="mb-2 flex h-5 items-center text-xs font-bold uppercase tracking-[.08em]">Position</span>
+                <UiSelect :model-value="form.placement" :options="placementOptions" aria-label="Position in lane" @update:model-value="form.placement = $event as 'top' | 'bottom'" />
+                <span class="muted mt-1.5 block text-[11px]">Top pushes the lane’s other tickets down.</span>
+              </div>
             </div>
 
-            <div v-if="canAttribute" class="block">
-              <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><UserRound :size="14" /> Author</span>
-              <UiSelect
-                :model-value="form.authorId"
-                :options="authorOptions"
-                aria-label="Author"
-                @update:model-value="form.authorId = $event; commit({ authorId: payload.authorId() })"
-              />
-              <p class="muted mt-2 text-xs">Who really reported this. Imports name their tester automatically when that person already has an account.</p>
+            <div class="grid items-start gap-4 sm:grid-cols-2">
+              <div class="block">
+                <div class="mb-2 flex h-5 items-center justify-between gap-2">
+                  <span class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><UserRound :size="14" /> Assignee</span>
+                  <button v-if="canAssignSelf" type="button" :class="[labelPill, labelPillIdle]" @click="assignToMe"><UserRound :size="11" aria-hidden="true" /> Assign to me</button>
+                </div>
+                <UiSelect
+                  :model-value="form.assigneeId"
+                  :options="assigneeOptions"
+                  aria-label="Assignee"
+                  :disabled="!canEdit"
+                  @update:model-value="form.assigneeId = $event; commit({ assigneeId: payload.assigneeId() })"
+                />
+              </div>
+              <div class="block">
+                <span class="mb-2 flex h-5 items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><PenLine :size="14" /> {{ author && !canAttribute ? author.role : 'Author' }}</span>
+                <!-- Admins may correct who reported an import; everyone else just sees who did. -->
+                <template v-if="canAttribute">
+                  <UiSelect
+                    :model-value="form.authorId"
+                    :options="authorOptions"
+                    aria-label="Author"
+                    title="Who really reported this. Imports name their tester automatically when that person already has an account."
+                    @update:model-value="form.authorId = $event; commit({ authorId: payload.authorId() })"
+                  />
+                  <span v-if="form.authorId === UNASSIGNED && person" class="muted mt-1.5 block truncate text-[11px]">{{ person.role }}: {{ person.name }}</span>
+                </template>
+                <div
+                  v-else
+                  class="surface-strong flex h-11 items-center gap-2 rounded-xl px-3 text-sm"
+                  :title="author?.email || undefined"
+                >
+                  <span class="min-w-0 truncate" :class="author ? '' : 'muted'">{{ author?.name || 'Unknown' }}</span>
+                </div>
+              </div>
             </div>
 
             <div class="grid gap-4 sm:grid-cols-2">
@@ -997,7 +991,7 @@ function focusTitle(event: Event) {
           </aside>
           </div>
 
-          <footer class="sticky bottom-0 flex items-center gap-3 border-t border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_92%,transparent)] px-5 py-4 backdrop-blur-xl sm:px-7">
+          <footer class="sticky bottom-0 flex items-center gap-3 border-t border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_62%,var(--canvas))] px-5 py-4 sm:px-7">
             <button v-if="ticket && canEdit" type="button" class="focus-ring flex h-10 items-center gap-2 rounded-xl px-3 text-sm font-semibold text-rose-600 hover:bg-rose-500/10" @click="emit('archive', ticket)"><Archive :size="16" /> Archive</button>
             <p v-if="!canEdit" class="muted text-sm">You can read and comment on this board.</p>
             <!-- An existing ticket has no Save: every field saved itself, and this says how that went. -->
