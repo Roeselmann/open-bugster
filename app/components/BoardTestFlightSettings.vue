@@ -17,9 +17,11 @@ const testResult = ref<{ ok: true; app: TestFlightConnection } | { ok: false; me
 const keyInput = ref<HTMLInputElement | null>(null)
 
 // Reloaded from the board only when a saved value changes. Uploading the key refreshes the
-// board too, and must not throw away ids typed but not yet saved.
+// board too, and must not throw away ids typed but not yet saved. One getter per value, since
+// Vue compares each of those; a single getter returning an array would be a new array on
+// every board refresh and fire every time.
 watch(
-  () => [props.board.credentials.issuerId, props.board.credentials.keyId, props.board.credentials.appId, props.board.syncLimit, props.board.autoAuthor, props.board.importTypeId] as const,
+  [() => props.board.credentials.issuerId, () => props.board.credentials.keyId, () => props.board.credentials.appId, () => props.board.syncLimit, () => props.board.autoAuthor, () => props.board.importTypeId],
   ([issuerId, keyId, appId, syncLimit, autoAuthor, importTypeId]) => {
     form.issuerId = issuerId
     form.keyId = keyId
@@ -32,7 +34,7 @@ watch(
 )
 
 // A stale "connected" badge next to edited credentials would be misleading.
-watch(() => [form.issuerId, form.keyId, form.appId, props.board.credentials.keyUploadedAt], () => {
+watch([() => form.issuerId, () => form.keyId, () => form.appId, () => props.board.credentials.keyUploadedAt], () => {
   testResult.value = null
 })
 

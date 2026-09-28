@@ -19,9 +19,11 @@ const testing = ref(false)
 const testResult = ref<{ ok: true; connection: JiraConnection } | { ok: false; message: string } | null>(null)
 
 // Reloaded from the board only when a saved value changes. Storing the token refreshes the
-// board too, and must not throw away a site or query typed but not yet saved.
+// board too, and must not throw away a site or query typed but not yet saved. One getter per
+// value, since Vue compares each of those; a single getter returning an array would be a new
+// array on every board refresh and fire every time.
 watch(
-  () => [props.board.jira.siteUrl, props.board.jira.email, props.board.jira.jql, props.board.syncLimit, props.board.autoAuthor, props.board.importTypeId] as const,
+  [() => props.board.jira.siteUrl, () => props.board.jira.email, () => props.board.jira.jql, () => props.board.syncLimit, () => props.board.autoAuthor, () => props.board.importTypeId],
   ([siteUrl, email, jql, syncLimit, autoAuthor, importTypeId]) => {
     form.siteUrl = siteUrl
     form.email = email
@@ -34,7 +36,7 @@ watch(
 )
 
 // A stale "connected" badge next to edited credentials would be misleading.
-watch(() => [form.siteUrl, form.email, form.jql, props.board.jira.tokenUpdatedAt], () => {
+watch([() => form.siteUrl, () => form.email, () => form.jql, () => props.board.jira.tokenUpdatedAt], () => {
   testResult.value = null
 })
 
