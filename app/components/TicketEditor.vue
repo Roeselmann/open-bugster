@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, CircleAlert, Download, ExternalLink, FileText, GripVertical, Image, Link as LinkIcon, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
-  DialogClose,
   DialogContent,
   DialogDescription,
   DialogOverlay,
@@ -80,6 +79,24 @@ function cancelDescription() {
   form.description = props.ticket?.description || ''
   editingDescription.value = false
 }
+// Closing throws away what was never saved: everything typed into a new ticket, and on an
+// existing one a title or description still waiting for its Save. So it asks first.
+const hasUnsavedWork = computed(() => {
+  const ticket = props.ticket
+  if (ticket) return props.canEdit && (form.title.trim() !== ticket.title.trim() || form.description !== (ticket.description || ''))
+  return Boolean(form.title.trim() || form.description.trim() || todos.value.some(todo => todo.text.trim()) || pendingFiles.value.length
+    || form.labels.length || form.categoryName.trim() || form.link.trim() || form.buildNumber.trim() || form.dueDate)
+})
+const discardOpen = ref(false)
+function requestClose() {
+  if (hasUnsavedWork.value) discardOpen.value = true
+  else emit('close')
+}
+function discard() {
+  discardOpen.value = false
+  emit('close')
+}
+
 // Saved on its own, like a lane move: the parent replaces the ticket, and the watch below
 // flips back to the rendered view. A failed save therefore leaves the textarea open.
 function saveDescription() {
@@ -543,7 +560,7 @@ function focusTitle(event: Event) {
 </script>
 
 <template>
-  <DialogRoot :open="true" @update:open="open => !open && emit('close')">
+  <DialogRoot :open="true" @update:open="open => !open && requestClose()">
     <DialogPortal>
       <DialogOverlay class="ui-dialog-overlay fixed inset-0 z-50 bg-black/35" />
       <DialogContent
@@ -597,9 +614,7 @@ function focusTitle(event: Event) {
                 </button>
               </template>
             </div>
-            <DialogClose as-child>
-              <button type="button" class="focus-ring grid size-10 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]" aria-label="Close"><X :size="20" /></button>
-            </DialogClose>
+            <button type="button" class="focus-ring grid size-10 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]" aria-label="Close" @click="requestClose"><X :size="20" /></button>
           </header>
 
           <div class="flex-1" :class="commentsOpen ? 'lg:grid lg:grid-cols-2 lg:items-start' : ''">
@@ -1000,12 +1015,20 @@ function focusTitle(event: Event) {
               <template v-else-if="saveState === 'saved'"><Check :size="14" aria-hidden="true" /> Saved</template>
               <template v-else-if="saveState === 'error'"><CircleAlert :size="14" aria-hidden="true" /> Could not save</template>
             </span>
-            <DialogClose as-child>
-              <button type="button" class="focus-ring h-10 rounded-xl px-4 text-sm font-semibold hover:bg-[var(--panel-strong)]" :class="isEdit && canEdit ? '' : 'ml-auto'">{{ canEdit && !isEdit ? 'Cancel' : 'Close' }}</button>
-            </DialogClose>
+            <button type="button" class="focus-ring h-10 rounded-xl px-4 text-sm font-semibold hover:bg-[var(--panel-strong)]" :class="isEdit && canEdit ? '' : 'ml-auto'" @click="requestClose">{{ canEdit && !isEdit ? 'Cancel' : 'Close' }}</button>
             <button v-if="canEdit && !isEdit" type="submit" :disabled="saving || !form.title.trim()" class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"><Plus :size="16" /> {{ saving ? 'Creating…' : 'Create' }}</button>
           </footer>
         </form>
+
+        <UiConfirmDialog
+          v-if="discardOpen"
+          :open="true"
+          :title="isEdit ? 'Discard your changes?' : 'Discard this ticket?'"
+          :description="isEdit ? 'The title or description has unsaved changes. They will be lost.' : 'Nothing has been saved yet. What you entered will be lost.'"
+          confirm-label="Discard"
+          @update:open="open => !open && (discardOpen = false)"
+          @confirm="discard"
+        />
       </DialogContent>
     </DialogPortal>
   </DialogRoot>
