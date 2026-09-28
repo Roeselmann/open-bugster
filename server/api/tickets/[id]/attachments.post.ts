@@ -15,7 +15,6 @@ import { sessionActor } from '~~/server/utils/actor'
 export default defineEventHandler(async (event) => {
   const id = getRouterParam(event, 'id') || ''
   const { ticket } = requireTicketAccess(sessionActor(event), id, 'editor')
-  if (ticket.source !== 'manual') throw createError({ statusCode: 403, statusMessage: 'Attachments can only be added to manual tickets.' })
   if (ticket.archivedAt) throw createError({ statusCode: 409, statusMessage: 'Attachments cannot be added to archived tickets.' })
 
   const contentLength = Number(getRequestHeader(event, 'content-length') || 0)

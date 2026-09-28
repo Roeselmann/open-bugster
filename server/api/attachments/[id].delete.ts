@@ -9,9 +9,6 @@ export default defineEventHandler(async (event) => {
   const attachment = findAttachment(getRouterParam(event, 'id') || '')
   if (!attachment) throw createError({ statusCode: 404, statusMessage: 'Attachment not found.' })
   const { ticket } = requireTicketAccess(sessionActor(event), attachment.ticket_id, 'editor')
-  if (ticket.source !== 'manual' || attachment.kind !== 'file') {
-    throw createError({ statusCode: 403, statusMessage: 'Imported attachments cannot be deleted.' })
-  }
   if (ticket.archivedAt) throw createError({ statusCode: 409, statusMessage: 'Attachments on archived tickets cannot be deleted.' })
 
   const configuredRoot = resolve(getServerConfig().attachmentsPath)

@@ -18,13 +18,10 @@ import type { Ticket } from '~~/shared/types/domain'
 const attachmentId = z.string().trim().min(1).max(64)
 
 /**
- * The same two rules the web upload holds to: an imported ticket belongs to its import, and
- * an archived one has left the board.
+ * The rule the web upload holds to: an archived ticket has left the board. Imported tickets
+ * take attachments like any other.
  */
 function assertAttachable(ticket: Ticket) {
-  if (ticket.source !== 'manual') {
-    throw createError({ statusCode: 403, statusMessage: 'Attachments can only be added to manual tickets.' })
-  }
   if (ticket.archivedAt) {
     throw createError({ statusCode: 409, statusMessage: 'Attachments cannot be added to archived tickets.' })
   }

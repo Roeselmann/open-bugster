@@ -904,7 +904,7 @@ function focusTitle(event: Event) {
                     <Image :size="14" /> <span class="min-w-0 truncate">{{ attachment.filename }}</span>
                     <span class="muted ml-auto shrink-0">{{ formatSize(attachment.size) }}</span>
                     <a :href="attachment.url" :download="attachment.filename" class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg hover:bg-[var(--accent-soft)]" :aria-label="`Download ${attachment.filename}`"><Download :size="15" /></a>
-                    <button v-if="isManual && attachment.kind === 'file'" type="button" class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10 disabled:opacity-40" :disabled="deletingAttachmentId === attachment.id" :aria-label="`Delete ${attachment.filename}`" @click="emit('removeAttachment', attachment)"><Trash2 :size="15" /></button>
+                    <button v-if="canEdit" type="button" class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10 disabled:opacity-40" :disabled="deletingAttachmentId === attachment.id" :aria-label="`Delete ${attachment.filename}`" @click="emit('removeAttachment', attachment)"><Trash2 :size="15" /></button>
                   </div>
                 </div>
                 <div v-else class="surface-strong flex items-center gap-3 rounded-xl p-3 text-sm font-semibold">
@@ -912,12 +912,12 @@ function focusTitle(event: Event) {
                   <a :href="attachment.url" target="_blank" class="focus-ring min-w-0 flex-1 truncate rounded-lg hover:text-[var(--accent)]">{{ attachment.filename }}</a>
                   <span class="muted shrink-0 text-xs">{{ formatSize(attachment.size) }}</span>
                   <a :href="attachment.url" class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg hover:bg-[var(--accent-soft)]" :aria-label="`Download ${attachment.filename}`"><Download :size="15" /></a>
-                  <button v-if="isManual && attachment.kind === 'file'" type="button" class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10 disabled:opacity-40" :disabled="deletingAttachmentId === attachment.id" :aria-label="`Delete ${attachment.filename}`" @click="emit('removeAttachment', attachment)"><Trash2 :size="15" /></button>
+                  <button v-if="canEdit" type="button" class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10 disabled:opacity-40" :disabled="deletingAttachmentId === attachment.id" :aria-label="`Delete ${attachment.filename}`" @click="emit('removeAttachment', attachment)"><Trash2 :size="15" /></button>
                 </div>
               </div>
             </section>
 
-            <section v-if="isManual" class="space-y-3">
+            <section class="space-y-3">
               <h3 class="flex items-center gap-2 text-xs font-bold uppercase tracking-[.08em]"><Paperclip :size="15" /> Add attachments</h3>
               <input ref="fileInput" type="file" multiple class="sr-only" accept=".jpg,.jpeg,.png,.gif,.webp,.heic,.pdf,.txt,.log,.csv,.json,.doc,.docx,.xls,.xlsx,.ppt,.pptx" @change="chooseFiles">
               <button

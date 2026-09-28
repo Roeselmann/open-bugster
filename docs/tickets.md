@@ -14,7 +14,7 @@ Cards are moved by dragging them between lanes or within a lane. On narrow scree
 
 ### To-dos and attachments
 
-Each ticket carries a to-do list: record the next steps, reorder them, and tick them off. Files such as screenshots and documents are attached directly to the ticket; images open in a lightbox. Each file is at most 25 MB, a ticket holds up to ten, and the file type has to be on the allowlist.
+Each ticket carries a to-do list: record the next steps, reorder them, and tick them off. Files such as screenshots and documents are attached directly to the ticket; images open in a lightbox. Each file is at most 25 MB, a ticket holds up to ten, and the file type has to be on the allowlist. Imported tickets work the same way: they take further files, and every attachment, including the screenshots, crash logs and Jira files an import brought along, can be deleted.
 
 ### Assignment and discussion
 
