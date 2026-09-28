@@ -70,16 +70,24 @@ async function saveEdit(comment: TicketComment) {
   }
 }
 
-async function remove(comment: TicketComment) {
-  busyId.value = comment.id
+// Deleting asks first: a comment is gone for everyone once confirmed.
+const doomed = ref<TicketComment | null>(null)
+const deleting = ref(false)
+
+async function confirmDelete() {
+  const comment = doomed.value
+  if (!comment || deleting.value) return
+  deleting.value = true
   try {
     await $fetch(`/api/comments/${comment.id}`, { method: 'DELETE' })
+    doomed.value = null
     await load()
     emit('changed')
+    emit('notify', 'success', 'Comment deleted.')
   } catch (error) {
     emit('notify', 'error', errorText(error))
   } finally {
-    busyId.value = ''
+    deleting.value = false
   }
 }
 </script>
@@ -111,7 +119,7 @@ async function remove(comment: TicketComment) {
             <button type="button" class="focus-ring grid size-7 place-items-center rounded-lg text-[var(--muted)] transition hover:bg-[var(--panel)] hover:text-[var(--ink)]" :aria-label="`Edit comment by ${comment.author ? displayName(comment.author) : 'Unknown'}`" @click="startEdit(comment)">
               <Pencil :size="14" />
             </button>
-            <button type="button" class="focus-ring grid size-7 place-items-center rounded-lg text-rose-600 transition hover:bg-rose-500/10" :disabled="busyId === comment.id" :aria-label="`Delete comment by ${comment.author ? displayName(comment.author) : 'Unknown'}`" @click="remove(comment)">
+            <button type="button" class="focus-ring grid size-7 place-items-center rounded-lg text-rose-600 transition hover:bg-rose-500/10" :aria-label="`Delete comment by ${comment.author ? displayName(comment.author) : 'Unknown'}`" @click="doomed = comment">
               <Trash2 :size="14" />
             </button>
           </template>
@@ -147,5 +155,16 @@ async function remove(comment: TicketComment) {
         </button>
       </div>
     </div>
+
+    <UiConfirmDialog
+      v-if="doomed"
+      :open="true"
+      title="Delete this comment?"
+      :description="`The comment by ${doomed.author ? displayName(doomed.author) : 'Unknown'} will be removed from the thread. This can’t be undone.`"
+      confirm-label="Delete comment"
+      :pending="deleting"
+      @update:open="open => !open && !deleting && (doomed = null)"
+      @confirm="confirmDelete"
+    />
   </section>
 </template>
