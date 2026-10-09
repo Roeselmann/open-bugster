@@ -141,6 +141,9 @@ export const ticketUpdate = defineOperation({
       throw createError({ statusCode: 422, statusMessage: 'A ticket can only be assigned to a member of this board.' })
     }
     if (fields.typeId && fields.typeId !== ticket.type?.id && !ticketTypeBelongsToBoard(fields.typeId, ticket.boardId)) throw foreignType()
+    if (fields.coverAttachmentId && !ticket.attachments.some(file => file.id === fields.coverAttachmentId && file.mimeType.startsWith('image/'))) {
+      throw createError({ statusCode: 422, statusMessage: 'The card image has to be one of this ticket’s image attachments.' })
+    }
     if ('authorId' in fields && (fields.authorId ?? null) !== (ticket.author?.id ?? null)) {
       // Attribution is a claim about who reported something, so it stays with the board's
       // admins rather than anyone who may edit the ticket.

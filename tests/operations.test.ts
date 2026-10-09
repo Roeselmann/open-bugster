@@ -258,6 +258,29 @@ describe('the operation registry', () => {
       expect(JSON.stringify(entry)).not.toContain('very long description')
     })
 
+    it('takes only the ticket’s own images as the card image, and forgets a deleted one', async () => {
+      const { ticket } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Two pictures', laneId }) as { ticket: { id: string } }
+      const { ticket: other } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Elsewhere', laneId }) as { ticket: { id: string } }
+      const first = db.addAttachment(ticket.id, 'file', 'first.png', 'image/png', 11, `${ticket.id}/first.png`)
+      const second = db.addAttachment(ticket.id, 'file', 'second.png', 'image/png', 11, `${ticket.id}/second.png`)
+      const log = db.addAttachment(ticket.id, 'file', 'crash.log', 'text/plain', 11, `${ticket.id}/crash.log`)
+      const foreign = db.addAttachment(other.id, 'file', 'foreign.png', 'image/png', 11, `${other.id}/foreign.png`)
+      const update = (coverAttachmentId: string | null) => ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, coverAttachmentId }) as Promise<{ ticket: { coverAttachmentId: string | null } }>
+
+      expect(db.findTicket(ticket.id)?.coverAttachmentId).toBeNull()
+      expect((await update(second)).ticket.coverAttachmentId).toBe(second)
+      expect(await statusOf(update(log))).toBe(422)
+      expect(await statusOf(update(foreign))).toBe(422)
+      // An unrelated change keeps the pick.
+      await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, title: 'Renamed' })
+      expect(db.findTicket(ticket.id)?.coverAttachmentId).toBe(second)
+
+      db.deleteAttachment(second)
+      expect(db.findTicket(ticket.id)?.coverAttachmentId).toBeNull()
+      expect((await update(first)).ticket.coverAttachmentId).toBe(first)
+      expect((await update(null)).ticket.coverAttachmentId).toBeNull()
+    })
+
     /**
      * The guarantee the registry exists for. If this ever fails, somebody has added a write
      * that the audit log cannot see.

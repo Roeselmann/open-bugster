@@ -53,7 +53,10 @@ export const ticketCreateSchema = z.object({
   placement: z.enum(['top', 'bottom']).default('bottom')
 })
 
-export const ticketUpdateSchema = z.object(ticketShape).partial()
+export const ticketUpdateSchema = z.object(ticketShape).partial().extend({
+  /** The image the card shows. A new ticket has no attachments yet, so only an update takes it. */
+  coverAttachmentId: idSchema.nullable().optional()
+})
 
 export const importedTicketUpdateSchema = ticketUpdateSchema.omit({ buildNumber: true }).extend({
   title: z.string().trim().min(1, 'Title is required.').max(10000).optional(),

@@ -58,9 +58,12 @@ const cardDateText = computed(() => {
   return Number.isNaN(date.getTime()) ? null : dateFormatter.format(date)
 })
 
-const imageAttachment = computed(() => props.showScreenshot
-  ? props.ticket.attachments.find(attachment => attachment.mimeType.startsWith('image/')) || null
-  : null)
+// The picture picked in the editor, or the oldest one when nobody picked.
+const imageAttachment = computed(() => {
+  if (!props.showScreenshot) return null
+  const images = props.ticket.attachments.filter(attachment => attachment.mimeType.startsWith('image/'))
+  return images.find(attachment => attachment.id === props.ticket.coverAttachmentId) || images[0] || null
+})
 const authorText = computed(() => {
   const author = props.ticket.author || props.ticket.feedback?.tester || props.ticket.jira?.reporter
   if (author) return displayName(author)

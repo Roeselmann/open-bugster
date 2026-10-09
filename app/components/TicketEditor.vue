@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, CircleAlert, Download, ExternalLink, FileText, GripVertical, Image, Link as LinkIcon, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, CircleAlert, Download, ExternalLink, FileText, GripVertical, Image, Link as LinkIcon, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Shapes, SquareKanban, Star, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogContent,
   DialogDescription,
@@ -171,6 +171,8 @@ const fileError = ref('')
 const dragActive = ref(false)
 const lightboxId = ref<string | null>(null)
 const imageAttachments = computed(() => props.ticket?.attachments.filter(attachment => attachment.mimeType.startsWith('image/')) || [])
+// The picture the card shows: the picked one, or the oldest as long as nobody picked.
+const cardImageId = computed(() => props.ticket?.coverAttachmentId || imageAttachments.value[0]?.id || null)
 const laneOptions = computed(() => props.lanes.map(lane => ({ value: lane.id, label: lane.name })))
 // Whether the ticket already sits where a reorder button would take it.
 const atTop = computed(() => (props.ticket?.position ?? 0) === 0)
@@ -903,6 +905,18 @@ function focusTitle(event: Event) {
                   <div class="flex items-center gap-2 px-3 py-2 text-xs font-semibold">
                     <Image :size="14" /> <span class="min-w-0 truncate">{{ attachment.filename }}</span>
                     <span class="muted ml-auto shrink-0">{{ formatSize(attachment.size) }}</span>
+                    <!-- With a single picture there is nothing to choose between. -->
+                    <button
+                      v-if="imageAttachments.length > 1 && (canEdit || cardImageId === attachment.id)"
+                      type="button"
+                      class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg disabled:cursor-default"
+                      :class="cardImageId === attachment.id ? 'text-[var(--accent)]' : 'muted hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]'"
+                      :disabled="!canEdit || cardImageId === attachment.id"
+                      :aria-pressed="cardImageId === attachment.id"
+                      :aria-label="cardImageId === attachment.id ? `${attachment.filename} is shown on the card` : `Show ${attachment.filename} on the card`"
+                      :title="cardImageId === attachment.id ? 'Shown on the card' : 'Show on the card'"
+                      @click="commit({ coverAttachmentId: attachment.id })"
+                    ><Star :size="15" :fill="cardImageId === attachment.id ? 'currentColor' : 'none'" /></button>
                     <a :href="attachment.url" :download="attachment.filename" class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg hover:bg-[var(--accent-soft)]" :aria-label="`Download ${attachment.filename}`"><Download :size="15" /></a>
                     <button v-if="canEdit" type="button" class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10 disabled:opacity-40" :disabled="deletingAttachmentId === attachment.id" :aria-label="`Delete ${attachment.filename}`" @click="emit('removeAttachment', attachment)"><Trash2 :size="15" /></button>
                   </div>

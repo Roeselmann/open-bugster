@@ -322,6 +322,8 @@ export interface TicketPatch {
   dueDate?: string | null
   buildNumber?: string | null
   link?: string | null
+  /** The image attachment the card shows; null goes back to the oldest image. */
+  coverAttachmentId?: string | null
   assigneeId?: string | null
   authorId?: string | null
   labels?: string[]
@@ -385,6 +387,8 @@ export interface Ticket {
   buildNumber: string | null
   /** An optional reference elsewhere — the Jira issue for an import, anything for a person. */
   link: string | null
+  /** The image attachment picked for the card; null means the oldest image is shown. */
+  coverAttachmentId: string | null
   source: TicketSource
   externalId: string | null
   createdAt: string

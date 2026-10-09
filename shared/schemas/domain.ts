@@ -126,6 +126,7 @@ export const ticketSchema = z.object({
   dueDate: z.string().nullable(),
   buildNumber: z.string().nullable(),
   link: z.string().nullable().describe('An optional reference elsewhere; a Jira import sets it to the issue.'),
+  coverAttachmentId: z.string().nullable().describe('The image attachment picked for the ticket’s card; null means the oldest image is shown.'),
   source: z.enum(ticketSources),
   externalId: z.string().nullable(),
   createdAt: z.string(),

@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS tickets (
   due_date TEXT,
   build_number TEXT,
   link TEXT,
+  cover_attachment_id TEXT,
   source TEXT NOT NULL CHECK (source IN ('manual', 'testflight_screenshot', 'testflight_crash', 'jira_issue')),
   external_id TEXT,
   created_at TEXT NOT NULL,
@@ -303,6 +304,7 @@ export function getDb() {
   // From here on, person ids only.
   // After the person-id rebuild, which lists the ticket columns by hand and would drop a newer one.
   ensureTicketLink(database)
+  ensureTicketCoverAttachment(database)
   ensureActorContext(database)
   ensureAuditLog(database)
   // Before `personIndexes` below, which puts `idx_users_kind` back after the table rebuild.
@@ -669,6 +671,16 @@ export function ensureTicketBuildNumber(db: Database.Database) {
   const hasBuildNumber = tableColumns(db, 'tickets').has('build_number')
   if (!hasBuildNumber) db.exec('ALTER TABLE tickets ADD COLUMN build_number TEXT')
   return !hasBuildNumber
+}
+
+/**
+ * The image a ticket's card shows, picked by a person. No foreign key: a pick that names a
+ * deleted attachment simply reads as no pick. After the rebuilds, like the link.
+ */
+export function ensureTicketCoverAttachment(db: Database.Database) {
+  const hasCover = tableColumns(db, 'tickets').has('cover_attachment_id')
+  if (!hasCover) db.exec('ALTER TABLE tickets ADD COLUMN cover_attachment_id TEXT')
+  return !hasCover
 }
 
 /** An optional reference elsewhere on every ticket. After the rebuilds that list columns by hand. */
@@ -1847,7 +1859,7 @@ type LaneRow = { id: string; board_id: string; name: string; position: number; i
 
 type TicketRow = {
   id: string; ticket_number: number; board_id: string; lane_id: string; title: string; description: string
-  position: number; priority: TicketPriority; due_date: string | null; build_number: string | null; link: string | null
+  position: number; priority: TicketPriority; due_date: string | null; build_number: string | null; link: string | null; cover_attachment_id: string | null
   source: TicketSource; external_id: string | null; created_at: string; updated_at: string; archived_at: string | null
   category_id: string | null; author_id: string | null; assignee_id: string | null; type_id: string | null
 }
@@ -2654,6 +2666,8 @@ function hydrateTicket(row: TicketRow): Ticket {
     dueDate: row.due_date,
     buildNumber: row.build_number || feedback?.buildVersion || null,
     link: row.link ?? null,
+    // A pick whose attachment is gone, or is no picture, counts as none.
+    coverAttachmentId: attachments.some(item => item.id === row.cover_attachment_id && item.mimeType.startsWith('image/')) ? row.cover_attachment_id : null,
     source: row.source,
     externalId: row.external_id,
     createdAt: row.created_at,
@@ -2937,6 +2951,8 @@ export interface TicketInput {
   dueDate?: string | null
   buildNumber?: string | null
   link?: string | null
+  /** One of the ticket's own image attachments, checked by the caller; only `updateTicket` reads it. */
+  coverAttachmentId?: string | null
   labels?: string[]
   laneId?: string
   categoryName?: string | null
@@ -3021,6 +3037,7 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
       now,
       id
     )
+    if (input.coverAttachmentId !== undefined) getDb().prepare('UPDATE tickets SET cover_attachment_id = ? WHERE id = ?').run(input.coverAttachmentId, id)
     if (input.labels) setTicketLabels(id, existing.boardId, input.labels)
     if (input.todos !== undefined) setTicketTodos(id, input.todos)
     if (priority !== existing.priority) recordActivity(id, actor, 'priority', { from: existing.priority, to: priority })
