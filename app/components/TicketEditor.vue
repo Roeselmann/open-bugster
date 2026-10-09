@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, CircleAlert, Download, ExternalLink, FileText, GripVertical, Image, Link as LinkIcon, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Shapes, SquareKanban, Star, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, CircleAlert, Download, ExternalLink, FileText, GripVertical, Link as LinkIcon, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Shapes, SquareKanban, Star, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogContent,
   DialogDescription,
@@ -568,7 +568,7 @@ function focusTitle(event: Event) {
       <DialogContent
         data-ticket-editor-scroll
         class="ui-dialog-content fixed inset-y-0 right-0 z-[51] h-full w-full overflow-y-auto bg-[var(--panel)] shadow-2xl outline-none transition-[max-width] duration-200 ease-out"
-        :class="commentsOpen ? 'max-w-xl lg:max-w-5xl' : 'max-w-xl'"
+        :class="commentsOpen ? 'max-w-[46rem] lg:max-w-6xl' : 'max-w-[46rem]'"
         @open-auto-focus="focusTitle"
       >
         <VisuallyHidden>
@@ -619,7 +619,7 @@ function focusTitle(event: Event) {
             <button type="button" class="focus-ring grid size-10 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]" aria-label="Close" @click="requestClose"><X :size="20" /></button>
           </header>
 
-          <div class="flex-1" :class="commentsOpen ? 'lg:grid lg:grid-cols-2 lg:items-start' : ''">
+          <div class="flex-1 sm:grid sm:grid-cols-[minmax(0,1fr)_150px] sm:items-start" :class="commentsOpen ? 'lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_150px]' : ''">
           <div class="space-y-6 px-5 py-6 sm:px-7">
             <!-- The transfer, folded out by the header button: destination board and lane, then one deliberate button. -->
             <div v-if="ticket && targetBoard" class="surface-strong rounded-xl p-3">
@@ -895,70 +895,6 @@ function focusTitle(event: Event) {
               <span class="muted mt-1.5 block text-[11px]">{{ isEdit ? 'New names are created right away' : 'New names are created when the ticket is created' }} · a label no ticket uses any more is removed.</span>
             </div>
 
-            <section v-if="ticket?.attachments.length" class="space-y-3">
-              <h3 class="text-xs font-bold uppercase tracking-[.08em]">Existing attachments</h3>
-              <div v-for="attachment in ticket.attachments" :key="attachment.id">
-                <div v-if="attachment.mimeType.startsWith('image/')" class="surface-strong overflow-hidden rounded-2xl">
-                  <button type="button" class="focus-ring group block w-full" @click="lightboxId = attachment.id">
-                    <img :src="attachment.url" :alt="attachment.filename" class="max-h-72 w-full bg-black/5 object-contain transition group-hover:scale-[1.01]">
-                  </button>
-                  <div class="flex items-center gap-2 px-3 py-2 text-xs font-semibold">
-                    <Image :size="14" /> <span class="min-w-0 truncate">{{ attachment.filename }}</span>
-                    <span class="muted ml-auto shrink-0">{{ formatSize(attachment.size) }}</span>
-                    <!-- With a single picture there is nothing to choose between. -->
-                    <button
-                      v-if="imageAttachments.length > 1 && (canEdit || cardImageId === attachment.id)"
-                      type="button"
-                      class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg disabled:cursor-default"
-                      :class="cardImageId === attachment.id ? 'text-[var(--accent)]' : 'muted hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]'"
-                      :disabled="!canEdit || cardImageId === attachment.id"
-                      :aria-pressed="cardImageId === attachment.id"
-                      :aria-label="cardImageId === attachment.id ? `${attachment.filename} is shown on the card` : `Show ${attachment.filename} on the card`"
-                      :title="cardImageId === attachment.id ? 'Shown on the card' : 'Show on the card'"
-                      @click="commit({ coverAttachmentId: attachment.id })"
-                    ><Star :size="15" :fill="cardImageId === attachment.id ? 'currentColor' : 'none'" /></button>
-                    <a :href="attachment.url" :download="attachment.filename" class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg hover:bg-[var(--accent-soft)]" :aria-label="`Download ${attachment.filename}`"><Download :size="15" /></a>
-                    <button v-if="canEdit" type="button" class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10 disabled:opacity-40" :disabled="deletingAttachmentId === attachment.id" :aria-label="`Delete ${attachment.filename}`" @click="emit('removeAttachment', attachment)"><Trash2 :size="15" /></button>
-                  </div>
-                </div>
-                <div v-else class="surface-strong flex items-center gap-3 rounded-xl p-3 text-sm font-semibold">
-                  <FileText :size="17" class="muted shrink-0" />
-                  <a :href="attachment.url" target="_blank" class="focus-ring min-w-0 flex-1 truncate rounded-lg hover:text-[var(--accent)]">{{ attachment.filename }}</a>
-                  <span class="muted shrink-0 text-xs">{{ formatSize(attachment.size) }}</span>
-                  <a :href="attachment.url" class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg hover:bg-[var(--accent-soft)]" :aria-label="`Download ${attachment.filename}`"><Download :size="15" /></a>
-                  <button v-if="canEdit" type="button" class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10 disabled:opacity-40" :disabled="deletingAttachmentId === attachment.id" :aria-label="`Delete ${attachment.filename}`" @click="emit('removeAttachment', attachment)"><Trash2 :size="15" /></button>
-                </div>
-              </div>
-            </section>
-
-            <section class="space-y-3">
-              <h3 class="flex items-center gap-2 text-xs font-bold uppercase tracking-[.08em]"><Paperclip :size="15" /> Add attachments</h3>
-              <input ref="fileInput" type="file" multiple class="sr-only" accept=".jpg,.jpeg,.png,.gif,.webp,.heic,.pdf,.txt,.log,.csv,.json,.doc,.docx,.xls,.xlsx,.ppt,.pptx" @change="chooseFiles">
-              <button
-                type="button"
-                class="focus-ring surface-strong flex w-full flex-col items-center justify-center rounded-2xl border-dashed px-5 py-7 text-center transition duration-150"
-                :class="dragActive ? 'scale-[1.01] border-[var(--accent)] bg-[var(--accent-soft)] ring-2 ring-[color-mix(in_srgb,var(--accent)_35%,transparent)]' : 'hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]'"
-                @click="fileInput?.click()"
-                @dragenter.prevent="dragActive = true"
-                @dragleave.prevent="dragActive = false"
-                @dragover.prevent="dragActive = true"
-                @drop.prevent="dropFiles"
-              >
-                <Upload :size="22" class="pointer-events-none mb-2 transition-colors" :class="dragActive ? 'text-[var(--accent)]' : 'muted'" />
-                <span class="pointer-events-none text-sm font-semibold">{{ dragActive ? 'Drop files here' : 'Select files or drop them here' }}</span>
-                <span class="muted pointer-events-none mt-1 text-[11px]">Images and documents · max. 25 MB per file</span>
-              </button>
-              <p v-if="fileError" class="text-xs font-semibold text-rose-600" role="alert">{{ fileError }}</p>
-              <div v-if="pendingFiles.length" class="space-y-2">
-                <div v-for="(file, fileIndex) in pendingFiles" :key="`${file.name}-${file.size}-${file.lastModified}`" class="surface-strong flex items-center gap-3 rounded-xl p-3 text-sm">
-                  <FileText :size="17" class="muted shrink-0" />
-                  <span class="min-w-0 flex-1 truncate font-semibold">{{ file.name }}</span>
-                  <span class="muted shrink-0 text-xs">{{ formatSize(file.size) }}</span>
-                  <button type="button" class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10" :aria-label="`Remove ${file.name}`" @click="pendingFiles.splice(fileIndex, 1)"><X :size="15" /></button>
-                </div>
-              </div>
-            </section>
-
             <section v-if="ticket?.feedback" class="rounded-2xl bg-[var(--accent-soft)] p-4 sm:p-5">
               <div class="mb-4 flex items-center gap-2 text-sm font-bold"><TestTubeDiagonal :size="17" /> TestFlight metadata</div>
               <dl class="grid grid-cols-2 gap-x-5 gap-y-4 text-xs">
@@ -1006,10 +942,70 @@ function focusTitle(event: Event) {
             <TicketActivity v-if="ticket" :ticket-id="ticket.id" :refresh-key="commentRefreshKey" />
           </div>
 
+          <!-- Attachments ride as a narrow column at the far right, past the comments when those are open; on a phone they follow the fields. -->
+          <aside :class="commentsOpen ? 'lg:order-last' : ''" class="space-y-3 border-t border-[var(--line)] px-5 py-6 sm:sticky sm:top-[4.5rem] sm:max-h-[calc(100dvh-9rem)] sm:overflow-y-auto sm:border-l sm:border-t-0 sm:px-3 scrollbar-thin">
+            <h3 class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Paperclip :size="14" /> Files</h3>
+            <template v-if="canEdit">
+              <input ref="fileInput" type="file" multiple class="sr-only" accept=".jpg,.jpeg,.png,.gif,.webp,.heic,.pdf,.txt,.log,.csv,.json,.doc,.docx,.xls,.xlsx,.ppt,.pptx" @change="chooseFiles">
+              <button
+                type="button"
+                class="focus-ring surface-strong flex w-full flex-col items-center justify-center rounded-xl border-dashed px-2 py-4 text-center transition duration-150"
+                :class="dragActive ? 'border-[var(--accent)] bg-[var(--accent-soft)] ring-2 ring-[color-mix(in_srgb,var(--accent)_35%,transparent)]' : 'hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]'"
+                title="Images and documents · max. 25 MB per file"
+                @click="fileInput?.click()"
+                @dragenter.prevent="dragActive = true"
+                @dragleave.prevent="dragActive = false"
+                @dragover.prevent="dragActive = true"
+                @drop.prevent="dropFiles"
+              >
+                <Upload :size="18" class="pointer-events-none mb-1.5 transition-colors" :class="dragActive ? 'text-[var(--accent)]' : 'muted'" />
+                <span class="pointer-events-none text-xs font-semibold">{{ dragActive ? 'Drop here' : 'Add or drop files' }}</span>
+                <span class="muted pointer-events-none mt-0.5 text-[10px]">max. 25 MB each</span>
+              </button>
+            </template>
+            <p v-if="fileError" class="text-xs font-semibold text-rose-600" role="alert">{{ fileError }}</p>
+            <p v-if="!canEdit && !ticket?.attachments.length" class="muted text-xs">No files.</p>
+            <div v-if="pendingFiles.length || ticket?.attachments.length" class="grid grid-cols-2 gap-2 sm:grid-cols-1">
+              <div v-for="(file, fileIndex) in pendingFiles" :key="`${file.name}-${file.size}-${file.lastModified}`" class="surface-strong min-w-0 rounded-xl p-2 text-xs">
+                <div class="flex items-center gap-1.5 font-semibold" :title="file.name"><FileText :size="14" class="muted shrink-0" /> <span class="min-w-0 truncate">{{ file.name }}</span></div>
+                <div class="mt-1 flex items-center">
+                  <span class="muted text-[10px]">{{ formatSize(file.size) }}</span>
+                  <button type="button" class="focus-ring ml-auto grid size-7 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10" :aria-label="`Remove ${file.name}`" @click="pendingFiles.splice(fileIndex, 1)"><X :size="14" /></button>
+                </div>
+              </div>
+              <div v-for="attachment in ticket?.attachments" :key="attachment.id" class="surface-strong min-w-0 overflow-hidden rounded-xl text-xs">
+                <button v-if="attachment.mimeType.startsWith('image/')" type="button" class="focus-ring group block w-full" :aria-label="`Open ${attachment.filename}`" @click="lightboxId = attachment.id">
+                  <img :src="attachment.url" :alt="attachment.filename" class="h-24 w-full bg-black/5 object-contain transition group-hover:scale-[1.03]" loading="lazy">
+                </button>
+                <div class="px-2 pb-1 pt-2">
+                  <a v-if="!attachment.mimeType.startsWith('image/')" :href="attachment.url" target="_blank" class="focus-ring flex items-center gap-1.5 rounded font-semibold hover:text-[var(--accent)]" :title="attachment.filename"><FileText :size="14" class="muted shrink-0" /> <span class="min-w-0 truncate">{{ attachment.filename }}</span></a>
+                  <div v-else class="truncate font-semibold" :title="attachment.filename">{{ attachment.filename }}</div>
+                  <div class="mt-0.5 flex items-center">
+                    <span class="muted mr-auto text-[10px]">{{ formatSize(attachment.size) }}</span>
+                    <!-- With a single picture there is nothing to choose between. -->
+                    <button
+                      v-if="attachment.mimeType.startsWith('image/') && imageAttachments.length > 1 && (canEdit || cardImageId === attachment.id)"
+                      type="button"
+                      class="focus-ring grid size-7 shrink-0 place-items-center rounded-lg disabled:cursor-default"
+                      :class="cardImageId === attachment.id ? 'text-[var(--accent)]' : 'muted hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]'"
+                      :disabled="!canEdit || cardImageId === attachment.id"
+                      :aria-pressed="cardImageId === attachment.id"
+                      :aria-label="cardImageId === attachment.id ? `${attachment.filename} is shown on the card` : `Show ${attachment.filename} on the card`"
+                      :title="cardImageId === attachment.id ? 'Shown on the card' : 'Show on the card'"
+                      @click="commit({ coverAttachmentId: attachment.id })"
+                    ><Star :size="14" :fill="cardImageId === attachment.id ? 'currentColor' : 'none'" /></button>
+                    <a :href="attachment.url" :download="attachment.filename" class="focus-ring grid size-7 shrink-0 place-items-center rounded-lg hover:bg-[var(--accent-soft)]" :aria-label="`Download ${attachment.filename}`" title="Download"><Download :size="14" /></a>
+                    <button v-if="canEdit" type="button" class="focus-ring grid size-7 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10 disabled:opacity-40" :disabled="deletingAttachmentId === attachment.id" :aria-label="`Delete ${attachment.filename}`" title="Delete" @click="emit('removeAttachment', attachment)"><Trash2 :size="14" /></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </aside>
+
           <!-- The thread lives on the saved ticket, so a brand-new one gets it after the first save. -->
           <aside
             v-if="ticket && commentsOpen"
-            class="border-t border-[var(--line)] px-5 py-6 sm:px-7 lg:sticky lg:top-[4.5rem] lg:border-l lg:border-t-0"
+            class="border-t border-[var(--line)] px-5 py-6 sm:col-span-2 sm:px-7 lg:sticky lg:top-[4.5rem] lg:col-span-1 lg:border-l lg:border-t-0"
           >
             <TicketComments
               :ticket-id="ticket.id"
