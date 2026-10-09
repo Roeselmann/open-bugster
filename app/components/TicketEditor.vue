@@ -158,9 +158,36 @@ const commentsOpen = ref(false)
 // Closing only hides the column: a comment half written is still there when it comes back.
 const commentsMounted = ref(false)
 
+/**
+ * Opening or closing the column is a choice for every ticket, kept in this browser. Until
+ * somebody has made it, the rule above decides ticket by ticket.
+ */
+const COMMENTS_PREFERENCE_KEY = 'open-bugster-ticket-comments'
+function commentsPreference(): boolean | null {
+  try {
+    const stored = localStorage.getItem(COMMENTS_PREFERENCE_KEY)
+    return stored === 'open' ? true : stored === 'closed' ? false : null
+  } catch {
+    return null
+  }
+}
+function rememberComments(open: boolean) {
+  try {
+    localStorage.setItem(COMMENTS_PREFERENCE_KEY, open ? 'open' : 'closed')
+  } catch {
+    // Private mode or a full store: the column still works, it just forgets.
+  }
+}
+
+function closeComments() {
+  commentsOpen.value = false
+  rememberComments(false)
+}
+
 function openComments() {
   commentsOpen.value = true
   commentsMounted.value = true
+  rememberComments(true)
   nextTick(() => document.querySelector<HTMLTextAreaElement>('[data-comment-input]')?.focus())
 }
 
@@ -235,7 +262,7 @@ watch(() => props.ticket, (ticket, previous) => {
   form.link = ticket?.link || ''
   form.assigneeId = ticket?.assignee?.id || UNASSIGNED
   form.authorId = ticket?.author?.id || UNASSIGNED
-  if (!sameTicket) commentsOpen.value = commentsMounted.value = (ticket?.commentCount || 0) > 0
+  if (!sameTicket) commentsOpen.value = commentsMounted.value = Boolean(ticket) && (commentsPreference() ?? (ticket?.commentCount || 0) > 0)
   form.labels = ticket?.labels.map(label => label.name) || []
   form.categoryName = ticket?.category?.name || ''
   categoryInFlight = undefined
@@ -1011,7 +1038,7 @@ function focusTitle(event: Event) {
             v-show="commentsOpen"
             class="relative border-t border-[var(--line)] px-5 py-6 scrollbar-thin sm:col-span-2 sm:px-7 lg:sticky lg:top-[4.5rem] lg:col-span-1 lg:max-h-[calc(100dvh-9rem)] lg:overflow-y-auto lg:border-l lg:border-t-0"
           >
-            <button type="button" class="focus-ring muted absolute right-4 top-4 grid size-8 place-items-center rounded-lg hover:bg-[var(--panel-strong)] hover:text-[var(--ink)] sm:right-6" aria-label="Hide comments" title="Hide comments" @click="commentsOpen = false"><X :size="16" /></button>
+            <button type="button" class="focus-ring muted absolute right-4 top-4 grid size-8 place-items-center rounded-lg hover:bg-[var(--panel-strong)] hover:text-[var(--ink)] sm:right-6" aria-label="Hide comments" title="Hide comments" @click="closeComments"><X :size="16" /></button>
             <TicketComments
               :ticket-id="ticket.id"
               :can-moderate="canModerate"
