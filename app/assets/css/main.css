@@ -43,6 +43,13 @@ body {
   button { cursor: pointer; }
 }
 
+/* iOS zooms the page into any field whose text is under 16px and stays zoomed after the
+   field loses focus, which leaves the layout wider than the screen. Unlayered on purpose,
+   so it beats the `text-sm` on the fields; the @supports matches iOS and iPadOS only. */
+@supports (-webkit-touch-callout: none) {
+  input, textarea, select { font-size: 16px; }
+}
+
 ::selection { background: var(--accent-soft); color: var(--ink); }
 
 .surface { background: var(--panel); border: 1px solid var(--line); }
