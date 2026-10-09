@@ -2,6 +2,7 @@
 import { Check, RefreshCcw, Search, Settings2, X } from '@lucide/vue'
 import type { Attachment, CategorySummary, IntegrationProvider, LabelSummary, SyncRun, Ticket, TicketPatch, TicketTodoInput, TicketTypeSummary } from '~~/shared/types/domain'
 import { PROVIDER_LABELS } from '~~/shared/utils/ticket-source'
+import { ticketNumberList } from '~~/shared/utils/ticket-search'
 import { TICKET_TYPES_KEY } from '~/utils/ticketTypes'
 
 type PendingConfirmation =
@@ -180,6 +181,8 @@ const confirmationCopy = computed(() => {
 
 const filteredTickets = computed(() => {
   const term = query.value.trim().toLocaleLowerCase('en')
+  // Several numbers at once ("12, 15" or "#12 #15") name exactly those tickets.
+  const numbers = ticketNumberList(term)
   return tickets.value.filter((ticket) => {
     const matchesCategory = categoryFilter.value === 'all'
       || (categoryFilter.value === 'uncategorized' ? !ticket.category : ticket.category?.id === categoryFilter.value)
@@ -192,7 +195,7 @@ const filteredTickets = computed(() => {
     const matchesAssignee = assigneeFilter.value === 'all'
       || (assigneeFilter.value === 'unassigned' && !assignee)
       || (assigneeFilter.value === 'mine' ? assignee === ownId.value : assignee === assigneeFilter.value)
-    const matchesText = !term || [
+    const matchesText = !term || numbers?.includes(ticket.ticketNumber) || [
       ticket.title,
       ticket.description,
       ticket.feedback?.comment || '',
