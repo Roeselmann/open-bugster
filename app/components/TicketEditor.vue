@@ -155,9 +155,12 @@ const commentRefreshKey = ref(0)
  * the ticket, so the column is already open on the first paint rather than appearing late.
  */
 const commentsOpen = ref(false)
+// Closing only hides the column: a comment half written is still there when it comes back.
+const commentsMounted = ref(false)
 
 function openComments() {
   commentsOpen.value = true
+  commentsMounted.value = true
   nextTick(() => document.querySelector<HTMLTextAreaElement>('[data-comment-input]')?.focus())
 }
 
@@ -232,7 +235,7 @@ watch(() => props.ticket, (ticket, previous) => {
   form.link = ticket?.link || ''
   form.assigneeId = ticket?.assignee?.id || UNASSIGNED
   form.authorId = ticket?.author?.id || UNASSIGNED
-  if (!sameTicket) commentsOpen.value = (ticket?.commentCount || 0) > 0
+  if (!sameTicket) commentsOpen.value = commentsMounted.value = (ticket?.commentCount || 0) > 0
   form.labels = ticket?.labels.map(label => label.name) || []
   form.categoryName = ticket?.category?.name || ''
   categoryInFlight = undefined
@@ -762,7 +765,7 @@ function focusTitle(event: Event) {
               </div>
               <div class="flex flex-wrap gap-2">
                 <button type="button" :disabled="todos.length >= 100" class="focus-ring flex h-10 items-center gap-2 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50" @click="addTodo()"><Plus :size="16" /> Add to-do</button>
-                <button v-if="ticket && !commentsOpen" type="button" class="focus-ring flex h-10 items-center gap-2 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]" @click="openComments"><MessageSquare :size="16" /> Add comment</button>
+                <button v-if="ticket && !commentsOpen" type="button" class="focus-ring flex h-10 items-center gap-2 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]" @click="openComments"><MessageSquare :size="16" /> {{ ticket.commentCount ? 'Show comments' : 'Add comment' }} <span v-if="ticket.commentCount" class="muted tabular-nums">{{ ticket.commentCount }}</span></button>
               </div>
             </section>
 
@@ -1004,9 +1007,11 @@ function focusTitle(event: Event) {
 
           <!-- The thread lives on the saved ticket, so a brand-new one gets it after the first save. -->
           <aside
-            v-if="ticket && commentsOpen"
-            class="border-t border-[var(--line)] px-5 py-6 scrollbar-thin sm:col-span-2 sm:px-7 lg:sticky lg:top-[4.5rem] lg:col-span-1 lg:max-h-[calc(100dvh-9rem)] lg:overflow-y-auto lg:border-l lg:border-t-0"
+            v-if="ticket && commentsMounted"
+            v-show="commentsOpen"
+            class="relative border-t border-[var(--line)] px-5 py-6 scrollbar-thin sm:col-span-2 sm:px-7 lg:sticky lg:top-[4.5rem] lg:col-span-1 lg:max-h-[calc(100dvh-9rem)] lg:overflow-y-auto lg:border-l lg:border-t-0"
           >
+            <button type="button" class="focus-ring muted absolute right-4 top-4 grid size-8 place-items-center rounded-lg hover:bg-[var(--panel-strong)] hover:text-[var(--ink)] sm:right-6" aria-label="Hide comments" title="Hide comments" @click="commentsOpen = false"><X :size="16" /></button>
             <TicketComments
               :ticket-id="ticket.id"
               :can-moderate="canModerate"
