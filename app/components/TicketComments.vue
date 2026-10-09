@@ -3,7 +3,7 @@ import { Check, MessageSquare, Pencil, Trash2, X } from '@lucide/vue'
 import type { TicketComment } from '~~/shared/types/domain'
 
 const props = defineProps<{ ticketId: string; canModerate?: boolean }>()
-const emit = defineEmits<{ changed: []; notify: [type: 'success' | 'error', text: string] }>()
+const emit = defineEmits<{ /** After a comment was posted or deleted, with how many the thread now holds. */ changed: [count: number]; notify: [type: 'success' | 'error', text: string] }>()
 
 const { user } = useAuth()
 const comments = ref<TicketComment[]>([])
@@ -42,7 +42,7 @@ async function post() {
     await $fetch(`/api/tickets/${props.ticketId}/comments`, { method: 'POST', body: { body } })
     draft.value = ''
     await load()
-    emit('changed')
+    emit('changed', comments.value.length)
   } catch (error) {
     emit('notify', 'error', errorText(error))
   } finally {
@@ -82,7 +82,7 @@ async function confirmDelete() {
     await $fetch(`/api/comments/${comment.id}`, { method: 'DELETE' })
     doomed.value = null
     await load()
-    emit('changed')
+    emit('changed', comments.value.length)
     emit('notify', 'success', 'Comment deleted.')
   } catch (error) {
     emit('notify', 'error', errorText(error))

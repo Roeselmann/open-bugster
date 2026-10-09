@@ -191,7 +191,10 @@ function openComments() {
   nextTick(() => document.querySelector<HTMLTextAreaElement>('[data-comment-input]')?.focus())
 }
 
-function onCommented() {
+// The ticket in hand keeps the count it was opened with, so the thread reports its own.
+const commentCount = ref(0)
+function onCommented(count: number) {
+  commentCount.value = count
   commentRefreshKey.value += 1
   emit('commented')
 }
@@ -262,7 +265,10 @@ watch(() => props.ticket, (ticket, previous) => {
   form.link = ticket?.link || ''
   form.assigneeId = ticket?.assignee?.id || UNASSIGNED
   form.authorId = ticket?.author?.id || UNASSIGNED
-  if (!sameTicket) commentsOpen.value = commentsMounted.value = Boolean(ticket) && (commentsPreference() ?? (ticket?.commentCount || 0) > 0)
+  if (!sameTicket) {
+    commentCount.value = ticket?.commentCount || 0
+    commentsOpen.value = commentsMounted.value = Boolean(ticket) && (commentsPreference() ?? commentCount.value > 0)
+  }
   form.labels = ticket?.labels.map(label => label.name) || []
   form.categoryName = ticket?.category?.name || ''
   categoryInFlight = undefined
@@ -792,7 +798,7 @@ function focusTitle(event: Event) {
               </div>
               <div class="flex flex-wrap gap-2">
                 <button type="button" :disabled="todos.length >= 100" class="focus-ring flex h-10 items-center gap-2 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50" @click="addTodo()"><Plus :size="16" /> Add to-do</button>
-                <button v-if="ticket && !commentsOpen" type="button" class="focus-ring flex h-10 items-center gap-2 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]" @click="openComments"><MessageSquare :size="16" /> {{ ticket.commentCount ? 'Show comments' : 'Add comment' }} <span v-if="ticket.commentCount" class="muted tabular-nums">{{ ticket.commentCount }}</span></button>
+                <button v-if="ticket && !commentsOpen" type="button" class="focus-ring flex h-10 items-center gap-2 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]" @click="openComments"><MessageSquare :size="16" /> {{ commentCount ? 'Show comments' : 'Add comment' }} <span v-if="commentCount" class="muted tabular-nums">{{ commentCount }}</span></button>
               </div>
             </section>
 
