@@ -1005,7 +1005,7 @@ function focusTitle(event: Event) {
           <!-- The thread lives on the saved ticket, so a brand-new one gets it after the first save. -->
           <aside
             v-if="ticket && commentsOpen"
-            class="border-t border-[var(--line)] px-5 py-6 sm:col-span-2 sm:px-7 lg:sticky lg:top-[4.5rem] lg:col-span-1 lg:border-l lg:border-t-0"
+            class="border-t border-[var(--line)] px-5 py-6 scrollbar-thin sm:col-span-2 sm:px-7 lg:sticky lg:top-[4.5rem] lg:col-span-1 lg:max-h-[calc(100dvh-9rem)] lg:overflow-y-auto lg:border-l lg:border-t-0"
           >
             <TicketComments
               :ticket-id="ticket.id"
