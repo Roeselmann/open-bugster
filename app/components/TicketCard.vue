@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowDownToLine, ArrowUpToLine, CalendarClock, Check, ChevronDown, ChevronUp, Image, Link as LinkIcon, ListTodo, MessageSquare, SquareKanban, Tag, TestTubeDiagonal, TriangleAlert, UserRound } from '@lucide/vue'
+import { ArrowDownToLine, ArrowUpToLine, CalendarClock, Check, ChevronDown, ChevronUp, Image, Link as LinkIcon, ListTodo, MessageSquare, Paperclip, SquareKanban, Tag, TestTubeDiagonal, TriangleAlert, UserRound } from '@lucide/vue'
 import type { Lane, Ticket } from '~~/shared/types/domain'
 import { CATEGORY_TONE_CLASSES } from '~~/shared/utils/constants'
 
@@ -13,12 +13,36 @@ const props = withDefaults(defineProps<{
   laneCount?: number
   /** Off on the phone, where a finger would rather scroll than drag and the buttons reorder instead. */
   draggable?: boolean
-}>(), { laneCount: 0, draggable: true })
+  /** Whether files dragged in from the desktop may be dropped on the card as attachments. */
+  droppable?: boolean
+}>(), { laneCount: 0, draggable: true, droppable: false })
 const emit = defineEmits<{
   open: [ticket: Ticket]
   move: [laneId: string]
   reorder: [placement: 'top' | 'up' | 'down' | 'bottom']
+  dropFiles: [files: File[]]
 }>()
+
+// Files from the desktop arrive as a native drag; moving cards runs on pointer events, so the two never meet.
+const dropActive = ref(false)
+const carriesFiles = (event: DragEvent) => props.droppable && !props.preview && Boolean(event.dataTransfer?.types.includes('Files'))
+function fileDragOver(event: DragEvent) {
+  if (!carriesFiles(event)) return
+  event.preventDefault()
+  event.dataTransfer!.dropEffect = 'copy'
+  dropActive.value = true
+}
+function fileDragLeave(event: DragEvent) {
+  // Crossing onto a child of the card fires a leave as well; only the way out counts.
+  if (!(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node | null)) dropActive.value = false
+}
+function fileDrop(event: DragEvent) {
+  if (!carriesFiles(event)) return
+  event.preventDefault()
+  dropActive.value = false
+  const files = Array.from(event.dataTransfer!.files)
+  if (files.length) emit('dropFiles', files)
+}
 
 const dateFormatter = new Intl.DateTimeFormat('en', {
   day: '2-digit',
@@ -76,7 +100,12 @@ const reorderButtons = computed(() => [
       preview
         ? 'scale-[.99] cursor-grabbing opacity-[.96] shadow-[0_18px_45px_rgba(0,0,0,.18),0_3px_12px_rgba(0,0,0,.12)]'
         : 'hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/10',
+      dropActive ? 'ring-2 ring-[var(--accent)]' : '',
     ]"
+    @dragenter="fileDragOver"
+    @dragover="fileDragOver"
+    @dragleave="fileDragLeave"
+    @drop="fileDrop"
   >
     <button class="focus-ring block w-full text-left" :tabindex="preview ? -1 : undefined" @click="!preview && emit('open', ticket)">
       <!--
@@ -190,5 +219,8 @@ const reorderButtons = computed(() => [
       </div>
     </div>
 
+    <div v-if="dropActive" class="pointer-events-none absolute inset-0 grid place-items-center bg-[color-mix(in_srgb,var(--accent-soft)_88%,transparent)] text-sm font-semibold text-[var(--accent)]">
+      <span class="flex items-center gap-2"><Paperclip :size="16" /> Drop to attach</span>
+    </div>
   </article>
 </template>

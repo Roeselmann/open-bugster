@@ -483,6 +483,20 @@ async function uploadAttachmentsFromEditor(ticket: Ticket, files: File[]) {
   }
 }
 
+// Files dropped on a card on the board: there is no editor to show progress, so a toast reports the outcome.
+async function uploadAttachmentsFromCard(ticket: Ticket, files: File[]) {
+  // The server enforces the same limits; checking here spares the upload that would be refused.
+  if (files.length > 10) return notify('error', 'A maximum of 10 files is allowed per upload.')
+  if (files.some(file => file.size > 25 * 1024 * 1024)) return notify('error', 'One file is larger than 25 MB.')
+  if (files.reduce((sum, file) => sum + file.size, 0) > 100 * 1024 * 1024) return notify('error', 'The total upload is larger than 100 MB.')
+  try {
+    await uploadAttachments(ticket, files)
+    notify('success', `${files.length === 1 ? `“${files[0]!.name}”` : `${files.length} files`} attached to #${ticket.ticketNumber}.`)
+  } catch (error) {
+    notify('error', errorText(error))
+  }
+}
+
 // How many tickets share the open ticket's lane; the editor greys out a reorder that would change nothing.
 const selectedLaneTicketCount = computed(() => selected.value ? tickets.value.filter(item => item.laneId === selected.value!.laneId).length : 0)
 
@@ -614,10 +628,10 @@ async function sync(provider: IntegrationProvider) {
       </div>
       <!-- The server renders the desktop board; the phone view takes over once the viewport is known. -->
       <div v-else-if="isMobile" class="md:hidden" @touchstart.passive="beginSwipe" @touchend.passive="endSwipe">
-        <KanbanBoard v-if="selectedLaneId" :board-id="board.id" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" :lane-id="selectedLaneId" @open="openTicket" @move="moveTicket" @create="newTicket" />
+        <KanbanBoard v-if="selectedLaneId" :board-id="board.id" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" :lane-id="selectedLaneId" @open="openTicket" @move="moveTicket" @create="newTicket" @upload="uploadAttachmentsFromCard" />
         <p v-else class="muted py-16 text-center text-sm">This board has no lanes yet.</p>
       </div>
-      <div v-else class="scrollbar-thin overflow-x-auto max-md:hidden"><KanbanBoard :board-id="board.id" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" @open="openTicket" @move="moveTicket" @create="newTicket" /></div>
+      <div v-else class="scrollbar-thin overflow-x-auto max-md:hidden"><KanbanBoard :board-id="board.id" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" @open="openTicket" @move="moveTicket" @create="newTicket" @upload="uploadAttachmentsFromCard" /></div>
     </main>
 
     <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :save-state="saveState" :deleting-attachment-id="deletingAttachmentId" :initial-lane-id="newTicketLaneId" :initial-placement="newTicketPlacement" :lane-ticket-count="selectedLaneTicketCount" :boards="transferableBoards" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @reorder="reorderTicketFromEditor" @transfer="transferTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @save-description="saveDescriptionFromEditor" @save-title="saveTitleFromEditor" @patch="patchTicketFromEditor" @upload="uploadAttachmentsFromEditor" @commented="refresh()" @notify="notify" />
