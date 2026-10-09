@@ -568,7 +568,7 @@ function focusTitle(event: Event) {
       <DialogContent
         data-ticket-editor-scroll
         class="ui-dialog-content fixed inset-y-0 right-0 z-[51] h-full w-full overflow-y-auto bg-[var(--panel)] shadow-2xl outline-none transition-[max-width] duration-200 ease-out"
-        :class="commentsOpen ? 'max-w-[46rem] lg:max-w-6xl' : 'max-w-[46rem]'"
+        :class="commentsOpen ? 'max-w-[52rem] lg:max-w-[78rem]' : 'max-w-[52rem]'"
         @open-auto-focus="focusTitle"
       >
         <VisuallyHidden>
@@ -619,7 +619,7 @@ function focusTitle(event: Event) {
             <button type="button" class="focus-ring grid size-10 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]" aria-label="Close" @click="requestClose"><X :size="20" /></button>
           </header>
 
-          <div class="flex-1 sm:grid sm:grid-cols-[minmax(0,1fr)_150px] sm:items-start" :class="commentsOpen ? 'lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_150px]' : ''">
+          <div class="flex-1 sm:grid sm:grid-cols-[minmax(0,1fr)_240px] sm:items-start" :class="commentsOpen ? 'lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_240px]' : ''">
           <div class="space-y-6 px-5 py-6 sm:px-7">
             <!-- The transfer, folded out by the header button: destination board and lane, then one deliberate button. -->
             <div v-if="ticket && targetBoard" class="surface-strong rounded-xl p-3">
@@ -945,25 +945,6 @@ function focusTitle(event: Event) {
           <!-- Attachments ride as a narrow column at the far right, past the comments when those are open; on a phone they follow the fields. -->
           <aside :class="commentsOpen ? 'lg:order-last' : ''" class="space-y-3 border-t border-[var(--line)] px-5 py-6 sm:sticky sm:top-[4.5rem] sm:max-h-[calc(100dvh-9rem)] sm:overflow-y-auto sm:border-l sm:border-t-0 sm:px-3 scrollbar-thin">
             <h3 class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Paperclip :size="14" /> Files</h3>
-            <template v-if="canEdit">
-              <input ref="fileInput" type="file" multiple class="sr-only" accept=".jpg,.jpeg,.png,.gif,.webp,.heic,.pdf,.txt,.log,.csv,.json,.doc,.docx,.xls,.xlsx,.ppt,.pptx" @change="chooseFiles">
-              <button
-                type="button"
-                class="focus-ring surface-strong flex w-full flex-col items-center justify-center rounded-xl border-dashed px-2 py-4 text-center transition duration-150"
-                :class="dragActive ? 'border-[var(--accent)] bg-[var(--accent-soft)] ring-2 ring-[color-mix(in_srgb,var(--accent)_35%,transparent)]' : 'hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]'"
-                title="Images and documents · max. 25 MB per file"
-                @click="fileInput?.click()"
-                @dragenter.prevent="dragActive = true"
-                @dragleave.prevent="dragActive = false"
-                @dragover.prevent="dragActive = true"
-                @drop.prevent="dropFiles"
-              >
-                <Upload :size="18" class="pointer-events-none mb-1.5 transition-colors" :class="dragActive ? 'text-[var(--accent)]' : 'muted'" />
-                <span class="pointer-events-none text-xs font-semibold">{{ dragActive ? 'Drop here' : 'Add or drop files' }}</span>
-                <span class="muted pointer-events-none mt-0.5 text-[10px]">max. 25 MB each</span>
-              </button>
-            </template>
-            <p v-if="fileError" class="text-xs font-semibold text-rose-600" role="alert">{{ fileError }}</p>
             <p v-if="!canEdit && !ticket?.attachments.length" class="muted text-xs">No files.</p>
             <div v-if="pendingFiles.length || ticket?.attachments.length" class="grid grid-cols-2 gap-2 sm:grid-cols-1">
               <div v-for="(file, fileIndex) in pendingFiles" :key="`${file.name}-${file.size}-${file.lastModified}`" class="surface-strong min-w-0 rounded-xl p-2 text-xs">
@@ -975,7 +956,7 @@ function focusTitle(event: Event) {
               </div>
               <div v-for="attachment in ticket?.attachments" :key="attachment.id" class="surface-strong min-w-0 overflow-hidden rounded-xl text-xs">
                 <button v-if="attachment.mimeType.startsWith('image/')" type="button" class="focus-ring group block w-full" :aria-label="`Open ${attachment.filename}`" @click="lightboxId = attachment.id">
-                  <img :src="attachment.url" :alt="attachment.filename" class="h-24 w-full bg-black/5 object-contain transition group-hover:scale-[1.03]" loading="lazy">
+                  <img :src="attachment.url" :alt="attachment.filename" class="h-36 w-full bg-black/5 object-contain transition group-hover:scale-[1.03]" loading="lazy">
                 </button>
                 <div class="px-2 pb-1 pt-2">
                   <a v-if="!attachment.mimeType.startsWith('image/')" :href="attachment.url" target="_blank" class="focus-ring flex items-center gap-1.5 rounded font-semibold hover:text-[var(--accent)]" :title="attachment.filename"><FileText :size="14" class="muted shrink-0" /> <span class="min-w-0 truncate">{{ attachment.filename }}</span></a>
@@ -1000,6 +981,25 @@ function focusTitle(event: Event) {
                 </div>
               </div>
             </div>
+            <template v-if="canEdit">
+              <input ref="fileInput" type="file" multiple class="sr-only" accept=".jpg,.jpeg,.png,.gif,.webp,.heic,.pdf,.txt,.log,.csv,.json,.doc,.docx,.xls,.xlsx,.ppt,.pptx" @change="chooseFiles">
+              <button
+                type="button"
+                class="focus-ring surface-strong flex w-full flex-col items-center justify-center rounded-xl border-dashed px-2 py-4 text-center transition duration-150"
+                :class="dragActive ? 'border-[var(--accent)] bg-[var(--accent-soft)] ring-2 ring-[color-mix(in_srgb,var(--accent)_35%,transparent)]' : 'hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]'"
+                title="Images and documents · max. 25 MB per file"
+                @click="fileInput?.click()"
+                @dragenter.prevent="dragActive = true"
+                @dragleave.prevent="dragActive = false"
+                @dragover.prevent="dragActive = true"
+                @drop.prevent="dropFiles"
+              >
+                <Upload :size="18" class="pointer-events-none mb-1.5 transition-colors" :class="dragActive ? 'text-[var(--accent)]' : 'muted'" />
+                <span class="pointer-events-none text-xs font-semibold">{{ dragActive ? 'Drop here' : 'Add or drop files' }}</span>
+                <span class="muted pointer-events-none mt-0.5 text-[10px]">max. 25 MB each</span>
+              </button>
+            </template>
+            <p v-if="fileError" class="text-xs font-semibold text-rose-600" role="alert">{{ fileError }}</p>
           </aside>
 
           <!-- The thread lives on the saved ticket, so a brand-new one gets it after the first save. -->
