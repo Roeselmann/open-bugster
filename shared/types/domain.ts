@@ -405,13 +405,13 @@ export interface JiraIssue {
   sourceUpdatedAt: string | null
 }
 
-/** A ticket whose due date has lit its card, with where it lives — for the header's overview. */
+/** A ticket with a due date and where it lives — for the header's overview. `none` is not lit yet. */
 export interface DueTicket {
   id: string
   ticketNumber: number
   title: string
   dueDate: string
-  level: 'warning' | 'alert'
+  level: 'none' | 'warning' | 'alert'
   boardId: string
   boardName: string
   workspaceId: string

@@ -13,8 +13,16 @@ const lastBoardId = useLastBoardId()
 const route = useRoute()
 watch(() => route.path, () => refresh())
 
+// Every due date is listed; the clock only turns red, and counts, once one of them is lit.
 const alertCount = computed(() => tickets.value.filter(ticket => ticket.level === 'alert').length)
-const level = computed(() => (alertCount.value ? 'alert' : 'warning'))
+const warningCount = computed(() => tickets.value.filter(ticket => ticket.level === 'warning').length)
+const litCount = computed(() => alertCount.value + warningCount.value)
+const laterCount = computed(() => tickets.value.length - litCount.value)
+const summary = computed(() => [
+  alertCount.value ? `${alertCount.value} urgent` : '',
+  warningCount.value ? `${warningCount.value} coming up` : '',
+  laterCount.value ? `${laterCount.value} later` : '',
+].filter(Boolean).join(', '))
 
 // Workspace, then board, in the order the server sent them.
 const groups = computed(() => {
@@ -30,8 +38,11 @@ const groups = computed(() => {
 })
 
 const today = boardToday()
+// Far-off dates read better as a date than as a count of days.
+const dateFormatter = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', timeZone: 'UTC' })
 function dueText(ticket: DueTicket) {
   const days = daysUntil(ticket.dueDate, today) ?? 0
+  if (days > 30) return dateFormatter.format(new Date(`${ticket.dueDate}T00:00:00Z`))
   if (days === 0) return 'today'
   if (days === 1) return 'tomorrow'
   if (days > 1) return `in ${days} days`
@@ -54,17 +65,17 @@ function openWorkspace(workspaceId: string) {
   <PopoverRoot v-if="tickets.length">
     <PopoverTrigger
       class="focus-ring relative grid size-10 shrink-0 place-items-center rounded-xl border transition"
-      :class="level === 'alert'
+      :class="litCount
         ? 'border-rose-600/40 bg-rose-600/10 text-rose-600 hover:bg-rose-600/15'
-        : 'border-orange-400/50 bg-orange-400/10 text-orange-600 hover:bg-orange-400/20 dark:text-orange-300'"
-      :aria-label="`${tickets.length} ${tickets.length === 1 ? 'ticket' : 'tickets'} due soon or overdue`"
-      :title="alertCount ? `${alertCount} urgent` : `${tickets.length} due soon`"
+        : 'muted border-[var(--line)] hover:bg-[var(--panel-strong)] hover:text-[var(--ink)]'"
+      :aria-label="`Due dates: ${summary}`"
+      :title="summary"
     >
       <AlarmClock :size="18" aria-hidden="true" />
       <span
-        class="absolute -right-1.5 -top-1.5 grid min-w-5 place-items-center rounded-full px-1 py-0.5 text-[10px] font-bold tabular-nums text-white"
-        :class="level === 'alert' ? 'bg-rose-600' : 'bg-orange-500'"
-      >{{ tickets.length }}</span>
+        class="absolute -right-1.5 -top-1.5 grid min-w-5 place-items-center rounded-full px-1 py-0.5 text-[10px] font-bold tabular-nums"
+        :class="litCount ? 'bg-rose-600 text-white' : 'bg-[var(--line)] text-[var(--ink)]'"
+      >{{ litCount || tickets.length }}</span>
     </PopoverTrigger>
 
     <PopoverPortal>
@@ -73,13 +84,11 @@ function openWorkspace(workspaceId: string) {
         :side-offset="6"
         :collision-padding="12"
         class="ui-popover z-[100] max-h-[min(32rem,calc(100dvh-6rem))] w-[min(24rem,calc(100vw-1.5rem))] overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--panel-strong)] p-1 text-[var(--ink)] shadow-[0_18px_45px_rgba(0,0,0,.16),0_3px_12px_rgba(0,0,0,.08)]"
+        @open-auto-focus.prevent
       >
         <div class="px-3 pb-1 pt-2">
           <p class="text-sm font-bold">Due dates</p>
-          <p class="muted text-xs">
-            <template v-if="alertCount">{{ alertCount }} urgent<template v-if="tickets.length > alertCount">, {{ tickets.length - alertCount }} coming up</template>.</template>
-            <template v-else>{{ tickets.length }} coming up.</template>
-          </p>
+          <p class="muted text-xs">{{ summary }}.</p>
         </div>
 
         <section v-for="workspace in groups" :key="workspace.id" class="mt-1 border-t border-[var(--line)] pt-1">
@@ -104,12 +113,12 @@ function openWorkspace(workspaceId: string) {
                 :to="{ path: `/b/${board.id}`, query: { ticket: ticket.ticketNumber } }"
                 class="flex items-center gap-2 rounded-lg py-1.5 pl-5 pr-3 text-sm hover:bg-[var(--accent-soft)]"
               >
-                <span class="size-2 shrink-0 rounded-full" :class="ticket.level === 'alert' ? 'bg-rose-600' : 'bg-orange-400'" aria-hidden="true" />
+                <span class="size-2 shrink-0 rounded-full" :class="ticket.level === 'alert' ? 'bg-rose-600' : ticket.level === 'warning' ? 'bg-orange-400' : 'bg-[var(--line)]'" aria-hidden="true" />
                 <span class="muted shrink-0 text-xs font-semibold tabular-nums">#{{ ticket.ticketNumber }}</span>
                 <span class="min-w-0 flex-1 truncate">{{ ticket.title }}</span>
                 <span
                   class="shrink-0 text-xs font-semibold"
-                  :class="ticket.level === 'alert' ? 'text-rose-600' : 'text-orange-600 dark:text-orange-300'"
+                  :class="ticket.level === 'alert' ? 'text-rose-600' : ticket.level === 'warning' ? 'text-orange-600 dark:text-orange-300' : 'muted'"
                 >{{ dueText(ticket) }}</span>
               </NuxtLink>
             </PopoverClose>

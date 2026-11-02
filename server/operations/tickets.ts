@@ -32,10 +32,10 @@ export const ticketList = defineOperation({
   }
 })
 
-/** Across every board the caller can see: the tickets whose due date has lit their card. */
+/** Across every board the caller can see: the open tickets with a due date, and how lit each is. */
 export const ticketDueList = defineOperation({
   name: 'ticket.listDue',
-  summary: 'List the tickets whose due date is near or past, across the caller’s boards',
+  summary: 'List the open tickets with a due date across the caller’s boards, with their warning level',
   input: z.object({}),
   requires: { scope: 'authenticated' },
   audit: false,

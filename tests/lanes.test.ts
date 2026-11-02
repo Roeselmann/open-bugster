@@ -163,7 +163,7 @@ describe('boards and lanes', () => {
     expect(db.updateBoard(board.id, { name: 'Deadlines renamed' })).toMatchObject({ dueWarningDays: 3, dueAlertDays: 1 })
   })
 
-  it('lists the tickets whose due date lit their card, by each board’s lead times', () => {
+  it('lists every ticket with a due date, coloured by each board’s lead times', () => {
     const relaxed = db.createBoard('Relaxed deadlines')
     const strict = db.createBoard('Strict deadlines')
     db.updateBoard(strict.id, { dueWarningDays: 10, dueAlertDays: 3 })
@@ -182,6 +182,7 @@ describe('boards and lanes', () => {
     expect(due.map(ticket => [ticket.title, ticket.level])).toEqual([
       ['Relaxed today', 'alert'],
       ['Relaxed in five', 'warning'],
+      ['Relaxed in nine', 'none'],
       ['Strict in three', 'alert'],
       ['Strict in nine', 'warning'],
     ])

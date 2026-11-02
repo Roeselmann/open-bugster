@@ -2762,8 +2762,8 @@ function hydrateTicket(row: TicketRow): Ticket {
 }
 
 /**
- * Every open ticket on the viewer's boards whose due date has turned its card orange or red,
- * by each board's own lead times. Ordered by workspace and board, the most pressing first.
+ * Every open ticket with a due date on the viewer's boards, each with the colour its board's
+ * lead times give it. Ordered by workspace and board, the most pressing first.
  */
 export function listDueTickets(viewer: BoardViewer, today = boardToday()): DueTicket[] {
   const scoped = !viewer.instanceAdmin
@@ -2780,14 +2780,11 @@ export function listDueTickets(viewer: BoardViewer, today = boardToday()): DueTi
     id: string; ticket_number: number; title: string; due_date: string; board_id: string; board_name: string
     due_warning_days: number; due_alert_days: number; workspace_id: string; workspace_name: string
   }>
-  return rows.flatMap((row) => {
-    const level = dueLevel(row.due_date, today, { warningDays: row.due_warning_days, alertDays: row.due_alert_days })
-    if (level === 'none') return []
-    return [{
-      id: row.id, ticketNumber: row.ticket_number, title: row.title, dueDate: row.due_date, level,
-      boardId: row.board_id, boardName: row.board_name, workspaceId: row.workspace_id, workspaceName: row.workspace_name
-    }]
-  })
+  return rows.map(row => ({
+    id: row.id, ticketNumber: row.ticket_number, title: row.title, dueDate: row.due_date,
+    level: dueLevel(row.due_date, today, { warningDays: row.due_warning_days, alertDays: row.due_alert_days }),
+    boardId: row.board_id, boardName: row.board_name, workspaceId: row.workspace_id, workspaceName: row.workspace_name
+  }))
 }
 
 export function listTickets(boardId: string, archived = false): Ticket[] {
