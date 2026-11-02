@@ -311,6 +311,35 @@ export interface TicketTodoInput {
   completed: boolean
 }
 
+/** How a link shows on its ticket: as a card with a thumbnail, or as the bare address. */
+export const linkDisplays = ['preview', 'text'] as const
+export type LinkDisplay = typeof linkDisplays[number]
+
+export interface TicketLinkInput {
+  url: string
+  display: LinkDisplay
+}
+
+/**
+ * What the page behind a link said about itself, read once by the server. `pending` until
+ * somebody shows the link as a preview; `none` when the page could not be read and named
+ * nothing — the card then falls back to a generic thumbnail with the host.
+ */
+export interface LinkPreview {
+  status: 'pending' | 'ready' | 'none'
+  title: string | null
+  description: string | null
+  siteName: string | null
+  /** A thumbnail the server keeps itself; null when the page offered no image. */
+  imageUrl: string | null
+}
+
+export interface TicketLink extends TicketLinkInput {
+  id: string
+  position: number
+  preview: LinkPreview
+}
+
 /**
  * What the ticket editor sends when one or more fields change. Every key is optional: the
  * API keeps whatever is left out, so a single-field save is just `{ priority: 'high' }`.
@@ -321,7 +350,8 @@ export interface TicketPatch {
   priority?: TicketPriority
   dueDate?: string | null
   buildNumber?: string | null
-  link?: string | null
+  /** The whole list, in order; it replaces what the ticket had. */
+  links?: TicketLinkInput[]
   /** The image attachment the card shows; null goes back to the oldest image. */
   coverAttachmentId?: string | null
   assigneeId?: string | null
@@ -385,8 +415,10 @@ export interface Ticket {
   priority: TicketPriority
   dueDate: string | null
   buildNumber: string | null
-  /** An optional reference elsewhere — the Jira issue for an import, anything for a person. */
+  /** The first of `links`, kept for callers from the time a ticket had only one. */
   link: string | null
+  /** References elsewhere, in order — the Jira issue for an import, anything for a person. */
+  links: TicketLink[]
   /** The image attachment picked for the card; null means the oldest image is shown. */
   coverAttachmentId: string | null
   source: TicketSource

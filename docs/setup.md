@@ -125,5 +125,6 @@ docker compose exec bugster npm run owner:reset -- you@example.com "a-new-long-p
 | `DATABASE_PATH` | The SQLite file. | `/data/open-bugster.sqlite` in Docker |
 | `ATTACHMENTS_PATH` | The attachments directory. | `/data/attachments` in Docker |
 | `AUDIT_RETENTION_DAYS` | Audit log retention; `0` keeps everything. | `365` |
-| `WEBHOOK_ALLOW_PRIVATE` | Allow private destinations for webhooks and downloads. | `true` |
+| `WEBHOOK_ALLOW_PRIVATE` | Allow private destinations for webhooks, downloads and link previews. | `true` |
+| `LINK_PREVIEW_RENDER` | Render link previews in the bundled headless Chromium; `false` uses the page's own image instead. | `true` |
 | `API_RATE_LIMIT` | Requests per minute per credential on the token surfaces. | `120` |

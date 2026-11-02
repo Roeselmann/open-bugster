@@ -18,6 +18,15 @@ COPY --from=build /app/.output ./.output
 COPY scripts ./scripts
 COPY package.json ./
 RUN ln -s /app/.output/server/node_modules /app/node_modules
+# The browser that renders link previews, at exactly the version package-lock.json pins, plus
+# the system libraries it needs. Installed as root (apt), outside the volume. The CLI is not
+# part of the traced build output, so it comes from the build stage and leaves again.
+# LINK_PREVIEW_RENDER=false switches rendering off; previews then use the page's own image.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+COPY --from=build /app/node_modules/playwright-core /tmp/playwright-core
+RUN node /tmp/playwright-core/cli.js install --with-deps --only-shell chromium \
+  && rm -rf /tmp/playwright-core /var/lib/apt/lists/* \
+  && chmod -R a+rX /ms-playwright
 RUN mkdir -p /data/attachments && chown -R node:node /app /data
 USER node
 EXPOSE 3000

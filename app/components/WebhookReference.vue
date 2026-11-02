@@ -45,7 +45,14 @@ const ticketSample = {
     priority: 'high',
     dueDate: '2026-09-04',
     buildNumber: '1.8.2 (441)',
-    link: null,
+    link: 'https://example.com/specs/gallery',
+    links: [{
+      id: 'lnk_5e08…',
+      url: 'https://example.com/specs/gallery',
+      display: 'preview',
+      position: 0,
+      preview: { status: 'ready', title: 'Gallery spec', description: 'How the gallery behaves offline.', siteName: 'Example', imageUrl: '/api/links/lnk_5e08…/thumbnail' }
+    }],
     coverAttachmentId: null,
     source: 'testflight',
     externalId: 'apple_fb_9f21…',

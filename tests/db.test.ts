@@ -51,6 +51,8 @@ describe('ticket persistence', () => {
     expect(db.updateTicket(ticket.id, { title: 'Still linked' })).toMatchObject({ link: 'https://example.com/spec' })
     expect(db.updateTicket(ticket.id, { link: null })).toMatchObject({ link: null })
 
+    expect(db.updateTicket(ticket.id, { link: null })?.links).toEqual([])
+
     expect(db.moveTicket(ticket.id, laneIdByName['In Progress']!, 0)?.laneId).toBe(laneIdByName['In Progress'])
     expect(db.archiveTicket(ticket.id)?.archivedAt).toBeTruthy()
     expect(db.listTickets(boardId)).toHaveLength(0)
@@ -58,6 +60,49 @@ describe('ticket persistence', () => {
     // Restoring returns the ticket to the lane it was archived from, not to a fixed default.
     expect(db.restoreTicket(ticket.id)?.laneId).toBe(laneIdByName['In Progress'])
     db.archiveTicket(ticket.id)
+  })
+
+  it('keeps a list of links, and what each page said across a re-sent list', () => {
+    const ticket = db.createTicket(boardId, {
+      title: 'Linked ticket',
+      links: [
+        { url: 'https://example.com/spec', display: 'preview' },
+        { url: 'https://example.com/design', display: 'text' },
+        // The same address twice counts once.
+        { url: 'https://example.com/spec', display: 'text' }
+      ]
+    })!
+    expect(ticket.links.map(link => [link.url, link.display, link.position, link.preview.status])).toEqual([
+      ['https://example.com/spec', 'preview', 0, 'pending'],
+      ['https://example.com/design', 'text', 1, 'pending']
+    ])
+    // The first is still offered as `link`, for callers that know only one.
+    expect(ticket.link).toBe('https://example.com/spec')
+
+    const spec = ticket.links[0]!
+    expect(db.saveLinkPreview(spec.id, { title: 'The spec', description: null, siteName: 'Example', imagePath: `${ticket.id}/link-a.jpg` })).toBe(true)
+    expect(db.findTicketLink(spec.id)?.preview).toMatchObject({ status: 'ready', title: 'The spec', siteName: 'Example' })
+    expect(db.findTicketLink(spec.id)?.preview.imageUrl).toMatch(new RegExp(`^/api/links/${spec.id}/thumbnail\\?v=\\d+$`))
+
+    // Re-sending the list in another order keeps the row and its preview; a dropped link
+    // hands its thumbnail back for deletion.
+    const removed: string[] = []
+    const reordered = db.updateTicket(ticket.id, { links: [{ url: 'https://example.com/design', display: 'preview' }, { url: 'https://example.com/spec', display: 'text' }] }, null, removed)!
+    expect(reordered.links.map(link => [link.url, link.display])).toEqual([['https://example.com/design', 'preview'], ['https://example.com/spec', 'text']])
+    expect(reordered.links[1]).toMatchObject({ id: spec.id, preview: { title: 'The spec' } })
+    expect(removed).toEqual([])
+    db.updateTicket(ticket.id, { links: [{ url: 'https://example.com/design', display: 'preview' }] }, null, removed)
+    expect(removed).toEqual([`${ticket.id}/link-a.jpg`])
+    expect(db.findTicketLink(spec.id)).toBeNull()
+
+    // A single `link` replaces the first and keeps the rest.
+    const legacy = db.updateTicket(ticket.id, { links: [{ url: 'https://a.example', display: 'text' }, { url: 'https://b.example', display: 'preview' }] })!
+    expect(legacy.links).toHaveLength(2)
+    expect(db.updateTicket(ticket.id, { link: 'https://c.example' })!.links.map(link => link.url)).toEqual(['https://c.example', 'https://b.example'])
+    // A page that offered nothing is remembered as such, so it is not asked again.
+    const b = db.findTicket(ticket.id)!.links[1]!
+    db.saveLinkPreview(b.id, { title: null, description: null, siteName: null, imagePath: null })
+    expect(db.findTicketLink(b.id)?.preview.status).toBe('none')
   })
 
   it('refuses to move a ticket into a lane of another board', () => {

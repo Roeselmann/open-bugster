@@ -1,6 +1,6 @@
 import { createError } from 'h3'
 import { z } from 'zod'
-import { boardRoles, categoryColors, integrationProviders, ticketTypeColors, ticketTypeIconNames, userRoles, userStatuses, workspaceRoles } from '../../shared/types/domain'
+import { boardRoles, categoryColors, linkDisplays, integrationProviders, ticketTypeColors, ticketTypeIconNames, userRoles, userStatuses, workspaceRoles } from '../../shared/types/domain'
 import { TICKET_TYPE_ICON_DATA_URL_MAX } from '../../shared/utils/constants'
 import { isJiraSiteUrl, normalizeSiteUrl } from './jira-policy'
 
@@ -18,6 +18,13 @@ const todoSchema = z.object({
 
 const idSchema = z.string().trim().min(1).max(64)
 
+const webAddress = z.string().trim().max(2000).refine(value => /^https?:\/\/\S+$/i.test(value), 'A link has to start with http:// or https://.')
+const linkSchema = z.object({
+  url: webAddress,
+  // The bare address unless asked otherwise: a preview costs a page read and a render.
+  display: z.enum(linkDisplays).default('text')
+})
+
 const ticketShape = {
   title: z.string().trim().min(1, 'Title is required.').max(160),
   description: z.string().max(10000),
@@ -25,9 +32,11 @@ const ticketShape = {
   assigneeId: idSchema.nullable(),
   dueDate: z.iso.date().nullable(),
   buildNumber: z.string().trim().max(100).nullable(),
-  /** A web address or nothing; an empty string reads as nothing. */
+  /** The first link, for callers that know only one. A web address or nothing; an empty string reads as nothing. */
   link: z.string().trim().max(2000).transform(value => value || null).nullable()
     .refine(value => value === null || /^https?:\/\/\S+$/i.test(value), 'A link has to start with http:// or https://.'),
+  /** The whole list, in order. */
+  links: z.array(linkSchema).max(50),
   labels: z.array(labelSchema).max(12),
   categoryName: z.string().trim().max(30).nullable(),
   /** A type of the board's workspace; null leaves the ticket untyped. */
@@ -45,6 +54,7 @@ export const ticketCreateSchema = z.object({
   dueDate: ticketShape.dueDate.optional(),
   buildNumber: ticketShape.buildNumber.optional(),
   link: ticketShape.link.optional(),
+  links: ticketShape.links.optional(),
   labels: ticketShape.labels.default([]),
   categoryName: ticketShape.categoryName.optional(),
   typeId: ticketShape.typeId.optional(),

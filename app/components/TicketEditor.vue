@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, CircleAlert, Download, ExternalLink, FileText, GripVertical, Link as LinkIcon, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Shapes, SquareKanban, Star, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, CircleAlert, Download, ExternalLink, FileText, GripVertical, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Shapes, SquareKanban, Star, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogContent,
   DialogDescription,
@@ -9,7 +9,7 @@ import {
   DialogTitle,
   VisuallyHidden,
 } from 'reka-ui'
-import type { Attachment, BoardMember, Category, LabelSummary, Lane, Ticket, TicketPatch, TicketPriority, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
+import type { Attachment, BoardMember, Category, LabelSummary, Lane, Ticket, TicketLinkInput, TicketPatch, TicketPriority, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 
 const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; /** How the last field-by-field save went; shown in the footer of an existing ticket. */ saveState?: 'idle' | 'saving' | 'saved' | 'error'; deletingAttachmentId?: string | null; initialLaneId?: string | null; initialPlacement?: 'top' | 'bottom'; laneTicketCount?: number; /** Other boards of the workspace the ticket may be moved onto. */ boards?: BoardSummary[]; /** Whether the board has TestFlight connected; without it a build number has nothing to refer to. */ testflight?: boolean }>(), { canEdit: true, testflight: true, saveState: 'idle', initialLaneId: null, initialPlacement: 'bottom', laneTicketCount: 0, boards: () => [] })
@@ -32,9 +32,10 @@ const emit = defineEmits<{
   saveTitle: [ticket: Ticket, title: string]
 }>()
 
-const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', link: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '', typeId: 'none', laneId: '', placement: 'bottom' as 'top' | 'bottom' })
+const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '', typeId: 'none', laneId: '', placement: 'bottom' as 'top' | 'bottom' })
 interface EditableTodo extends TicketTodoInput { key: string }
 const todos = ref<EditableTodo[]>([])
+const links = ref<TicketLinkInput[]>([])
 // The category value whose save is still on its way, see `commitCategory`.
 let categoryInFlight: string | null | undefined
 let todoSequence = 0
@@ -86,7 +87,7 @@ const hasUnsavedWork = computed(() => {
   const ticket = props.ticket
   if (ticket) return props.canEdit && (form.title.trim() !== ticket.title.trim() || form.description !== (ticket.description || ''))
   return Boolean(form.title.trim() || form.description.trim() || todos.value.some(todo => todo.text.trim()) || pendingFiles.value.length
-    || form.labels.length || form.categoryName.trim() || form.link.trim() || form.buildNumber.trim() || form.dueDate)
+    || form.labels.length || form.categoryName.trim() || links.value.length || form.buildNumber.trim() || form.dueDate)
 })
 const discardOpen = ref(false)
 function requestClose() {
@@ -263,7 +264,7 @@ watch(() => props.ticket, (ticket, previous) => {
   form.priority = ticket?.priority || 'medium'
   form.dueDate = ticket?.dueDate || ''
   form.buildNumber = ticket?.buildNumber || ''
-  form.link = ticket?.link || ''
+  links.value = (ticket?.links || []).map(link => ({ url: link.url, display: link.display }))
   form.assigneeId = ticket?.assignee?.id || UNASSIGNED
   form.authorId = ticket?.author?.id || UNASSIGNED
   if (!sameTicket) {
@@ -290,7 +291,6 @@ const payload = {
   authorId: () => form.authorId === UNASSIGNED ? null : form.authorId,
   typeId: () => form.typeId === NO_TYPE ? null : form.typeId,
   dueDate: () => form.dueDate || null,
-  link: () => form.link.trim() || null,
   buildNumber: () => form.buildNumber.trim() || null,
   categoryName: () => form.categoryName.trim() || null,
   labels: () => [...form.labels],
@@ -307,9 +307,6 @@ function commit(changes: TicketPatch) {
 
 // Text inputs save when they are left. Leaving one untouched must not cost a request (and an
 // audit line), so the cleaned value is compared with what the ticket already has.
-function commitLink() {
-  if (payload.link() !== (props.ticket?.link || null)) commit({ link: payload.link() })
-}
 function commitBuildNumber() {
   if (payload.buildNumber() !== (props.ticket?.buildNumber || null)) commit({ buildNumber: payload.buildNumber() })
 }
@@ -344,7 +341,6 @@ function commitTodos() {
 // with the ticket first, so an untouched field costs nothing here.
 function flushPendingCommits() {
   if (!props.ticket || !props.canEdit) return
-  commitLink()
   commitBuildNumber()
   commitCategory()
   commitTodos()
@@ -359,7 +355,13 @@ function submit(options: { stayOpen?: boolean } = {}) {
   const manualFields = isManual.value ? { buildNumber: payload.buildNumber() } : {}
   // Sent only by somebody allowed to set it — the API rejects it from anyone else.
   const authorFields = canAttribute.value ? { authorId: payload.authorId() } : {}
-  emit('save', { ...shared, ...manualFields, ...authorFields, laneId: form.laneId || undefined, placement: form.placement, title: form.title.trim(), description: form.description, priority: form.priority, dueDate: payload.dueDate(), link: payload.link(), labels: payload.labels(), categoryName: payload.categoryName(), typeId: payload.typeId(), stayOpen: options.stayOpen === true })
+  emit('save', { ...shared, ...manualFields, ...authorFields, laneId: form.laneId || undefined, placement: form.placement, title: form.title.trim(), description: form.description, priority: form.priority, dueDate: payload.dueDate(), links: [...links.value], labels: payload.labels(), categoryName: payload.categoryName(), typeId: payload.typeId(), stayOpen: options.stayOpen === true })
+}
+
+// Links save as soon as one is added, removed or switched between preview and text.
+function changeLinks(next: TicketLinkInput[]) {
+  links.value = next
+  commit({ links: next })
 }
 
 function focusTodo(key: string) {
@@ -887,21 +889,6 @@ function focusTitle(event: Event) {
             </label>
 
             <div class="block">
-              <label for="ticket-link" class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><LinkIcon :size="14" /> Link</label>
-              <div class="flex items-center gap-2">
-                <input id="ticket-link" v-model="form.link" type="url" maxlength="2000" inputmode="url" spellcheck="false" class="focus-ring surface-strong h-11 min-w-0 flex-1 rounded-xl px-3 text-sm outline-none" placeholder="https://… — an issue, a document, anything this ticket refers to" :readonly="!canEdit" @blur="commitLink" @keydown.enter.prevent="commitLink">
-                <a
-                  v-if="ticket?.link"
-                  :href="ticket.link"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="focus-ring flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-[var(--line)] px-3 text-sm font-semibold hover:bg-[var(--panel)]"
-                  :title="ticket.link"
-                ><ExternalLink :size="15" aria-hidden="true" /> Open</a>
-              </div>
-            </div>
-
-            <div class="block">
               <label for="ticket-category" class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Tag :size="14" /> Category</label>
               <div @focusout="leaveCategory" @keydown.enter.prevent="nextTick(commitCategory)">
                 <UiCombobox
@@ -1037,6 +1024,7 @@ function focusTitle(event: Event) {
               </button>
             </template>
             <p v-if="fileError" class="text-xs font-semibold text-rose-600" role="alert">{{ fileError }}</p>
+            <TicketLinks :links="links" :saved="ticket?.links" :can-edit="canEdit" class="border-t border-[var(--line)] pt-4" @change="changeLinks" />
           </aside>
 
           <!-- The thread lives on the saved ticket, so a brand-new one gets it after the first save. -->

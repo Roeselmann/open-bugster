@@ -1,6 +1,6 @@
 # Tickets
 
-A ticket is a card on a board: a title, a description, an internal comment, priority, due date, build number, an optional link to something elsewhere, a to-do list, attachments, one category, any number of labels, an assignee, a comment thread, and a history. Imported TestFlight feedback and Jira issues become tickets too, with the original submission or issue attached. The build number, in the editor and on the card, only appears on boards with TestFlight connected. Tickets are moved by dragging, archived instead of deleted, and numbered instance-wide.
+A ticket is a card on a board: a title, a description, an internal comment, priority, due date, build number, any number of links to things elsewhere, a to-do list, attachments, one category, any number of labels, an assignee, a comment thread, and a history. Imported TestFlight feedback and Jira issues become tickets too, with the original submission or issue attached. The build number, in the editor and on the card, only appears on boards with TestFlight connected. Tickets are moved by dragging, archived instead of deleted, and numbered instance-wide.
 
 ## Using it
 
@@ -15,6 +15,10 @@ Cards are moved by dragging them between lanes or within a lane. On narrow scree
 ### To-dos and attachments
 
 Each ticket carries a to-do list: record the next steps, reorder them, and tick them off. Files such as screenshots and documents are attached directly to the ticket; images open in a lightbox. Each file is at most 25 MB, a ticket holds up to ten, and the file type has to be on the allowlist. Imported tickets work the same way: they take further files, and every attachment, including the screenshots, crash logs and Jira files an import brought along, can be deleted.
+
+### Links
+
+Links sit in the ticket's side column, stacked under the files: paste an address into the field below them, or type it and press Enter. A new link shows as its bare address. The picture button beside it (**Show with preview**) turns it into a card: a thumbnail of the page as a browser shows it, its title, and a line of its description from the page's Open Graph or Twitter tags. Only then is the page read and rendered, so a ticket full of plain links costs the server nothing. Rendering takes a few seconds and carries on when the ticket is closed; a toast says when the preview is ready, or that the page could not be rendered. Where the page cannot be rendered, the picture the page names for previews stands in, then the first photo of its content (menus, logos, icons, SVGs, and pictures too small or too stretched to be a photo are passed over), and finally a generic thumbnail with the host. The text button on a card (**Show as text only**) goes back to the bare address; another one renders the page again. Links carried over from the single link a ticket used to have, and the issue link a Jira import starts with, are plain addresses too. The card on the board shows the host of the first link and how many more there are.
 
 ### Assignment and discussion
 
@@ -37,6 +41,9 @@ The filter pane narrows the board by labels (any of the picked ones), category, 
 - **Positions are per lane.** `moveTicket` takes a lane and an index and renumbers the lane. `ticket.create` takes a `placement` (`top` or `bottom`, default `bottom`) and, for `top`, renumbers the lane the same way.
 - **To-dos are replaced as a whole list** on `ticket.create` and `ticket.update`, up to 100 entries of 500 characters. Titles are at most 160 characters, descriptions 10,000.
 - **Descriptions and comments are Markdown**, rendered by `renderMarkdown` with raw HTML switched off: a `<script>` in the text is shown as text, `javascript:` and `data:` links are dropped, and every link opens in a new tab with `rel="noopener noreferrer"`. That is what makes the output safe for `v-html` without a DOM-based sanitizer, so it works in SSR and in the node-only tests.
+- **Links are replaced as a whole list** on `ticket.create` and `ticket.update` as `links: [{ url, display }]`, up to 50, http(s) only; `display` is `text` (the default) or `preview`. An address the ticket already had keeps its row and its preview, so re-sending the list does not read every page again, and a repeated address counts once. The single `link` field from before still works: on a ticket it reads as the first link, and setting it replaces the first link and keeps the rest. The old `tickets.link` column was copied into `ticket_links` once and is no longer read.
+- **Previews are read lazily.** A new link is `pending`; the editor asks `POST /api/links/{id}/preview` only once the link is shown as a preview, so saves stay fast and an import never reads a hundred pages. The server follows up to four redirects for the page's tags, screening every hop like a webhook target (link-local always refused, private ranges per `WEBHOOK_ALLOW_PRIVATE`), and reads at most 768 KB of the page.
+- **The thumbnail is a render.** `renderPageThumbnail` opens the page in headless Chromium (Playwright) at 1280×720 and keeps its first screen as a 640×360 JPEG beside the ticket's attachments. Every request the page makes — the document, redirects, scripts, images, frames, fetches — is screened exactly like the link itself, and WebSockets, service workers, downloads, pop-ups and dialogs are refused, so a page cannot point the server at the metadata service or the internal network. Consent banners of the common platforms are hidden, never clicked. One browser is shared, started on the first render and closed after a minute without one; two renders run at once. Without a browser (`LINK_PREVIEW_RENDER=false`, or none installed) the page's own image is cropped instead. SVGs are never decoded. The thumbnail is served from `GET /api/links/{id}/thumbnail` to whoever can read the ticket, never hot-linked: the content policy keeps images to this origin, and the remote site would otherwise learn about every view. Reading a preview again over an existing one (`refresh`) needs `editor`.
 - **Categories and labels are set by name.** `categoryName` creates the category if needed; `labels` creates missing labels and prunes those left without a ticket.
 - **Attachments are validated twice**: by extension allowlist and by magic-byte signature, for uploads and for server-side downloads alike. Stored paths are resolved against the attachments directory and refused if they escape it.
 - **Server-side download** (`attachment.addFromUrl`) screens the URL like a webhook destination, refuses redirects, and reads the body under a running 25 MB cap. See [mcp-server.md](mcp-server.md) for why it exists.
@@ -50,15 +57,18 @@ The filter pane narrows the board by labels (any of the picked ones), category, 
 | [server/operations/tickets.ts](../server/operations/tickets.ts) | `ticket.list`, `ticket.get`, `ticket.getByNumber`, `ticket.activity`, `board.activity` (viewer); `ticket.create`, `ticket.update`, `ticket.move`, `ticket.archive` (editor); `ticket.restore` (admin). |
 | [server/operations/attachments.ts](../server/operations/attachments.ts) | `attachment.get` (viewer), `attachment.add` (base64 body), `attachment.addFromUrl` (editor). |
 | [server/operations/board-domain.ts](../server/operations/board-domain.ts) | `comment.list`, `comment.add` (viewer on the ticket), `comment.update`, `comment.remove` (author or board admin). |
-| [server/utils/db.ts](../server/utils/db.ts) | `listTickets`, `listTicketsPage`, `findTicket`, `ticketIdByNumber`; `createTicket`, `updateTicket`, `moveTicket`, `archiveTicket`, `restoreTicket`; comments and `listActivity`, `recordActivity`. Tables `tickets`, `ticket_todos`, `ticket_labels`, `attachments`, `apple_feedback`, `jira_issues`, `ticket_comments`, `ticket_activity`. |
+| [server/utils/db.ts](../server/utils/db.ts) | `listTickets`, `listTicketsPage`, `findTicket`, `ticketIdByNumber`; `createTicket`, `updateTicket`, `moveTicket`, `archiveTicket`, `restoreTicket`; comments and `listActivity`, `recordActivity`. `findTicketLink`, `saveLinkPreview`. Tables `tickets`, `ticket_todos`, `ticket_links`, `ticket_labels`, `attachments`, `apple_feedback`, `jira_issues`, `ticket_comments`, `ticket_activity`. |
 | [server/utils/attachment-policy.ts](../server/utils/attachment-policy.ts) | `MAX_ATTACHMENT_SIZE`, `MAX_ATTACHMENT_COUNT`, the extension allowlist, and the signature check. |
 | [server/utils/attachment-file.ts](../server/utils/attachment-file.ts) | Storing files under `ATTACHMENTS_PATH` and resolving stored paths safely. |
 | [server/utils/attachment-fetch.ts](../server/utils/attachment-fetch.ts) | The server-side download behind `attachment.addFromUrl`. |
+| [server/utils/link-preview.ts](../server/utils/link-preview.ts) | Reading a link's page and image, `refreshLinkPreview`, and removing thumbnails no link uses. |
+| [server/utils/page-render.ts](../server/utils/page-render.ts) | `renderPageThumbnail`: the shared headless browser, request screening, the screenshot. |
 | [server/utils/validation.ts](../server/utils/validation.ts) | `ticketCreateSchema`, `ticketUpdateSchema`, `todoSchema`, the label and category name rules. |
 | [shared/types/domain.ts](../shared/types/domain.ts) | `Ticket`, `TicketPriority`, `TicketTodo`, `Attachment`, `TicketComment`, `TicketActivityEntry`, `AppleFeedback`. |
 | `app/components/KanbanBoard.vue` | Lanes, drag-and-drop between and within lanes, the lane dropdown on narrow screens. |
 | `app/components/TicketCard.vue`, `PriorityPill.vue` | The card. |
 | `app/components/TicketEditor.vue` | The ticket dialog: fields, to-dos, labels, category, attachments, author, assignee. |
+| `app/components/TicketLinks.vue`, `app/composables/useLinkPreviews.ts` | The link list in the side column: bare addresses or cards with thumbnails, adding, removing, switching; previews that outlive the drawer, and their toast. |
 | `app/components/TicketComments.vue`, `TicketActivity.vue` | The thread and the history. |
 | [shared/utils/markdown.ts](../shared/utils/markdown.ts), `app/components/MarkdownView.vue` | `renderMarkdown` and the component that shows its output; the `.md-body` styles live in `app/assets/css/main.css`. |
 | `app/components/BoardFilterPane.vue`, `ImageLightbox.vue` | Filtering and search; image preview. |
@@ -66,14 +76,16 @@ The filter pane narrows the board by labels (any of the picked ones), category, 
 
 ## Surfaces
 
-- **Internal routes:** `server/api/tickets/index.get.ts`, `index.post.ts`, `[id].get.ts`, `[id].patch.ts`, `[id]/position.patch.ts`, `[id]/archive.post.ts`, `[id]/restore.post.ts`, `[id]/activity.get.ts`, `[id]/attachments.post.ts`, `[id]/comments.get.ts`, `[id]/comments.post.ts`; `server/api/attachments/[id].get.ts`, `[id].delete.ts`; `server/api/comments/[id].patch.ts`, `[id].delete.ts`.
+- **Internal routes:** `server/api/tickets/index.get.ts`, `index.post.ts`, `[id].get.ts`, `[id].patch.ts`, `[id]/position.patch.ts`, `[id]/archive.post.ts`, `[id]/restore.post.ts`, `[id]/activity.get.ts`, `[id]/attachments.post.ts`, `[id]/comments.get.ts`, `[id]/comments.post.ts`; `server/api/attachments/[id].get.ts`, `[id].delete.ts`; `server/api/links/[id]/preview.post.ts`, `[id]/thumbnail.get.ts`; `server/api/comments/[id].patch.ts`, `[id].delete.ts`.
 - **REST v1:** `GET /boards/{boardId}/tickets` (cursor paged), `POST /tickets`, `GET|PATCH /tickets/{ticketId}`, `GET /tickets/by-number/{ticketNumber}`, `POST /tickets/{ticketId}/move|transfer|archive|restore`, `GET /tickets/{ticketId}/activity`, `GET /attachments/{attachmentId}` (download), `POST /tickets/{ticketId}/attachments` and `/attachments/from-url`, `GET|POST /tickets/{ticketId}/comments`, `PATCH|DELETE /comments/{commentId}`.
 - **MCP:** `search_tickets`, `get_ticket`, `create_ticket`, `update_ticket`, `move_ticket`, `comment_on_ticket`, `archive_ticket`, `restore_ticket`, `add_attachment`, `whats_new`.
 - **Webhooks:** `ticket.created`, `ticket.updated`, `ticket.moved`, `ticket.transferred`, `ticket.archived`, `ticket.restored`, `comment.added`.
 
 ## Tests
 
-- `tests/db.test.ts`: ticket persistence, to-dos, labels, categories, move and archive.
+- `tests/db.test.ts`: ticket persistence, to-dos, links, labels, categories, move and archive.
+- `tests/link-preview.test.ts`: reading a page's tags, following redirects, cropping the thumbnail, refusing SVG.
+- `tests/page-render.test.ts`: rendering a page in Chromium while every request to link-local addresses and every socket is refused. Skipped where no browser is installed.
 - `tests/attachment-policy.test.ts`: the type and signature allowlist.
 - `tests/attachment-file.test.ts`: a stored path cannot escape the attachments directory.
 - `tests/validation.test.ts`: the ticket schemas.

@@ -60,6 +60,11 @@ function reply(payload: unknown) {
  * sit behind the same approval as a delete. Declared on every tool for that reason.
  */
 const readsOnly = { readOnlyHint: true, openWorldHint: false }
+const LINK_INPUT = z.object({
+  url: z.string().describe('http(s) only.'),
+  display: z.enum(['preview', 'text']).optional().describe('"text" (the default) shows only the address; "preview" a card with a rendered thumbnail of the page.')
+})
+
 const MARKDOWN_FIELD = 'Markdown. Headings, lists, links and fenced code blocks render; raw HTML is shown as text, not interpreted.'
 
 export function registerTools(server: McpServer, actor: Actor) {
@@ -225,7 +230,8 @@ export function registerTools(server: McpServer, actor: Actor) {
       description: ticket.description,
       source: ticket.source,
       buildNumber: ticket.buildNumber,
-      link: ticket.link,
+      // What the page said about itself, when somebody has opened the ticket and it was read.
+      links: ticket.links.map(link => ({ url: link.url, display: link.display, title: link.preview.title, description: link.preview.description })),
       coverAttachmentId: ticket.coverAttachmentId,
       author: nameOf(ticket.author),
       createdAt: ticket.createdAt,
@@ -305,7 +311,7 @@ export function registerTools(server: McpServer, actor: Actor) {
       priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
       assigneeId: z.string().optional().describe('Must be a member of this board.'),
       dueDate: z.string().optional().describe('YYYY-MM-DD.'),
-      link: z.string().optional().describe('An optional web address the ticket refers to, http(s) only.'),
+      links: z.array(LINK_INPUT).max(50).optional().describe('Web addresses the ticket refers to, in order.'),
       labels: z.array(z.string()).max(12).optional(),
       categoryName: z.string().optional(),
       typeId: z.string().optional().describe('A ticket type id from board_overview.ticketTypes. Omit for an untyped ticket.'),
@@ -331,7 +337,8 @@ export function registerTools(server: McpServer, actor: Actor) {
       priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
       assigneeId: z.string().nullable().optional(),
       dueDate: z.string().nullable().optional(),
-      link: z.string().nullable().optional().describe('A web address the ticket refers to, http(s) only; null removes it.'),
+      links: z.array(LINK_INPUT).max(50).optional()
+        .describe('Replaces the whole link list — read the ticket first and send every link back, kept and new alike. Omit the field to leave the list alone.'),
       coverAttachmentId: z.string().nullable().optional().describe('The id of one of the ticket’s image attachments (from get_ticket) to show on its card; null goes back to the oldest image.'),
       labels: z.array(z.string()).max(12).optional(),
       categoryName: z.string().nullable().optional(),

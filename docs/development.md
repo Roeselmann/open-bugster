@@ -9,6 +9,8 @@ Requirements: Node.js 22 or newer.
 ```bash
 npm install
 cp .env.example .env
+# Optional: the browser that renders link previews. Without it they use the page's own image.
+npx playwright-core install chromium-headless-shell
 ```
 
 Fill in the `APP_ADMIN_*` variables as described in [setup.md](setup.md#configuring-through-env-instead); the machine secrets generate themselves here too, into `secrets.json` next to the database. The paths in the example point at the Docker container, so set local ones instead:

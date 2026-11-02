@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import type {
   ActivityKind, AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardRole, BoardSummary, Category, CategoryColor,
   CategorySummary, IntegrationProvider, JiraIntegration, JiraIssue, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
-  TicketPriority, TicketSource, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary,
+  LinkDisplay, LinkPreview, TicketLink, TicketLinkInput, TicketPriority, TicketSource, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary,
   UserAccount, UserBoardMembership, UserRole, UserStatus, Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
 } from '../../shared/types/domain'
 import type { Actor, ActorChannel } from './actor'
@@ -324,6 +324,8 @@ export function getDb() {
   ensureBoardIntegrations(database)
   ensureSyncRunProvider(database)
   ensureTicketSourceJira(database)
+  // After every rebuild of `tickets`: the copy reads the old column, and the table hangs off it.
+  ensureTicketLinks(database)
   // Not in `boardIndexes`: that block also runs inside `ensureBoards`, before an upgrading
   // database has been given the ticket_activity table. Serves the board-wide digest query.
   database.exec('CREATE INDEX IF NOT EXISTS idx_ticket_activity_created ON ticket_activity(created_at DESC)')
@@ -688,6 +690,43 @@ export function ensureTicketLink(db: Database.Database) {
   const hasLink = tableColumns(db, 'tickets').has('link')
   if (!hasLink) db.exec('ALTER TABLE tickets ADD COLUMN link TEXT')
   return !hasLink
+}
+
+/**
+ * A ticket's links, any number of them, each with what its page said about itself. Takes
+ * over from `tickets.link`, which is copied in once and then left alone — never read again,
+ * but still there for an instance rolled back to a version that knew only the one. A copied
+ * link stays the plain address it always was until somebody asks for its preview.
+ *
+ * The thumbnail lives beside the ticket's attachments; `preview_image` is its path relative
+ * to the attachment root.
+ */
+export function ensureTicketLinks(db: Database.Database) {
+  const existed = Boolean(db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'ticket_links'").get())
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ticket_links (
+      id TEXT PRIMARY KEY,
+      ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      display TEXT NOT NULL DEFAULT 'text' CHECK (display IN ('preview', 'text')),
+      position INTEGER NOT NULL,
+      preview_status TEXT NOT NULL DEFAULT 'pending' CHECK (preview_status IN ('pending', 'ready', 'none')),
+      preview_title TEXT,
+      preview_description TEXT,
+      preview_site TEXT,
+      preview_image TEXT,
+      preview_fetched_at TEXT,
+      UNIQUE (ticket_id, position)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ticket_links_ticket ON ticket_links(ticket_id, position);
+  `)
+  if (existed) return false
+  db.prepare(`
+    INSERT INTO ticket_links (id, ticket_id, url, display, position, preview_status)
+    SELECT lower(hex(randomblob(16))), id, link, 'text', 0, 'pending'
+    FROM tickets WHERE link IS NOT NULL AND trim(link) != ''
+  `).run()
+  return true
 }
 
 export function ensureManualAttachmentKind(db: Database.Database) {
@@ -2248,8 +2287,8 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
       // once — the per-row MAX subquery `createTicket` uses would rescan for every ticket.
       let nextNumber = (db.prepare('SELECT COALESCE(MAX(ticket_number), 0) AS value FROM tickets').get() as { value: number }).value
       const insertTicket = db.prepare(`
-        INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, link, source, external_id, created_at, updated_at, archived_at, author_id, assignee_id, category_id, type_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, source, external_id, created_at, updated_at, archived_at, author_id, assignee_id, category_id, type_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       const labelsOf = db.prepare('SELECT label_id FROM ticket_labels WHERE ticket_id = ?')
       const attachLabel = db.prepare('INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)')
@@ -2260,6 +2299,9 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
         INSERT INTO apple_feedback (ticket_id, feedback_type, comment, tester_id, device_model, os_version, locale, build_id, build_version, build_bundle_id, source_created_at, raw_json)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
+      const linksOf = db.prepare('SELECT * FROM ticket_links WHERE ticket_id = ? ORDER BY position')
+      const insertLink = db.prepare(`INSERT INTO ticket_links (id, ticket_id, url, display, position, preview_status, preview_title, preview_description, preview_site, preview_image, preview_fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       const attachmentsOf = db.prepare('SELECT * FROM attachments WHERE ticket_id = ?')
       const insertAttachment = db.prepare('INSERT INTO attachments (id, ticket_id, kind, filename, mime_type, size, relative_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
 
@@ -2268,7 +2310,7 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
         nextNumber += 1
         insertTicket.run(
           ticketId, nextNumber, id, laneIds.get(ticket.lane_id)!, ticket.title, ticket.description,
-          ticket.position, ticket.priority, ticket.due_date, ticket.build_number, ticket.link, ticket.source,
+          ticket.position, ticket.priority, ticket.due_date, ticket.build_number, ticket.source,
           ticket.external_id, ticket.created_at, ticket.updated_at, ticket.archived_at,
           ticket.author_id, ticket.assignee_id, ticket.category_id ? categoryIds.get(ticket.category_id) ?? null : null,
           ticket.type_id
@@ -2291,6 +2333,12 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
             feedback.os_version, feedback.locale, feedback.build_id, feedback.build_version,
             feedback.build_bundle_id, feedback.source_created_at, feedback.raw_json
           )
+        }
+        for (const link of linksOf.all(ticket.id) as TicketLinkRow[]) {
+          // A thumbnail is a file like any attachment, and is copied with them.
+          const imagePath = link.preview_image ? join(ticketId, `link-${randomUUID()}.jpg`) : null
+          insertLink.run(randomUUID(), ticketId, link.url, link.display, link.position, link.preview_status, link.preview_title, link.preview_description, link.preview_site, imagePath, link.preview_fetched_at)
+          if (link.preview_image && imagePath) attachmentCopies.push({ from: link.preview_image, to: imagePath })
         }
         for (const attachment of attachmentsOf.all(ticket.id) as Array<{ kind: string; filename: string; mime_type: string; size: number; relative_path: string; created_at: string }>) {
           const relativePath = join(ticketId, `${randomUUID()}${extname(attachment.relative_path)}`)
@@ -2626,6 +2674,7 @@ function hydrateTicket(row: TicketRow): Ticket {
   const jiraRow = db.prepare('SELECT * FROM jira_issues WHERE ticket_id = ?').get(row.id) as JiraIssueRow | undefined
   const attachmentRows = db.prepare('SELECT id, kind, filename, mime_type, size FROM attachments WHERE ticket_id = ? ORDER BY created_at').all(row.id) as Array<{ id: string; kind: Attachment['kind']; filename: string; mime_type: string; size: number }>
   const todoRows = db.prepare('SELECT id, text, completed, position FROM ticket_todos WHERE ticket_id = ? ORDER BY position').all(row.id) as Array<{ id: string; text: string; completed: number; position: number }>
+  const links = (db.prepare('SELECT * FROM ticket_links WHERE ticket_id = ? ORDER BY position').all(row.id) as TicketLinkRow[]).map(toTicketLink)
   const commentCount = (db.prepare('SELECT COUNT(*) AS value FROM ticket_comments WHERE ticket_id = ?').get(row.id) as { value: number }).value
   const feedback: AppleFeedback | null = feedbackRow ? {
     feedbackType: feedbackRow.feedback_type as 'screenshot' | 'crash',
@@ -2665,7 +2714,8 @@ function hydrateTicket(row: TicketRow): Ticket {
     priority: row.priority,
     dueDate: row.due_date,
     buildNumber: row.build_number || feedback?.buildVersion || null,
-    link: row.link ?? null,
+    link: links[0]?.url ?? null,
+    links,
     // A pick whose attachment is gone, or is no picture, counts as none.
     coverAttachmentId: attachments.some(item => item.id === row.cover_attachment_id && item.mimeType.startsWith('image/')) ? row.cover_attachment_id : null,
     source: row.source,
@@ -2944,13 +2994,87 @@ function setTicketTodos(ticketId: string, todos: TicketTodoInput[]) {
   todos.forEach((todo, position) => insert.run(randomUUID(), ticketId, todo.text.trim(), todo.completed ? 1 : 0, position))
 }
 
+type TicketLinkRow = {
+  id: string; ticket_id: string; url: string; display: LinkDisplay; position: number
+  preview_status: LinkPreview['status']; preview_title: string | null; preview_description: string | null
+  preview_site: string | null; preview_image: string | null; preview_fetched_at: string | null
+}
+
+function toTicketLink(row: TicketLinkRow): TicketLink {
+  return {
+    id: row.id,
+    url: row.url,
+    display: row.display,
+    position: row.position,
+    preview: {
+      status: row.preview_status,
+      title: row.preview_title,
+      description: row.preview_description,
+      siteName: row.preview_site,
+      // Versioned, so a refreshed preview is not answered from the browser's cache.
+      imageUrl: row.preview_image ? `/api/links/${row.id}/thumbnail?v=${Date.parse(row.preview_fetched_at || '') || 0}` : null
+    }
+  }
+}
+
+/**
+ * Replaces a ticket's links. An address the ticket already had keeps its row, and with it
+ * the preview read for it, so re-sending the list — which is what every change does — does
+ * not ask each page again. A repeated address counts once.
+ *
+ * Returns the thumbnails of the rows that went, for the caller to take off the disk.
+ */
+function setTicketLinks(ticketId: string, links: TicketLinkInput[]): string[] {
+  const db = getDb()
+  const existing = new Map((db.prepare('SELECT * FROM ticket_links WHERE ticket_id = ?').all(ticketId) as TicketLinkRow[]).map(row => [row.url, row]))
+  const seen = new Set<string>()
+  const kept = links.filter(link => !seen.has(link.url) && seen.add(link.url))
+  const keptIds = new Set(kept.map(link => existing.get(link.url)?.id).filter(Boolean))
+  const removed = [...existing.values()].filter(row => !keptIds.has(row.id))
+  db.prepare('DELETE FROM ticket_links WHERE ticket_id = ?').run(ticketId)
+  const insert = db.prepare(`INSERT INTO ticket_links (id, ticket_id, url, display, position, preview_status, preview_title, preview_description, preview_site, preview_image, preview_fetched_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  kept.forEach((link, position) => {
+    const row = existing.get(link.url)
+    insert.run(
+      row?.id ?? randomUUID(), ticketId, link.url, link.display, position, row?.preview_status ?? 'pending',
+      row?.preview_title ?? null, row?.preview_description ?? null, row?.preview_site ?? null, row?.preview_image ?? null, row?.preview_fetched_at ?? null
+    )
+  })
+  return removed.map(row => row.preview_image).filter((path): path is string => Boolean(path))
+}
+
+/**
+ * What a caller that still speaks of a single `link` means by it: the first one. Set, it
+ * replaces the first address and keeps the rest; null drops the first.
+ */
+function linksWithFirst(current: TicketLink[], link: string | null): TicketLinkInput[] {
+  const rest = current.slice(1).map(item => ({ url: item.url, display: item.display }))
+  if (!link) return rest
+  return [{ url: link, display: current[0]?.url === link ? current[0].display : 'text' }, ...rest]
+}
+
+export function findTicketLink(id: string): (TicketLink & { ticketId: string; imagePath: string | null }) | null {
+  const row = getDb().prepare('SELECT * FROM ticket_links WHERE id = ?').get(id) as TicketLinkRow | undefined
+  return row ? { ...toTicketLink(row), ticketId: row.ticket_id, imagePath: row.preview_image } : null
+}
+
+/** Stores what a link's page said. False when the link was removed while its page was read. */
+export function saveLinkPreview(id: string, preview: { title: string | null; description: string | null; siteName: string | null; imagePath: string | null }): boolean {
+  const status = preview.title || preview.description || preview.imagePath ? 'ready' : 'none'
+  return getDb().prepare(`UPDATE ticket_links SET preview_status = ?, preview_title = ?, preview_description = ?, preview_site = ?, preview_image = ?, preview_fetched_at = ? WHERE id = ?`)
+    .run(status, preview.title, preview.description, preview.siteName, preview.imagePath, new Date().toISOString(), id).changes > 0
+}
+
 export interface TicketInput {
   title: string
   description?: string
   priority?: TicketPriority
   dueDate?: string | null
   buildNumber?: string | null
+  /** The first of the links, for callers that only know one; `links` wins when both are given. */
   link?: string | null
+  links?: TicketLinkInput[]
   /** One of the ticket's own image attachments, checked by the caller; only `updateTicket` reads it. */
   coverAttachmentId?: string | null
   labels?: string[]
@@ -2992,10 +3116,10 @@ export function createTicket(boardId: string, input: TicketInput, author: Person
     const categoryId = resolveCategoryId(boardId, input.categoryName)
     // Appended first either way; a ticket asked to the top is then shuffled with the lane.
     const position = nextPosition(lane.id)
-    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, link, source, created_at, updated_at, author_id, assignee_id, category_id, type_id)
-      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?)`).run(
+    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, source, created_at, updated_at, author_id, assignee_id, category_id, type_id)
+      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?)`).run(
       id, boardId, lane.id, input.title, input.description || '', position, input.priority || 'medium',
-      input.dueDate || null, input.buildNumber || null, input.link || null, now, now,
+      input.dueDate || null, input.buildNumber || null, now, now,
       author?.id || null, input.assigneeId || null, categoryId, input.typeId || null
     )
     if (input.placement === 'top') {
@@ -3005,6 +3129,7 @@ export function createTicket(boardId: string, input: TicketInput, author: Person
     }
     setTicketLabels(id, boardId, input.labels || [])
     setTicketTodos(id, input.todos || [])
+    setTicketLinks(id, input.links ?? linksWithFirst([], input.link ?? null))
     recordActivity(id, actor, 'created', { lane: lane.name })
     if (input.assigneeId) recordActivity(id, actor, 'assigned', { to: input.assigneeId })
     if (input.typeId) recordActivity(id, actor, 'type', { from: null, to: findTicketType(input.typeId)?.name ?? null })
@@ -3012,7 +3137,8 @@ export function createTicket(boardId: string, input: TicketInput, author: Person
   return findTicket(id)!
 }
 
-export function updateTicket(id: string, input: Partial<TicketInput>, actor: Actor | null = null): Ticket | null {
+/** `removedThumbnails` collects the link thumbnails the change orphaned, for the caller to delete. */
+export function updateTicket(id: string, input: Partial<TicketInput>, actor: Actor | null = null, removedThumbnails: string[] = []): Ticket | null {
   const existing = findTicket(id)
   if (!existing) return null
   const now = new Date().toISOString()
@@ -3023,13 +3149,12 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
   const typeId = input.typeId === undefined ? existing.type?.id || null : input.typeId || null
   getDb().transaction(() => {
     const categoryId = input.categoryName === undefined ? existing.category?.id || null : resolveCategoryId(existing.boardId, input.categoryName)
-    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, due_date = ?, build_number = ?, link = ?, assignee_id = ?, author_id = ?, category_id = ?, type_id = ?, updated_at = ? WHERE id = ?`).run(
+    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, due_date = ?, build_number = ?, assignee_id = ?, author_id = ?, category_id = ?, type_id = ?, updated_at = ? WHERE id = ?`).run(
       input.title ?? existing.title,
       input.description ?? existing.description,
       priority,
       dueDate,
       input.buildNumber === undefined ? (existing.source === 'manual' ? existing.buildNumber : null) : input.buildNumber || null,
-      input.link === undefined ? existing.link : input.link || null,
       assigneeId,
       authorId,
       categoryId,
@@ -3040,6 +3165,8 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
     if (input.coverAttachmentId !== undefined) getDb().prepare('UPDATE tickets SET cover_attachment_id = ? WHERE id = ?').run(input.coverAttachmentId, id)
     if (input.labels) setTicketLabels(id, existing.boardId, input.labels)
     if (input.todos !== undefined) setTicketTodos(id, input.todos)
+    const links = input.links ?? (input.link === undefined ? undefined : linksWithFirst(existing.links, input.link))
+    if (links) removedThumbnails.push(...setTicketLinks(id, links))
     if (priority !== existing.priority) recordActivity(id, actor, 'priority', { from: existing.priority, to: priority })
     if (dueDate !== existing.dueDate) recordActivity(id, actor, 'due_date', { from: existing.dueDate, to: dueDate })
     if (assigneeId !== (existing.assignee?.id || null)) {
@@ -3275,11 +3402,9 @@ export function insertImportedTicket(input: ImportedTicketInput): Ticket {
   const priority: TicketPriority = jira ? input.priority : input.type === 'crash' ? 'high' : 'medium'
   const provider: IntegrationProvider = jira ? 'jira' : 'testflight'
   db.transaction(() => {
-    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, link, source, external_id, created_at, updated_at, author_id, type_id)
-      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, source, external_id, created_at, updated_at, author_id, type_id)
+      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, input.boardId, input.laneId, input.title, jira ? input.description : '', position, priority,
-      // The issue itself is the reference an imported ticket carries; a person may change it later.
-      jira ? input.issue.url : null,
       source, input.externalId, now, now, authorId, type?.id ?? null
     )
     if (jira) {
@@ -3290,6 +3415,8 @@ export function insertImportedTicket(input: ImportedTicketInput): Ticket {
         contactId, input.reporterName, issue.assigneeName, issue.url, JSON.stringify(issue.labels), issue.sourceCreatedAt, issue.sourceUpdatedAt, JSON.stringify(input.raw)
       )
       setTicketLabels(id, input.boardId, ['Jira', ...(issue.issueType ? [issue.issueType] : [])])
+      // The issue itself is the reference an imported ticket carries; a person may change it later.
+      setTicketLinks(id, [{ url: issue.url, display: 'text' }])
       recordActivity(id, null, 'created', { source: 'issue', provider })
     } else {
       db.prepare(`INSERT INTO apple_feedback (ticket_id, feedback_type, comment, tester_id, device_model, os_version, locale, build_id, build_version, build_bundle_id, source_created_at, raw_json)

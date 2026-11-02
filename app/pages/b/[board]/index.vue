@@ -208,7 +208,7 @@ const filteredTickets = computed(() => {
       ticket.assignee?.lastName || '',
       ticket.assignee?.email || '',
       ticket.buildNumber || '',
-      ticket.link || '',
+      ...ticket.links.flatMap(link => [link.url, link.preview.title || '']),
       ticket.jira?.issueKey || '',
       ticket.type?.name || '',
       ...ticket.todos.map(todo => todo.text),

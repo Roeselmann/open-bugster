@@ -74,7 +74,7 @@ const authorText = computed(() => {
 })
 const authorTitle = computed(() => props.ticket.author?.email || props.ticket.feedback?.tester?.email || props.ticket.jira?.reporter?.email || '')
 const completedTodoCount = computed(() => props.ticket.todos.filter(todo => todo.completed).length)
-// The host is enough to tell where a link leads; the whole address is in the title.
+// The host of the first link is enough to tell where they lead; the whole address is in the title.
 const linkHost = computed(() => {
   if (!props.ticket.link) return null
   try {
@@ -186,7 +186,7 @@ const reorderButtons = computed(() => [
               :title="ticket.link"
               draggable="false"
               @click.stop
-            ><LinkIcon :size="13" class="shrink-0" /> <span class="truncate">{{ linkHost }}</span></a>
+            ><LinkIcon :size="13" class="shrink-0" /> <span class="truncate">{{ linkHost }}</span><span v-if="ticket.links.length > 1" class="shrink-0 font-semibold">+{{ ticket.links.length - 1 }}</span></a>
             <span v-if="ticket.commentCount" class="flex shrink-0 items-center gap-1" :title="`${ticket.commentCount} comments`"><MessageSquare :size="13" /> {{ ticket.commentCount }}</span>
             <span class="ml-auto flex shrink-0 items-center gap-2">
               <UiAvatar v-if="ticket.assignee" :person="ticket.assignee" size="sm" :muted="ticket.assignee.status !== 'active'" />

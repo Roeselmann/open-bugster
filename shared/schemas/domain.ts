@@ -84,6 +84,20 @@ export const ticketTodoSchema = z.object({
   position: z.number().int()
 })
 
+export const ticketLinkSchema = z.object({
+  id: z.string(),
+  url: z.string(),
+  display: z.enum(['preview', 'text']).describe('A card with a thumbnail, or the bare address.'),
+  position: z.number().int(),
+  preview: z.object({
+    status: z.enum(['pending', 'ready', 'none']).describe('`pending` until the page has been read; `none` when it offered nothing to show.'),
+    title: z.string().nullable(),
+    description: z.string().nullable(),
+    siteName: z.string().nullable(),
+    imageUrl: z.string().nullable().describe('A thumbnail kept by the server. Fetch with the same credentials; not a public link.')
+  }).describe('What the page behind the link said about itself.')
+})
+
 export const appleFeedbackSchema = z.object({
   feedbackType: z.enum(['screenshot', 'crash']),
   comment: z.string().nullable(),
@@ -125,7 +139,8 @@ export const ticketSchema = z.object({
   priority: z.enum(ticketPriorities),
   dueDate: z.string().nullable(),
   buildNumber: z.string().nullable(),
-  link: z.string().nullable().describe('An optional reference elsewhere; a Jira import sets it to the issue.'),
+  link: z.string().nullable().describe('The first of `links`, kept for callers from the time a ticket had only one.'),
+  links: z.array(ticketLinkSchema).describe('References elsewhere, in order; a Jira import starts with the issue.'),
   coverAttachmentId: z.string().nullable().describe('The image attachment picked for the ticket’s card; null means the oldest image is shown.'),
   source: z.enum(ticketSources),
   externalId: z.string().nullable(),

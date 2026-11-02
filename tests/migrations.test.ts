@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
-import { ensureBoardIntegrations, ensureSyncRunProvider, ensureTicketSourceJira } from '../server/utils/db'
+import { ensureBoardIntegrations, ensureSyncRunProvider, ensureTicketLinks, ensureTicketSourceJira } from '../server/utils/db'
 
 /**
  * The migrations that generalise the import: run against hand-built tables of the previous
@@ -78,5 +78,25 @@ describe('the integration migrations', () => {
     expect((db.prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'tickets' AND sql IS NOT NULL").all() as Array<{ name: string }>).map(row => row.name)).toContain('idx_tickets_external')
     expect(db.prepare('SELECT COUNT(*) AS value FROM attachments').get()).toEqual({ value: 1 })
     expect(ensureTicketSourceJira(db)).toBe(false)
+  })
+
+  it('carries the single link over into the link list, as the plain address it was', () => {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE tickets (id TEXT PRIMARY KEY, source TEXT NOT NULL, link TEXT);
+      INSERT INTO tickets VALUES ('t1', 'manual', 'https://example.com/spec');
+      INSERT INTO tickets VALUES ('t2', 'jira_issue', 'https://team.atlassian.net/browse/APP-1');
+      INSERT INTO tickets VALUES ('t3', 'manual', NULL);
+      INSERT INTO tickets VALUES ('t4', 'manual', '  ');
+    `)
+    expect(ensureTicketLinks(db)).toBe(true)
+    expect(db.prepare('SELECT ticket_id, url, display, position, preview_status FROM ticket_links ORDER BY ticket_id').all()).toEqual([
+      { ticket_id: 't1', url: 'https://example.com/spec', display: 'text', position: 0, preview_status: 'pending' },
+      { ticket_id: 't2', url: 'https://team.atlassian.net/browse/APP-1', display: 'text', position: 0, preview_status: 'pending' }
+    ])
+    // The old column stays as it was, for an instance rolled back.
+    expect(db.prepare("SELECT link FROM tickets WHERE id = 't1'").get()).toEqual({ link: 'https://example.com/spec' })
+    expect(ensureTicketLinks(db)).toBe(false)
+    expect(db.prepare('SELECT COUNT(*) AS value FROM ticket_links').get()).toEqual({ value: 2 })
   })
 })

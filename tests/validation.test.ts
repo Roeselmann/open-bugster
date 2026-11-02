@@ -7,6 +7,15 @@ describe('ticket validation', () => {
     expect(result).toEqual({ boardId: 'board-1', title: 'Fix login', description: '', priority: 'medium', buildNumber: '42', labels: ['Auth'], todos: [], placement: 'bottom' })
   })
 
+  it('takes a list of links, shown as plain addresses unless asked otherwise', () => {
+    expect(ticketUpdateSchema.parse({ links: [{ url: ' https://example.com/a ' }, { url: 'http://intranet/b', display: 'preview' }] })).toEqual({
+      links: [{ url: 'https://example.com/a', display: 'text' }, { url: 'http://intranet/b', display: 'preview' }]
+    })
+    expect(ticketUpdateSchema.safeParse({ links: [{ url: 'example.com' }] }).success).toBe(false)
+    expect(ticketUpdateSchema.safeParse({ links: [{ url: 'https://example.com', display: 'thumbnail' }] }).success).toBe(false)
+    expect(ticketUpdateSchema.safeParse({ links: Array.from({ length: 51 }, (_, index) => ({ url: `https://example.com/${index}` })) }).success).toBe(false)
+  })
+
   it('accepts a web address as the link and nothing else', () => {
     expect(ticketUpdateSchema.parse({ link: '  https://example.com/spec ' })).toEqual({ link: 'https://example.com/spec' })
     expect(ticketUpdateSchema.parse({ link: 'http://localhost:4010/browse/APP-1' })).toEqual({ link: 'http://localhost:4010/browse/APP-1' })

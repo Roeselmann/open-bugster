@@ -6,6 +6,7 @@ import {
   findBoard, moveTicket, personById, restoreTicket, ticketIdByNumber, ticketTypeBelongsToBoard, transferTicket, updateTicket
 } from '../utils/db'
 import { importedTicketUpdateSchema, ticketCreateSchema, ticketMoveSchema, ticketTransferSchema, ticketUpdateSchema } from '../utils/validation'
+import { deleteLinkThumbnails } from '../utils/link-preview'
 import { createdId, defineOperation } from './types'
 import { orNotFound } from './run'
 
@@ -126,7 +127,7 @@ export const ticketUpdate = defineOperation({
   // Which fields moved, not their values: `ticket_activity` already records the before and
   // after for everything that has one, and a 10,000-character description does not belong here.
   audit: { targetType: 'ticket', targetId: input => input.ticketId, changes: input => ({ fields: Object.keys(omit(input, 'ticketId')).sort() }) },
-  run: (ctx, input) => {
+  run: async (ctx, input) => {
     const ticket = ctx.ticket!
     const schema = ticket.source === 'manual' ? ticketUpdateSchema : importedTicketUpdateSchema
     const parsed = schema.safeParse(omit(input, 'ticketId'))
@@ -152,7 +153,10 @@ export const ticketUpdate = defineOperation({
         throw createError({ statusCode: 422, statusMessage: 'A ticket can only be attributed to a member of this board.' })
       }
     }
-    return { ticket: orNotFound(updateTicket(input.ticketId, fields, ctx.actor), 'Ticket') }
+    const removedThumbnails: string[] = []
+    const updated = orNotFound(updateTicket(input.ticketId, fields, ctx.actor, removedThumbnails), 'Ticket')
+    await deleteLinkThumbnails(removedThumbnails)
+    return { ticket: updated }
   }
 })
 
