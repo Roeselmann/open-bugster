@@ -207,13 +207,13 @@ export const laneCreate = defineOperation({
 
 export const laneUpdate = defineOperation({
   name: 'lane.update',
-  summary: 'Rename a lane',
+  summary: 'Rename a lane, or mark whether it holds finished work',
   input: laneUpdateSchema.extend({ boardId: id, laneId: id }),
   requires: { scope: 'board', role: 'admin', boardId: boardOf },
-  audit: { targetType: 'lane', targetId: input => input.laneId, changes: ['name'] },
+  audit: { targetType: 'lane', targetId: input => input.laneId, changes: ['name', 'isDone'] },
   run: (_ctx, input) => {
     laneOfBoard(input.laneId, input.boardId)
-    updateLane(input.laneId, { name: input.name })
+    updateLane(input.laneId, { name: input.name, isDone: input.isDone })
     return { lanes: listLanes(input.boardId) }
   }
 })

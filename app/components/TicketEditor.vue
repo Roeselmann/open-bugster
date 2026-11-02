@@ -37,7 +37,11 @@ const emit = defineEmits<{
 const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '', typeId: 'none', laneId: '', placement: 'bottom' as 'top' | 'bottom' })
 // Lit the same way as the card, and follows the field while it is being changed.
 const today = boardToday()
-const dueState = computed(() => dueLevel(form.dueDate || null, today, { warningDays: props.dueWarningDays, alertDays: props.dueAlertDays }))
+const inDoneLane = computed(() => {
+  const laneId = props.ticket ? props.ticket.laneId : form.laneId
+  return props.lanes.some(lane => lane.id === laneId && lane.isDone)
+})
+const dueState = computed(() => (inDoneLane.value ? 'none' : dueLevel(form.dueDate || null, today, { warningDays: props.dueWarningDays, alertDays: props.dueAlertDays })))
 const dueText = computed(() => (dueState.value === 'none' ? null : dueDescription(form.dueDate, today)))
 interface EditableTodo extends TicketTodoInput { key: string }
 const todos = ref<EditableTodo[]>([])

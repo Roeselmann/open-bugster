@@ -163,6 +163,28 @@ describe('boards and lanes', () => {
     expect(db.updateBoard(board.id, { name: 'Deadlines renamed' })).toMatchObject({ dueWarningDays: 3, dueAlertDays: 1 })
   })
 
+  it('starts a board with its Done lane marked, and lets any lane be marked or unmarked', () => {
+    const board = db.createBoard('Finishing')
+    expect(board.lanes.filter(lane => lane.isDone).map(lane => lane.name)).toEqual(['Done'])
+
+    const backlog = board.lanes.find(lane => lane.name === 'Backlog')!
+    expect(db.updateLane(backlog.id, { isDone: true })?.isDone).toBe(true)
+    expect(db.updateLane(backlog.id, { name: 'Shipped' })?.isDone).toBe(true)
+    expect(db.updateLane(backlog.id, { isDone: false })?.isDone).toBe(false)
+  })
+
+  it('leaves tickets in a done lane out of the due date list', () => {
+    const board = db.createBoard('Done with it')
+    const done = board.lanes.find(lane => lane.isDone)!
+    const open = board.lanes.find(lane => !lane.isDone && !lane.isImport)!
+    db.createTicket(board.id, { title: 'Still open', dueDate: '2026-11-02', laneId: open.id })
+    db.createTicket(board.id, { title: 'Already shipped', dueDate: '2026-11-02', laneId: done.id })
+
+    const titles = db.listDueTickets({ userId: 'nobody', instanceAdmin: true }, '2026-11-02')
+      .filter(ticket => ticket.boardId === board.id).map(ticket => ticket.title)
+    expect(titles).toEqual(['Still open'])
+  })
+
   it('lists every ticket with a due date, coloured by each board’s lead times', () => {
     const relaxed = db.createBoard('Relaxed deadlines')
     const strict = db.createBoard('Strict deadlines')

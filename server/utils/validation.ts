@@ -182,7 +182,9 @@ export const laneCreateSchema = z.object({
 })
 
 export const laneUpdateSchema = z.object({
-  name: z.string().trim().min(1, 'A lane name is required.').max(30)
+  name: z.string().trim().min(1, 'A lane name is required.').max(30),
+  /** Whether the lane holds finished work, which silences its tickets' due date warnings. */
+  isDone: z.boolean()
 }).partial()
 
 export const laneDeleteSchema = z.discriminatedUnion('mode', [

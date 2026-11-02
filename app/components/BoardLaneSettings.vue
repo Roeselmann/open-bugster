@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { GripVertical, Lock, LoaderCircle, Plus, Trash2 } from '@lucide/vue'
+import { CircleCheck, GripVertical, Lock, LoaderCircle, Plus, Trash2 } from '@lucide/vue'
 import {
   AlertDialogCancel,
   AlertDialogContent,
@@ -71,7 +71,7 @@ async function renameLane(lane: LaneSummary, event: Event) {
   await patchLane(lane, { name })
 }
 
-async function patchLane(lane: LaneSummary, body: { name?: string }) {
+async function patchLane(lane: LaneSummary, body: { name?: string; isDone?: boolean }) {
   busyLaneId.value = lane.id
   try {
     await $fetch(`/api/boards/${props.board.id}/lanes/${lane.id}`, { method: 'PATCH', body })
@@ -390,7 +390,7 @@ async function confirmDelete() {
   <section class="surface rounded-2xl">
     <header class="border-b border-[var(--line)] px-5 py-4">
       <h2 class="mt-0.5 text-lg font-bold">Lanes</h2>
-      <p class="muted mt-1 text-sm">Top to bottom is left to right on the board — drag a lane by its handle to reorder, or focus a handle and use the arrow keys. The import lane always stays: every TestFlight ticket lands there. It can be renamed and reordered, but not removed.</p>
+      <p class="muted mt-1 text-sm">Top to bottom is left to right on the board — drag a lane by its handle to reorder, or focus a handle and use the arrow keys. The import lane always stays: every TestFlight ticket lands there. It can be renamed and reordered, but not removed. Tickets in a lane marked <strong>Done</strong> count as finished and no longer warn about their due date.</p>
     </header>
 
     <TransitionGroup
@@ -430,6 +430,23 @@ async function confirmDelete() {
             @blur="renameLane(item, $event)"
           >
           <span class="muted w-24 shrink-0 text-[11px] font-semibold tabular-nums">{{ item.ticketCount }} {{ item.ticketCount === 1 ? 'ticket' : 'tickets' }}</span>
+          <!-- The import lane only ever holds new arrivals, so it cannot mean finished. -->
+          <button
+            v-if="!item.isImport"
+            type="button"
+            role="switch"
+            :aria-checked="item.isDone"
+            :aria-label="`${item.name} holds finished work`"
+            :disabled="busyLaneId === item.id"
+            class="focus-ring flex h-9 shrink-0 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition disabled:opacity-50"
+            :class="item.isDone
+              ? 'border-emerald-600/40 bg-emerald-600/10 text-emerald-700 dark:text-emerald-300'
+              : 'muted border-[var(--line)] hover:bg-[var(--panel-strong)] hover:text-[var(--ink)]'"
+            :title="item.isDone ? 'Tickets here count as finished and no longer warn about their due date' : 'Mark this lane as holding finished work'"
+            @click="patchLane(item, { isDone: !item.isDone })"
+          ><CircleCheck :size="14" aria-hidden="true" /> Done</button>
+          <!-- Keeps the import lane's name field as wide as the others. -->
+          <span v-else class="invisible flex h-9 shrink-0 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold" aria-hidden="true"><CircleCheck :size="14" /> Done</span>
           <div class="ml-auto flex shrink-0 items-center gap-1">
             <span
               v-if="item.isImport"

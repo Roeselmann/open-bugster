@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS lanes (
   board_id TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   position INTEGER NOT NULL,
-  is_import INTEGER NOT NULL DEFAULT 0 CHECK (is_import IN (0, 1))
+  is_import INTEGER NOT NULL DEFAULT 0 CHECK (is_import IN (0, 1)),
+  is_done INTEGER NOT NULL DEFAULT 0 CHECK (is_done IN (0, 1))
 );
 CREATE TABLE IF NOT EXISTS categories (
   id TEXT PRIMARY KEY,
@@ -244,21 +245,21 @@ export const DEFAULT_DUE_ALERT_DAYS = 1
 export const DEFAULT_IMPORT_TYPE_NAME = 'Ticket'
 
 /** The lane set every board starts with. The first entry is the canonical import lane. */
-const defaultLanes: Array<{ name: string; isImport: boolean }> = [
+const defaultLanes: Array<{ name: string; isImport: boolean; isDone?: boolean }> = [
   { name: 'Import', isImport: true },
   { name: 'Backlog', isImport: false },
   { name: 'Open', isImport: false },
   { name: 'Question', isImport: false },
   { name: 'In Progress', isImport: false },
-  { name: 'Done', isImport: false },
+  { name: 'Done', isImport: false, isDone: true },
 ]
 
 /** The lane a brand-new board created from the UI starts with. */
-const newBoardLanes: Array<{ name: string; isImport: boolean }> = [
+const newBoardLanes: Array<{ name: string; isImport: boolean; isDone?: boolean }> = [
   { name: 'Import', isImport: true },
   { name: 'Backlog', isImport: false },
   { name: 'In Progress', isImport: false },
-  { name: 'Done', isImport: false },
+  { name: 'Done', isImport: false, isDone: true },
 ]
 
 /** Maps the retired `tickets.status` enum onto the seeded default lanes. */
@@ -307,6 +308,7 @@ export function getDb() {
   ensureBoardAutoAuthor(database)
   ensureBoardDescription(database)
   ensureBoardDueWarnings(database)
+  ensureLaneDone(database)
   // Last of the email-era migrations: every one above still speaks in email columns.
   ensurePersonIdentity(database)
   // From here on, person ids only.
@@ -850,6 +852,12 @@ export function ensureBoards(db: Database.Database) {
       laneIdByName.set(lane.name, id)
       insertLane.run(id, boardId, lane.name, position, lane.isImport ? 1 : 0)
     })
+    // On a fresh database the column is already there, and `ensureLaneDone` will not mark
+    // anything; on an old one it comes later and marks the rightmost lane, which is this one.
+    if (tableColumns(db, 'lanes').has('is_done')) {
+      const doneLane = defaultLanes.find(lane => lane.isDone)
+      if (doneLane) db.prepare('UPDATE lanes SET is_done = 1 WHERE id = ?').run(laneIdByName.get(doneLane.name))
+    }
 
     if (needsCategoryRebuild) {
       db.exec(`
@@ -1179,6 +1187,25 @@ export function ensureBoardDueWarnings(db: Database.Database) {
   if (columns.has('due_warning_days') && columns.has('due_alert_days')) return false
   if (!columns.has('due_warning_days')) db.exec(`ALTER TABLE boards ADD COLUMN due_warning_days INTEGER NOT NULL DEFAULT ${DEFAULT_DUE_WARNING_DAYS}`)
   if (!columns.has('due_alert_days')) db.exec(`ALTER TABLE boards ADD COLUMN due_alert_days INTEGER NOT NULL DEFAULT ${DEFAULT_DUE_ALERT_DAYS}`)
+  return true
+}
+
+/**
+ * Adds the switch that says a lane holds finished work: its tickets no longer warn about
+ * their due date. Until now the rightmost lane of a board played that part, so on upgrade day
+ * that lane — the import lane aside — is the one that gets marked.
+ */
+export function ensureLaneDone(db: Database.Database) {
+  if (tableColumns(db, 'lanes').has('is_done')) return false
+  db.transaction(() => {
+    db.exec('ALTER TABLE lanes ADD COLUMN is_done INTEGER NOT NULL DEFAULT 0 CHECK (is_done IN (0, 1))')
+    db.exec(`
+      UPDATE lanes SET is_done = 1 WHERE id IN (
+        SELECT (SELECT l.id FROM lanes l WHERE l.board_id = b.id AND l.is_import = 0 ORDER BY l.position DESC LIMIT 1)
+        FROM boards b
+      )
+    `)
+  })()
   return true
 }
 
@@ -1931,7 +1958,7 @@ type BoardRow = {
 
 type WorkspaceRow = { id: string; name: string; description: string; position: number; created_at: string }
 
-type LaneRow = { id: string; board_id: string; name: string; position: number; is_import: number }
+type LaneRow = { id: string; board_id: string; name: string; position: number; is_import: number; is_done: number }
 
 type TicketRow = {
   id: string; ticket_number: number; board_id: string; lane_id: string; title: string; description: string
@@ -2044,7 +2071,7 @@ function toJiraIntegration(boardId: string): JiraIntegration {
 }
 
 function toLane(row: LaneRow): Lane {
-  return { id: row.id, boardId: row.board_id, name: row.name, position: row.position, isImport: Boolean(row.is_import) }
+  return { id: row.id, boardId: row.board_id, name: row.name, position: row.position, isImport: Boolean(row.is_import), isDone: Boolean(row.is_done) }
 }
 
 /** Who is asking. Omitted for internal callers and tests, which see every board as an admin. */
@@ -2291,7 +2318,7 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
     for (const lane of db.prepare('SELECT * FROM lanes WHERE board_id = ? ORDER BY position').all(sourceId) as LaneRow[]) {
       const laneId = randomUUID()
       laneIds.set(lane.id, laneId)
-      db.prepare('INSERT INTO lanes (id, board_id, name, position, is_import) VALUES (?, ?, ?, ?, ?)').run(laneId, id, lane.name, lane.position, lane.is_import)
+      db.prepare('INSERT INTO lanes (id, board_id, name, position, is_import, is_done) VALUES (?, ?, ?, ?, ?, ?)').run(laneId, id, lane.name, lane.position, lane.is_import, lane.is_done)
     }
 
     const categoryIds = new Map<string, string>()
@@ -2492,8 +2519,8 @@ export function createBoard(name: string, creatorId: string | null = null, works
   db.transaction(() => {
     db.prepare('INSERT INTO boards (id, workspace_id, name, position, created_at) VALUES (?, ?, ?, ?, ?)').run(id, workspace, name, position, now)
     db.prepare(`UPDATE boards SET import_type_id = (${DEFAULT_IMPORT_TYPE_SQL}) WHERE id = ?`).run(id)
-    const insertLane = db.prepare('INSERT INTO lanes (id, board_id, name, position, is_import) VALUES (?, ?, ?, ?, ?)')
-    newBoardLanes.forEach((lane, lanePosition) => insertLane.run(randomUUID(), id, lane.name, lanePosition, lane.isImport ? 1 : 0))
+    const insertLane = db.prepare('INSERT INTO lanes (id, board_id, name, position, is_import, is_done) VALUES (?, ?, ?, ?, ?, ?)')
+    newBoardLanes.forEach((lane, lanePosition) => insertLane.run(randomUUID(), id, lane.name, lanePosition, lane.isImport ? 1 : 0, lane.isDone ? 1 : 0))
     if (creatorId) {
       db.prepare("INSERT INTO board_members (board_id, user_id, role, added_at) VALUES (?, ?, 'admin', ?)").run(id, creatorId, now)
     }
@@ -2657,11 +2684,11 @@ export function createLane(boardId: string, name: string): Lane | null {
   return findLane(id)
 }
 
-export function updateLane(id: string, input: { name?: string }): Lane | null {
+export function updateLane(id: string, input: { name?: string; isDone?: boolean }): Lane | null {
   const db = getDb()
   const lane = findLane(id)
   if (!lane) return null
-  db.prepare('UPDATE lanes SET name = ? WHERE id = ?').run(input.name ?? lane.name, id)
+  db.prepare('UPDATE lanes SET name = ?, is_done = ? WHERE id = ?').run(input.name ?? lane.name, Number(input.isDone ?? lane.isDone), id)
   return findLane(id)
 }
 
@@ -2794,7 +2821,7 @@ function hydrateTicket(row: TicketRow): Ticket {
 
 /**
  * Every open ticket with a due date on the viewer's boards, each with the colour its board's
- * lead times give it. Ordered by workspace and board, the most pressing first.
+ * lead times give it. Finished work — a ticket in a done lane — is left out. Ordered by workspace and board, the most pressing first.
  */
 export function listDueTickets(viewer: BoardViewer, today = boardToday()): DueTicket[] {
   const scoped = !viewer.instanceAdmin
@@ -2803,9 +2830,10 @@ export function listDueTickets(viewer: BoardViewer, today = boardToday()): DueTi
       b.due_warning_days, b.due_alert_days, w.id AS workspace_id, w.name AS workspace_name
     FROM tickets t
     JOIN boards b ON b.id = t.board_id
+    JOIN lanes l ON l.id = t.lane_id
     JOIN workspaces w ON w.id = b.workspace_id
     ${scoped ? 'JOIN board_members m ON m.board_id = b.id AND m.user_id = @userId' : ''}
-    WHERE t.archived_at IS NULL AND t.due_date IS NOT NULL
+    WHERE t.archived_at IS NULL AND t.due_date IS NOT NULL AND l.is_done = 0
     ORDER BY w.position, w.created_at, b.position, b.created_at, t.due_date, t.ticket_number
   `).all(scoped ? { userId: viewer.userId } : {}) as Array<{
     id: string; ticket_number: number; title: string; due_date: string; board_id: string; board_name: string

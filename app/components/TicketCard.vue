@@ -66,7 +66,9 @@ const cardDateText = computed(() => {
 })
 
 const today = boardToday()
-const dueState = computed(() => dueLevel(props.ticket.dueDate, today, { warningDays: props.dueWarningDays, alertDays: props.dueAlertDays }))
+// Finished work is done with its deadline too: a done lane silences the warning.
+const inDoneLane = computed(() => props.lanes.some(lane => lane.id === props.ticket.laneId && lane.isDone))
+const dueState = computed(() => (inDoneLane.value ? 'none' : dueLevel(props.ticket.dueDate, today, { warningDays: props.dueWarningDays, alertDays: props.dueAlertDays })))
 // Only said when the border is lit, so the colour always comes with its reason.
 const dueText = computed(() => (dueState.value === 'none' || !props.ticket.dueDate ? null : dueDescription(props.ticket.dueDate, today)))
 

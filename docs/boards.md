@@ -18,6 +18,8 @@ Lanes are the columns of the board and are configured under **Board settings →
 
 Every board has exactly one **import lane**, which is where imports from TestFlight and Jira land. It can be renamed and reordered, but not deleted, and it only appears on the board once something has been imported into it.
 
+A lane can be marked **Done** in the same list. Tickets in a done lane count as finished: their card loses its due date border and they drop out of the header's due date list. A new board starts with its Done lane marked; on upgrade, every existing board had its rightmost lane (the import lane aside) marked, since that is where finished work sat until then.
+
 When a lane is deleted, its tickets are not lost: the dialog asks whether they should move to another lane or go to the archive.
 
 <p align="center">

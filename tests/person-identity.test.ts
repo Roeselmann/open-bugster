@@ -158,4 +158,20 @@ describe('the person-identity migration', () => {
     expect(legacy.prepare('SELECT due_warning_days, due_alert_days FROM boards').get()).toEqual({ due_warning_days: 7, due_alert_days: 1 })
     legacy.close()
   })
+
+  it('marks each board’s rightmost lane as done, never the import lane', async () => {
+    const db = await import('../server/utils/db')
+    const legacy = legacyDatabase()
+    legacy.exec(`
+      INSERT INTO boards (id, name, position, created_at) VALUES ('done-b1', 'One', 5, '2026-01-01'), ('done-b2', 'Two', 6, '2026-01-01');
+      INSERT INTO lanes (id, board_id, name, position, is_import) VALUES
+        ('done-l1', 'done-b1', 'Import', 0, 1), ('done-l2', 'done-b1', 'Doing', 1, 0), ('done-l3', 'done-b1', 'Shipped', 2, 0),
+        ('done-l4', 'done-b2', 'Todo', 0, 0), ('done-l5', 'done-b2', 'Fertig', 1, 0), ('done-l6', 'done-b2', 'Import', 2, 1);
+    `)
+
+    expect(db.ensureLaneDone(legacy)).toBe(true)
+    expect(db.ensureLaneDone(legacy)).toBe(false)
+    expect(legacy.prepare("SELECT id FROM lanes WHERE is_done = 1 AND board_id LIKE 'done-%' ORDER BY id").all()).toEqual([{ id: 'done-l3' }, { id: 'done-l5' }])
+    legacy.close()
+  })
 })

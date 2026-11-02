@@ -173,6 +173,8 @@ export interface Lane {
   name: string
   position: number
   isImport: boolean
+  /** Holds finished work: its tickets no longer warn about their due date. */
+  isDone: boolean
 }
 
 export interface LaneSummary extends Lane {

@@ -187,7 +187,8 @@ export const laneSchema = z.object({
   boardId: z.string(),
   name: z.string(),
   position: z.number().int(),
-  isImport: z.boolean()
+  isImport: z.boolean(),
+  isDone: z.boolean().describe('Holds finished work; its tickets no longer warn about their due date.')
 })
 export const laneSummarySchema = laneSchema.extend({
   ticketCount: z.number().int(),
