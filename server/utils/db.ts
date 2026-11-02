@@ -334,6 +334,7 @@ export function getDb() {
   ensureTicketSourceJira(database)
   // After every rebuild of `tickets`: the copy reads the old column, and the table hangs off it.
   ensureTicketLinks(database)
+  ensureTicketCardImages(database)
   // Not in `boardIndexes`: that block also runs inside `ensureBoards`, before an upgrading
   // database has been given the ticket_activity table. Serves the board-wide digest query.
   database.exec('CREATE INDEX IF NOT EXISTS idx_ticket_activity_created ON ticket_activity(created_at DESC)')
@@ -691,6 +692,21 @@ export function ensureTicketCoverAttachment(db: Database.Database) {
   const hasCover = tableColumns(db, 'tickets').has('cover_attachment_id')
   if (!hasCover) db.exec('ALTER TABLE tickets ADD COLUMN cover_attachment_id TEXT')
   return !hasCover
+}
+
+/**
+ * The pictures a ticket's card shows, as a JSON list of attachment and link ids; NULL while
+ * nobody picked. Takes over from `cover_attachment_id`, whose one pick becomes a list of one.
+ * That column is still written alongside, for an instance rolled back to a version that knew
+ * only the one. No foreign keys, like the cover: a pick whose picture is gone reads as unpicked.
+ */
+export function ensureTicketCardImages(db: Database.Database) {
+  if (tableColumns(db, 'tickets').has('card_images')) return false
+  db.transaction(() => {
+    db.exec('ALTER TABLE tickets ADD COLUMN card_images TEXT')
+    db.exec('UPDATE tickets SET card_images = json_array(cover_attachment_id) WHERE cover_attachment_id IS NOT NULL')
+  })()
+  return true
 }
 
 /** An optional reference elsewhere on every ticket. After the rebuilds that list columns by hand. */
@@ -1919,7 +1935,7 @@ type LaneRow = { id: string; board_id: string; name: string; position: number; i
 
 type TicketRow = {
   id: string; ticket_number: number; board_id: string; lane_id: string; title: string; description: string
-  position: number; priority: TicketPriority; due_date: string | null; build_number: string | null; link: string | null; cover_attachment_id: string | null
+  position: number; priority: TicketPriority; due_date: string | null; build_number: string | null; link: string | null; cover_attachment_id: string | null; card_images: string | null
   source: TicketSource; external_id: string | null; created_at: string; updated_at: string; archived_at: string | null
   category_id: string | null; author_id: string | null; assignee_id: string | null; type_id: string | null
 }
@@ -2324,6 +2340,7 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
       const insertLink = db.prepare(`INSERT INTO ticket_links (id, ticket_id, url, display, position, preview_status, preview_title, preview_description, preview_site, preview_image, preview_fetched_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       const attachmentsOf = db.prepare('SELECT * FROM attachments WHERE ticket_id = ?')
+      const setCardImages = db.prepare('UPDATE tickets SET card_images = ?, cover_attachment_id = ? WHERE id = ?')
       const insertAttachment = db.prepare('INSERT INTO attachments (id, ticket_id, kind, filename, mime_type, size, relative_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
 
       for (const ticket of db.prepare('SELECT * FROM tickets WHERE board_id = ?').all(sourceId) as TicketRow[]) {
@@ -2355,16 +2372,29 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
             feedback.build_bundle_id, feedback.source_created_at, feedback.raw_json
           )
         }
+        // Old id to new, for the card's picked pictures.
+        const copiedIds = new Map<string, string>()
+        const copiedAttachments = new Set<string>()
         for (const link of linksOf.all(ticket.id) as TicketLinkRow[]) {
           // A thumbnail is a file like any attachment, and is copied with them.
           const imagePath = link.preview_image ? join(ticketId, `link-${randomUUID()}.jpg`) : null
-          insertLink.run(randomUUID(), ticketId, link.url, link.display, link.position, link.preview_status, link.preview_title, link.preview_description, link.preview_site, imagePath, link.preview_fetched_at)
+          const linkId = randomUUID()
+          copiedIds.set(link.id, linkId)
+          insertLink.run(linkId, ticketId, link.url, link.display, link.position, link.preview_status, link.preview_title, link.preview_description, link.preview_site, imagePath, link.preview_fetched_at)
           if (link.preview_image && imagePath) attachmentCopies.push({ from: link.preview_image, to: imagePath })
         }
-        for (const attachment of attachmentsOf.all(ticket.id) as Array<{ kind: string; filename: string; mime_type: string; size: number; relative_path: string; created_at: string }>) {
+        for (const attachment of attachmentsOf.all(ticket.id) as Array<{ id: string; kind: string; filename: string; mime_type: string; size: number; relative_path: string; created_at: string }>) {
           const relativePath = join(ticketId, `${randomUUID()}${extname(attachment.relative_path)}`)
-          insertAttachment.run(randomUUID(), ticketId, attachment.kind, attachment.filename, attachment.mime_type, attachment.size, relativePath, attachment.created_at)
+          const attachmentId = randomUUID()
+          copiedIds.set(attachment.id, attachmentId)
+          copiedAttachments.add(attachmentId)
+          insertAttachment.run(attachmentId, ticketId, attachment.kind, attachment.filename, attachment.mime_type, attachment.size, relativePath, attachment.created_at)
           attachmentCopies.push({ from: attachment.relative_path, to: relativePath })
+        }
+        const picked = pickedCardImages(ticket.card_images, [...copiedIds.keys()].map(key => ({ id: key })))
+        if (picked) {
+          const copied = picked.map(pick => copiedIds.get(pick)!)
+          setCardImages.run(JSON.stringify(copied), copied.find(pick => copiedAttachments.has(pick)) ?? null, ticketId)
         }
       }
       // Copied verbatim above; a copy landing in another workspace speaks that workspace's types.
@@ -2728,6 +2758,7 @@ function hydrateTicket(row: TicketRow): Ticket {
     completed: Boolean(todo.completed),
     position: todo.position
   }))
+  const cardImageIds = pickedCardImages(row.card_images, [...attachments, ...links])
   return {
     id: row.id,
     ticketNumber: row.ticket_number,
@@ -2741,8 +2772,8 @@ function hydrateTicket(row: TicketRow): Ticket {
     buildNumber: row.build_number || feedback?.buildVersion || null,
     link: links[0]?.url ?? null,
     links,
-    // A pick whose attachment is gone, or is no picture, counts as none.
-    coverAttachmentId: attachments.some(item => item.id === row.cover_attachment_id && item.mimeType.startsWith('image/')) ? row.cover_attachment_id : null,
+    cardImageIds,
+    coverAttachmentId: cardImageIds?.find(pick => attachments.some(item => item.id === pick)) ?? null,
     source: row.source,
     externalId: row.external_id,
     createdAt: row.created_at,
@@ -2785,6 +2816,25 @@ export function listDueTickets(viewer: BoardViewer, today = boardToday()): DueTi
     level: dueLevel(row.due_date, today, { warningDays: row.due_warning_days, alertDays: row.due_alert_days }),
     boardId: row.board_id, boardName: row.board_name, workspaceId: row.workspace_id, workspaceName: row.workspace_name
   }))
+}
+
+/**
+ * The stored pick, less whatever has left the ticket since. A pick of which nothing is left
+ * goes back to unpicked rather than to an empty card: nobody chose to see nothing.
+ */
+function pickedCardImages(stored: string | null, present: Array<{ id: string }>): string[] | null {
+  if (stored === null) return null
+  let picked: unknown
+  try {
+    picked = JSON.parse(stored)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(picked)) return null
+  if (!picked.length) return []
+  const ids = new Set(present.map(item => item.id))
+  const kept = picked.filter((id): id is string => typeof id === 'string' && ids.has(id))
+  return kept.length ? kept : null
 }
 
 export function listTickets(boardId: string, archived = false): Ticket[] {
@@ -3126,6 +3176,8 @@ export interface TicketInput {
   /** The first of the links, for callers that only know one; `links` wins when both are given. */
   link?: string | null
   links?: TicketLinkInput[]
+  /** Pictures of the ticket's own, checked by the caller; only `updateTicket` reads them, like the one below. */
+  cardImageIds?: string[] | null
   /** One of the ticket's own image attachments, checked by the caller; only `updateTicket` reads it. */
   coverAttachmentId?: string | null
   labels?: string[]
@@ -3213,7 +3265,12 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
       now,
       id
     )
-    if (input.coverAttachmentId !== undefined) getDb().prepare('UPDATE tickets SET cover_attachment_id = ? WHERE id = ?').run(input.coverAttachmentId, id)
+    // The single pick of older callers is a list of one; the old column keeps the first picture.
+    const cardImageIds = input.cardImageIds !== undefined ? input.cardImageIds : input.coverAttachmentId === undefined ? undefined : input.coverAttachmentId ? [input.coverAttachmentId] : null
+    if (cardImageIds !== undefined) {
+      const cover = cardImageIds?.find(pick => existing.attachments.some(item => item.id === pick)) ?? null
+      getDb().prepare('UPDATE tickets SET card_images = ?, cover_attachment_id = ? WHERE id = ?').run(cardImageIds ? JSON.stringify([...new Set(cardImageIds)]) : null, cover, id)
+    }
     if (input.labels) setTicketLabels(id, existing.boardId, input.labels)
     if (input.todos !== undefined) setTicketTodos(id, input.todos)
     const links = input.links ?? (input.link === undefined ? undefined : linksWithFirst(existing.links, input.link))

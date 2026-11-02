@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, CircleAlert, Download, ExternalLink, FileText, GripVertical, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Shapes, SquareKanban, Star, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, CircleAlert, Download, ExternalLink, FileText, GripVertical, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogContent,
   DialogDescription,
@@ -12,6 +12,7 @@ import {
 import type { Attachment, BoardMember, Category, LabelSummary, Lane, Ticket, TicketLinkInput, TicketPatch, TicketPriority, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 import { boardToday, dueDescription, dueLevel } from '~~/shared/utils/due-date'
+import { cardImageCandidates, cardImages } from '~~/shared/utils/card-images'
 
 const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; /** How the last field-by-field save went; shown in the footer of an existing ticket. */ saveState?: 'idle' | 'saving' | 'saved' | 'error'; deletingAttachmentId?: string | null; initialLaneId?: string | null; initialPlacement?: 'top' | 'bottom'; laneTicketCount?: number; /** Other boards of the workspace the ticket may be moved onto. */ boards?: BoardSummary[]; /** Whether the board has TestFlight connected; without it a build number has nothing to refer to. */ testflight?: boolean; /** The board's lead times for the due date warning, as on the card. */ dueWarningDays?: number; dueAlertDays?: number }>(), { canEdit: true, testflight: true, dueWarningDays: 7, dueAlertDays: 1, saveState: 'idle', initialLaneId: null, initialPlacement: 'bottom', laneTicketCount: 0, boards: () => [] })
 const emit = defineEmits<{
@@ -211,8 +212,23 @@ const fileError = ref('')
 const dragActive = ref(false)
 const lightboxId = ref<string | null>(null)
 const imageAttachments = computed(() => props.ticket?.attachments.filter(attachment => attachment.mimeType.startsWith('image/')) || [])
-// The picture the card shows: the picked one, or the oldest as long as nobody picked.
-const cardImageId = computed(() => props.ticket?.coverAttachmentId || imageAttachments.value[0]?.id || null)
+// The pictures the card shows, ticked here: attachments and link previews alike. A preview
+// rendered since the board was loaded counts already, as it does on the card.
+const { finished: finishedPreviews } = useLinkPreviews()
+const cardImageSource = computed(() => props.ticket
+  ? { ...props.ticket, links: props.ticket.links.map(link => ({ ...link, preview: finishedPreviews.value[link.id]?.preview ?? link.preview })) }
+  : null)
+const shownOnCard = computed(() => new Set(cardImageSource.value ? cardImages(cardImageSource.value).map(image => image.id) : []))
+const cardImageOptions = computed(() => new Set(cardImageSource.value ? cardImageCandidates(cardImageSource.value).map(image => image.id) : []))
+
+function toggleCardImage(id: string) {
+  if (!cardImageSource.value) return
+  const next = new Set(shownOnCard.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  // Ticking makes the default a choice: from here on the card shows exactly what is ticked.
+  commit({ cardImageIds: cardImageCandidates(cardImageSource.value).map(image => image.id).filter(candidate => next.has(candidate)) })
+}
 const laneOptions = computed(() => props.lanes.map(lane => ({ value: lane.id, label: lane.name })))
 // Whether the ticket already sits where a reorder button would take it.
 const atTop = computed(() => (props.ticket?.position ?? 0) === 0)
@@ -997,27 +1013,16 @@ function focusTitle(event: Event) {
                   <button type="button" class="focus-ring ml-auto grid size-7 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10" :aria-label="`Remove ${file.name}`" @click="pendingFiles.splice(fileIndex, 1)"><X :size="14" /></button>
                 </div>
               </div>
-              <div v-for="attachment in ticket?.attachments" :key="attachment.id" class="surface-strong min-w-0 overflow-hidden rounded-xl text-xs">
+              <div v-for="attachment in ticket?.attachments" :key="attachment.id" class="surface-strong relative min-w-0 overflow-hidden rounded-xl text-xs">
                 <button v-if="attachment.mimeType.startsWith('image/')" type="button" class="focus-ring group block w-full" :aria-label="`Open ${attachment.filename}`" @click="lightboxId = attachment.id">
                   <img :src="attachment.url" :alt="attachment.filename" class="h-36 w-full bg-black/5 object-contain transition group-hover:scale-[1.03]" loading="lazy">
                 </button>
+                <CardImageToggle v-if="cardImageOptions.has(attachment.id)" :checked="shownOnCard.has(attachment.id)" :can-edit="canEdit" :name="attachment.filename" @toggle="toggleCardImage(attachment.id)" />
                 <div class="px-2 pb-1 pt-2">
                   <a v-if="!attachment.mimeType.startsWith('image/')" :href="attachment.url" target="_blank" class="focus-ring flex items-center gap-1.5 rounded font-semibold hover:text-[var(--accent)]" :title="attachment.filename"><FileText :size="14" class="muted shrink-0" /> <span class="min-w-0 truncate">{{ attachment.filename }}</span></a>
                   <div v-else class="truncate font-semibold" :title="attachment.filename">{{ attachment.filename }}</div>
                   <div class="mt-0.5 flex items-center">
                     <span class="muted mr-auto text-[10px]">{{ formatSize(attachment.size) }}</span>
-                    <!-- With a single picture there is nothing to choose between. -->
-                    <button
-                      v-if="attachment.mimeType.startsWith('image/') && imageAttachments.length > 1 && (canEdit || cardImageId === attachment.id)"
-                      type="button"
-                      class="focus-ring grid size-7 shrink-0 place-items-center rounded-lg disabled:cursor-default"
-                      :class="cardImageId === attachment.id ? 'text-[var(--accent)]' : 'muted hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]'"
-                      :disabled="!canEdit || cardImageId === attachment.id"
-                      :aria-pressed="cardImageId === attachment.id"
-                      :aria-label="cardImageId === attachment.id ? `${attachment.filename} is shown on the card` : `Show ${attachment.filename} on the card`"
-                      :title="cardImageId === attachment.id ? 'Shown on the card' : 'Show on the card'"
-                      @click="commit({ coverAttachmentId: attachment.id })"
-                    ><Star :size="14" :fill="cardImageId === attachment.id ? 'currentColor' : 'none'" /></button>
                     <a :href="attachment.url" :download="attachment.filename" class="focus-ring grid size-7 shrink-0 place-items-center rounded-lg hover:bg-[var(--accent-soft)]" :aria-label="`Download ${attachment.filename}`" title="Download"><Download :size="14" /></a>
                     <button v-if="canEdit" type="button" class="focus-ring grid size-7 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10 disabled:opacity-40" :disabled="deletingAttachmentId === attachment.id" :aria-label="`Delete ${attachment.filename}`" title="Delete" @click="emit('removeAttachment', attachment)"><Trash2 :size="14" /></button>
                   </div>
@@ -1043,7 +1048,7 @@ function focusTitle(event: Event) {
               </button>
             </template>
             <p v-if="fileError" class="text-xs font-semibold text-rose-600" role="alert">{{ fileError }}</p>
-            <TicketLinks :links="links" :saved="ticket?.links" :can-edit="canEdit" class="border-t border-[var(--line)] pt-4" @change="changeLinks" />
+            <TicketLinks :links="links" :saved="ticket?.links" :can-edit="canEdit" :card-image-options="cardImageOptions" :shown-on-card="shownOnCard" class="border-t border-[var(--line)] pt-4" @change="changeLinks" @toggle-card-image="toggleCardImage" />
           </aside>
 
           <!-- The thread lives on the saved ticket, so a brand-new one gets it after the first save. -->

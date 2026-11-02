@@ -231,8 +231,9 @@ export function registerTools(server: McpServer, actor: Actor) {
       source: ticket.source,
       buildNumber: ticket.buildNumber,
       // What the page said about itself, when somebody has opened the ticket and it was read.
-      links: ticket.links.map(link => ({ url: link.url, display: link.display, title: link.preview.title, description: link.preview.description })),
-      coverAttachmentId: ticket.coverAttachmentId,
+      links: ticket.links.map(link => ({ id: link.id, url: link.url, display: link.display, title: link.preview.title, description: link.preview.description, hasPreviewImage: Boolean(link.preview.imageUrl) })),
+      // What the card shows, attachments and link previews alike; null while nobody picked.
+      cardImageIds: ticket.cardImageIds,
       author: nameOf(ticket.author),
       createdAt: ticket.createdAt,
       archivedAt: ticket.archivedAt,
@@ -339,7 +340,9 @@ export function registerTools(server: McpServer, actor: Actor) {
       dueDate: z.string().nullable().optional(),
       links: z.array(LINK_INPUT).max(50).optional()
         .describe('Replaces the whole link list — read the ticket first and send every link back, kept and new alike. Omit the field to leave the list alone.'),
-      coverAttachmentId: z.string().nullable().optional().describe('The id of one of the ticket’s image attachments (from get_ticket) to show on its card; null goes back to the oldest image.'),
+      cardImageIds: z.array(z.string()).max(100).nullable().optional()
+        .describe('The pictures the card shows: ids of image attachments and of links shown as a preview with hasPreviewImage (from get_ticket). Replaces the whole pick; [] shows none, null goes back to the default — the oldest image attachment, else the first link preview.'),
+      coverAttachmentId: z.string().nullable().optional().describe('Older form of cardImageIds for a single image attachment; prefer cardImageIds.'),
       labels: z.array(z.string()).max(12).optional(),
       categoryName: z.string().nullable().optional(),
       typeId: z.string().nullable().optional().describe('A ticket type id from board_overview.ticketTypes; null removes the type.'),

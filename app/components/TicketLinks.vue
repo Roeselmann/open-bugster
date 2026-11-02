@@ -11,8 +11,15 @@ import type { LinkDisplay, TicketLink, TicketLinkInput } from '~~/shared/types/d
  * `change`, exactly like the to-dos. What the pages said about themselves comes from the
  * saved ticket (`saved`), and a preview still `pending` is read here the moment it is shown.
  */
-const props = withDefaults(defineProps<{ links: TicketLinkInput[]; saved?: TicketLink[]; canEdit?: boolean }>(), { saved: () => [], canEdit: true })
-const emit = defineEmits<{ change: [links: TicketLinkInput[]] }>()
+const props = withDefaults(defineProps<{
+  links: TicketLinkInput[]
+  saved?: TicketLink[]
+  canEdit?: boolean
+  /** Ids of the links whose preview could go on the card, and of those the card shows. */
+  cardImageOptions?: Set<string>
+  shownOnCard?: Set<string>
+}>(), { saved: () => [], canEdit: true, cardImageOptions: () => new Set(), shownOnCard: () => new Set() })
+const emit = defineEmits<{ change: [links: TicketLinkInput[]]; toggleCardImage: [id: string] }>()
 
 const MAX_LINKS = 50
 const draft = ref('')
@@ -109,6 +116,13 @@ function paste(event: ClipboardEvent) {
           <a :href="link.url" target="_blank" rel="noopener noreferrer" class="focus-ring min-w-0 flex-1 truncate rounded font-semibold underline decoration-dotted hover:text-[var(--accent)]" :title="link.url">{{ link.url.replace(/^https?:\/\//i, '') }}</a>
         </div>
 
+        <CardImageToggle
+          v-if="link.display === 'preview' && link.saved?.preview.imageUrl && cardImageOptions.has(link.saved.id)"
+          :checked="shownOnCard.has(link.saved.id)"
+          :can-edit="canEdit"
+          :name="host(link.url)"
+          @toggle="emit('toggleCardImage', link.saved!.id)"
+        />
         <!-- Over the thumbnail on a card, at the end of the row as text. -->
         <div
           v-if="canEdit"

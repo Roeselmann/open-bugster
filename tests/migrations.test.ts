@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
-import { ensureBoardIntegrations, ensureSyncRunProvider, ensureTicketLinks, ensureTicketSourceJira } from '../server/utils/db'
+import { ensureBoardIntegrations, ensureSyncRunProvider, ensureTicketCardImages, ensureTicketLinks, ensureTicketSourceJira } from '../server/utils/db'
 
 /**
  * The migrations that generalise the import: run against hand-built tables of the previous
@@ -98,5 +98,20 @@ describe('the integration migrations', () => {
     expect(db.prepare("SELECT link FROM tickets WHERE id = 't1'").get()).toEqual({ link: 'https://example.com/spec' })
     expect(ensureTicketLinks(db)).toBe(false)
     expect(db.prepare('SELECT COUNT(*) AS value FROM ticket_links').get()).toEqual({ value: 2 })
+  })
+
+  it('turns the single card image into a pick of one, and keeps the old column', () => {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE tickets (id TEXT PRIMARY KEY, cover_attachment_id TEXT);
+      INSERT INTO tickets VALUES ('t1', 'a1');
+      INSERT INTO tickets VALUES ('t2', NULL);
+    `)
+    expect(ensureTicketCardImages(db)).toBe(true)
+    expect(db.prepare('SELECT id, card_images, cover_attachment_id FROM tickets ORDER BY id').all()).toEqual([
+      { id: 't1', card_images: '["a1"]', cover_attachment_id: 'a1' },
+      { id: 't2', card_images: null, cover_attachment_id: null }
+    ])
+    expect(ensureTicketCardImages(db)).toBe(false)
   })
 })

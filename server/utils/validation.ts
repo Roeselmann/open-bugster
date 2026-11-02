@@ -64,7 +64,8 @@ export const ticketCreateSchema = z.object({
 })
 
 export const ticketUpdateSchema = z.object(ticketShape).partial().extend({
-  /** The image the card shows. A new ticket has no attachments yet, so only an update takes it. */
+  /** The pictures the card shows. A new ticket has no images yet, so only an update takes them. */
+  cardImageIds: z.array(idSchema).max(100).nullable().optional(),
   coverAttachmentId: idSchema.nullable().optional()
 })
 

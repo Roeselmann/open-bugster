@@ -3,6 +3,7 @@ import { AlarmClock, ArrowDownToLine, ArrowUpToLine, CalendarClock, Check, Chevr
 import type { Lane, Ticket } from '~~/shared/types/domain'
 import { CATEGORY_TONE_CLASSES } from '~~/shared/utils/constants'
 import { boardToday, dueDescription, dueLevel } from '~~/shared/utils/due-date'
+import { cardImages } from '~~/shared/utils/card-images'
 
 const props = withDefaults(defineProps<{
   ticket: Ticket
@@ -69,12 +70,16 @@ const dueState = computed(() => dueLevel(props.ticket.dueDate, today, { warningD
 // Only said when the border is lit, so the colour always comes with its reason.
 const dueText = computed(() => (dueState.value === 'none' || !props.ticket.dueDate ? null : dueDescription(props.ticket.dueDate, today)))
 
-// The picture picked in the editor, or the oldest one when nobody picked.
-const imageAttachment = computed(() => {
-  if (!props.showScreenshot) return null
-  const images = props.ticket.attachments.filter(attachment => attachment.mimeType.startsWith('image/'))
-  return images.find(attachment => attachment.id === props.ticket.coverAttachmentId) || images[0] || null
+// The pictures ticked in the editor, or one picked by default (see `cardImages`). A link
+// preview finished since the board was loaded is already counted, before the next reload.
+const { finished: finishedPreviews } = useLinkPreviews()
+const MAX_CARD_IMAGES = 4
+const images = computed(() => {
+  if (!props.showScreenshot) return []
+  const links = props.ticket.links.map(link => ({ ...link, preview: finishedPreviews.value[link.id]?.preview ?? link.preview }))
+  return cardImages({ ...props.ticket, links })
 })
+const moreImages = computed(() => Math.max(0, images.value.length - MAX_CARD_IMAGES))
 const authorText = computed(() => {
   const author = props.ticket.author || props.ticket.feedback?.tester || props.ticket.jira?.reporter
   if (author) return displayName(author)
@@ -155,13 +160,20 @@ const reorderButtons = computed(() => [
         </div>
 
         <img
-          v-if="imageAttachment"
-          :src="imageAttachment.url"
-          :alt="imageAttachment.filename"
+          v-if="images.length === 1"
+          :src="images[0]!.url"
+          :alt="images[0]!.label"
           class="mt-3 max-h-64 w-full rounded-none border-0 bg-transparent object-contain shadow-none outline-none"
           loading="lazy"
           draggable="false"
         >
+        <!-- Several pictures share the width in pairs, three with the first across; past four, the last one says how many more. -->
+        <div v-else-if="images.length" class="mt-3 grid grid-cols-2 gap-1">
+          <div v-for="(image, index) in images.slice(0, MAX_CARD_IMAGES)" :key="image.id" class="relative overflow-hidden rounded-md bg-black/5" :class="images.length === 3 && index === 0 ? 'col-span-2' : ''">
+            <img :src="image.url" :alt="image.label" class="aspect-video w-full object-cover" loading="lazy" draggable="false">
+            <span v-if="moreImages && index === MAX_CARD_IMAGES - 1" class="absolute inset-0 grid place-items-center bg-black/55 text-sm font-bold text-white">+{{ moreImages }}</span>
+          </div>
+        </div>
 
         <div v-if="ticket.todos.length" class="mt-3 rounded-lg bg-[color-mix(in_srgb,var(--panel)_65%,transparent)] px-2.5 py-2">
           <div class="muted mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[.06em]">

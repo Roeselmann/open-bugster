@@ -356,7 +356,12 @@ export interface TicketPatch {
   buildNumber?: string | null
   /** The whole list, in order; it replaces what the ticket had. */
   links?: TicketLinkInput[]
-  /** The image attachment the card shows; null goes back to the oldest image. */
+  /**
+   * The pictures the card shows: ids of image attachments and of links with a rendered
+   * preview, in any order. An empty list shows none; null goes back to the default.
+   */
+  cardImageIds?: string[] | null
+  /** One image attachment for the card, from the time it showed only one; null goes back to the default. */
   coverAttachmentId?: string | null
   assigneeId?: string | null
   authorId?: string | null
@@ -436,7 +441,12 @@ export interface Ticket {
   link: string | null
   /** References elsewhere, in order — the Jira issue for an import, anything for a person. */
   links: TicketLink[]
-  /** The image attachment picked for the card; null means the oldest image is shown. */
+  /**
+   * The pictures picked for the card, attachments and link previews alike; null while nobody
+   * picked, when `cardImages` in `shared/utils/card-images.ts` falls back to the default.
+   */
+  cardImageIds: string[] | null
+  /** The first picked image attachment, kept for callers from the time the card showed only one. */
   coverAttachmentId: string | null
   source: TicketSource
   externalId: string | null

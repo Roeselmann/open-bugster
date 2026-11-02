@@ -53,6 +53,7 @@ const ticketSample = {
       position: 0,
       preview: { status: 'ready', title: 'Gallery spec', description: 'How the gallery behaves offline.', siteName: 'Example', imageUrl: '/api/links/lnk_5e08…/thumbnail' }
     }],
+    cardImageIds: null,
     coverAttachmentId: null,
     source: 'testflight',
     externalId: 'apple_fb_9f21…',

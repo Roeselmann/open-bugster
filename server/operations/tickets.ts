@@ -7,6 +7,7 @@ import {
 } from '../utils/db'
 import { importedTicketUpdateSchema, ticketCreateSchema, ticketMoveSchema, ticketTransferSchema, ticketUpdateSchema } from '../utils/validation'
 import { deleteLinkThumbnails } from '../utils/link-preview'
+import { cardImageCandidates } from '../../shared/utils/card-images'
 import { createdId, defineOperation } from './types'
 import { orNotFound } from './run'
 
@@ -154,6 +155,13 @@ export const ticketUpdate = defineOperation({
     if (fields.typeId && fields.typeId !== ticket.type?.id && !ticketTypeBelongsToBoard(fields.typeId, ticket.boardId)) throw foreignType()
     if (fields.coverAttachmentId && !ticket.attachments.some(file => file.id === fields.coverAttachmentId && file.mimeType.startsWith('image/'))) {
       throw createError({ statusCode: 422, statusMessage: 'The card image has to be one of this ticket’s image attachments.' })
+    }
+    if (fields.cardImageIds) {
+      // Offered means shown: a link only counts with its preview on, as on the card.
+      const offered = new Set(cardImageCandidates(ticket).map(image => image.id))
+      if (fields.cardImageIds.some(id => !offered.has(id))) {
+        throw createError({ statusCode: 422, statusMessage: 'A card image has to be one of this ticket’s image attachments or rendered link previews.' })
+      }
     }
     if ('authorId' in fields && (fields.authorId ?? null) !== (ticket.author?.id ?? null)) {
       // Attribution is a claim about who reported something, so it stays with the board's

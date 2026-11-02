@@ -281,6 +281,32 @@ describe('the operation registry', () => {
       expect((await update(null)).ticket.coverAttachmentId).toBeNull()
     })
 
+    it('puts several pictures on the card, attachments and rendered link previews alike', async () => {
+      const { ticket } = await ops.run(ops.ticketCreate, actorOf('editor'), {
+        boardId, title: 'Pictures and pages', laneId,
+        links: [{ url: 'https://example.com/page', display: 'preview' }, { url: 'https://example.com/plain', display: 'text' }]
+      }) as { ticket: { id: string, links: Array<{ id: string }> } }
+      const [page, plain] = ticket.links as [{ id: string }, { id: string }]
+      db.saveLinkPreview(page.id, { title: 'Page', description: null, siteName: null, imagePath: `${ticket.id}/link-page.jpg` })
+      db.saveLinkPreview(plain.id, { title: 'Plain', description: null, siteName: null, imagePath: `${ticket.id}/link-plain.jpg` })
+      const shot = db.addAttachment(ticket.id, 'file', 'shot.png', 'image/png', 11, `${ticket.id}/shot.png`)
+      const update = (cardImageIds: string[] | null) => ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, cardImageIds }) as Promise<{ ticket: { cardImageIds: string[] | null, coverAttachmentId: string | null } }>
+
+      expect(db.findTicket(ticket.id)?.cardImageIds).toBeNull()
+      expect((await update([page.id, shot])).ticket).toMatchObject({ cardImageIds: [page.id, shot], coverAttachmentId: shot })
+      // A link shown as text offers no picture, whatever it once rendered.
+      expect(await statusOf(update([plain.id]))).toBe(422)
+      expect(await statusOf(update(['somebody-else']))).toBe(422)
+      expect((await update([])).ticket.cardImageIds).toEqual([])
+      // The older single pick still works, as a pick of one.
+      const single = await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, coverAttachmentId: shot }) as { ticket: { cardImageIds: string[] | null } }
+      expect(single.ticket.cardImageIds).toEqual([shot])
+
+      // Once every picked picture is gone the card goes back to the default, not to nothing.
+      db.deleteAttachment(shot)
+      expect(db.findTicket(ticket.id)?.cardImageIds).toBeNull()
+    })
+
     /**
      * The guarantee the registry exists for. If this ever fails, somebody has added a write
      * that the audit log cannot see.
