@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS boards (
   sync_limit INTEGER NOT NULL DEFAULT 100,
   auto_author INTEGER NOT NULL DEFAULT 1 CHECK (auto_author IN (0, 1)),
   due_warning_days INTEGER NOT NULL DEFAULT 7,
-  due_alert_days INTEGER NOT NULL DEFAULT 0,
+  due_alert_days INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS board_integrations (
@@ -236,9 +236,9 @@ CREATE INDEX IF NOT EXISTS idx_ticket_labels_label ON ticket_labels(label_id);
 /** How many of the newest feedback submissions a sync looks at, per feedback type. */
 export const DEFAULT_SYNC_LIMIT = 100
 
-/** How many days ahead of its due date a card turns orange, and red. Red on the day itself. */
+/** How many days ahead of its due date a card turns orange, and red: a week, and the day before. */
 export const DEFAULT_DUE_WARNING_DAYS = 7
-export const DEFAULT_DUE_ALERT_DAYS = 0
+export const DEFAULT_DUE_ALERT_DAYS = 1
 
 /** The type a board's imports land with unless somebody picks another: the plain "Ticket". */
 export const DEFAULT_IMPORT_TYPE_NAME = 'Ticket'

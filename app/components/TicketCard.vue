@@ -21,7 +21,7 @@ const props = withDefaults(defineProps<{
   /** The board's lead times: orange from this many days before the due date, red from the other. */
   dueWarningDays?: number
   dueAlertDays?: number
-}>(), { laneCount: 0, draggable: true, droppable: false, testflight: true, dueWarningDays: 7, dueAlertDays: 0 })
+}>(), { laneCount: 0, draggable: true, droppable: false, testflight: true, dueWarningDays: 7, dueAlertDays: 1 })
 const emit = defineEmits<{
   open: [ticket: Ticket]
   move: [laneId: string]

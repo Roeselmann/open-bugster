@@ -13,7 +13,7 @@ const props = withDefaults(defineProps<{
   testflight?: boolean
   dueWarningDays?: number
   dueAlertDays?: number
-}>(), { canEdit: true, laneId: null, testflight: true, dueWarningDays: 7, dueAlertDays: 0 })
+}>(), { canEdit: true, laneId: null, testflight: true, dueWarningDays: 7, dueAlertDays: 1 })
 const emit = defineEmits<{ open: [ticket: Ticket]; move: [id: string, laneId: string, index: number]; create: [laneId: string, placement: 'top' | 'bottom']; upload: [ticket: Ticket, files: File[]] }>()
 
 const showScreenshotByLane = reactive<Record<string, boolean>>({})

@@ -33,7 +33,7 @@ const unsaved = computed(() => Boolean(board.value)
 /* ── due date warnings ─────────────────────────────────────────────────── */
 
 const dueWarningDays = ref(7)
-const dueAlertDays = ref(0)
+const dueAlertDays = ref(1)
 watchEffect(() => {
   if (!board.value) return
   dueWarningDays.value = board.value.dueWarningDays

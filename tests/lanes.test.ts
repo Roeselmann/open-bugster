@@ -153,7 +153,7 @@ describe('boards and lanes', () => {
     expect(db.updateBoard(board.id, { description: '' })?.description).toBe('')
   })
 
-  it('keeps the due date lead times per board, starting at a week and the day itself', () => {
+  it('keeps the due date lead times per board, starting at a week and the day before', () => {
     const board = db.createBoard('Deadlines')
     expect(board.dueWarningDays).toBe(db.DEFAULT_DUE_WARNING_DAYS)
     expect(board.dueAlertDays).toBe(db.DEFAULT_DUE_ALERT_DAYS)

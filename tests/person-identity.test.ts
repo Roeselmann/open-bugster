@@ -149,13 +149,13 @@ describe('the person-identity migration', () => {
     legacy.close()
   })
 
-  it('adds the due date lead times, a week for orange and the day itself for red', async () => {
+  it('adds the due date lead times, a week for orange and the day before for red', async () => {
     const db = await import('../server/utils/db')
     const legacy = legacyDatabase()
 
     expect(db.ensureBoardDueWarnings(legacy)).toBe(true)
     expect(db.ensureBoardDueWarnings(legacy)).toBe(false)
-    expect(legacy.prepare('SELECT due_warning_days, due_alert_days FROM boards').get()).toEqual({ due_warning_days: 7, due_alert_days: 0 })
+    expect(legacy.prepare('SELECT due_warning_days, due_alert_days FROM boards').get()).toEqual({ due_warning_days: 7, due_alert_days: 1 })
     legacy.close()
   })
 })

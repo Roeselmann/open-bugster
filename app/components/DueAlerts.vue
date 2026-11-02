@@ -58,7 +58,7 @@ function openWorkspace(workspaceId: string) {
         ? 'border-rose-600/40 bg-rose-600/10 text-rose-600 hover:bg-rose-600/15'
         : 'border-orange-400/50 bg-orange-400/10 text-orange-600 hover:bg-orange-400/20 dark:text-orange-300'"
       :aria-label="`${tickets.length} ${tickets.length === 1 ? 'ticket' : 'tickets'} due soon or overdue`"
-      :title="alertCount ? `${alertCount} due today or overdue` : `${tickets.length} due soon`"
+      :title="alertCount ? `${alertCount} urgent` : `${tickets.length} due soon`"
     >
       <AlarmClock :size="18" aria-hidden="true" />
       <span
@@ -77,7 +77,7 @@ function openWorkspace(workspaceId: string) {
         <div class="px-3 pb-1 pt-2">
           <p class="text-sm font-bold">Due dates</p>
           <p class="muted text-xs">
-            <template v-if="alertCount">{{ alertCount }} due today or overdue<template v-if="tickets.length > alertCount">, {{ tickets.length - alertCount }} coming up</template>.</template>
+            <template v-if="alertCount">{{ alertCount }} urgent<template v-if="tickets.length > alertCount">, {{ tickets.length - alertCount }} coming up</template>.</template>
             <template v-else>{{ tickets.length }} coming up.</template>
           </p>
         </div>
