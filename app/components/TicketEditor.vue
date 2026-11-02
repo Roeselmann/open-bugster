@@ -12,7 +12,7 @@ import {
 import type { Attachment, BoardMember, Category, LabelSummary, Lane, Ticket, TicketPatch, TicketPriority, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 
-const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; /** How the last field-by-field save went; shown in the footer of an existing ticket. */ saveState?: 'idle' | 'saving' | 'saved' | 'error'; deletingAttachmentId?: string | null; initialLaneId?: string | null; initialPlacement?: 'top' | 'bottom'; laneTicketCount?: number; /** Other boards of the workspace the ticket may be moved onto. */ boards?: BoardSummary[] }>(), { canEdit: true, saveState: 'idle', initialLaneId: null, initialPlacement: 'bottom', laneTicketCount: 0, boards: () => [] })
+const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; /** How the last field-by-field save went; shown in the footer of an existing ticket. */ saveState?: 'idle' | 'saving' | 'saved' | 'error'; deletingAttachmentId?: string | null; initialLaneId?: string | null; initialPlacement?: 'top' | 'bottom'; laneTicketCount?: number; /** Other boards of the workspace the ticket may be moved onto. */ boards?: BoardSummary[]; /** Whether the board has TestFlight connected; without it a build number has nothing to refer to. */ testflight?: boolean }>(), { canEdit: true, testflight: true, saveState: 'idle', initialLaneId: null, initialPlacement: 'bottom', laneTicketCount: 0, boards: () => [] })
 const emit = defineEmits<{
   close: []
   /** Creates a new ticket. An existing one never comes through here: its fields save themselves via `patch`. */
@@ -40,6 +40,7 @@ let categoryInFlight: string | null | undefined
 let todoSequence = 0
 const isEdit = computed(() => Boolean(props.ticket))
 const isManual = computed(() => !props.ticket || props.ticket.source === 'manual')
+const showBuildNumber = computed(() => isManual.value && props.testflight)
 const titleInput = ref<HTMLTextAreaElement | null>(null)
 const descriptionInput = ref<HTMLTextAreaElement | null>(null)
 
@@ -880,7 +881,7 @@ function focusTitle(event: Event) {
               </label>
             </div>
 
-            <label v-if="isManual" class="block">
+            <label v-if="showBuildNumber" class="block">
               <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><TestTubeDiagonal :size="14" /> Build number</span>
               <input v-model="form.buildNumber" maxlength="100" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none" placeholder="e.g. 42 or 1.4.0 (42)" :readonly="!canEdit" @blur="commitBuildNumber" @keydown.enter.prevent="commitBuildNumber">
             </label>

@@ -9,7 +9,9 @@ const props = withDefaults(defineProps<{
   canEdit?: boolean
   /** Phone layout: only this lane, full width, without the lane's own frame and scroll box — and no drag, the card's buttons reorder. */
   laneId?: string | null
-}>(), { canEdit: true, laneId: null })
+  /** Whether the board has TestFlight connected, handed on to the cards. */
+  testflight?: boolean
+}>(), { canEdit: true, laneId: null, testflight: true })
 const emit = defineEmits<{ open: [ticket: Ticket]; move: [id: string, laneId: string, index: number]; create: [laneId: string, placement: 'top' | 'bottom']; upload: [ticket: Ticket, files: File[]] }>()
 
 const showScreenshotByLane = reactive<Record<string, boolean>>({})
@@ -377,6 +379,7 @@ onBeforeUnmount(cleanupPointerDrag)
                 :lane-count="ticketsFor(lane.id).length"
                 :draggable="!compact"
                 :droppable="canEdit"
+                :testflight="testflight"
                 @open="emit('open', $event)"
                 @move="nextLaneId => emit('move', item.id, nextLaneId, ticketsFor(nextLaneId).length)"
                 @reorder="placement => reorderTicket(item, placement)"
@@ -425,7 +428,7 @@ onBeforeUnmount(cleanupPointerDrag)
       }"
       aria-hidden="true"
     >
-      <TicketCard :ticket="draggedTicket" :index="0" :lanes="lanes" :show-screenshot="showScreenshotByLane[draggedTicket.laneId]" preview />
+      <TicketCard :ticket="draggedTicket" :index="0" :lanes="lanes" :show-screenshot="showScreenshotByLane[draggedTicket.laneId]" :testflight="testflight" preview />
     </div>
   </Teleport>
 </template>

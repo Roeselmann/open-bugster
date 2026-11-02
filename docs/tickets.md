@@ -1,6 +1,6 @@
 # Tickets
 
-A ticket is a card on a board: a title, a description, an internal comment, priority, due date, build number, an optional link to something elsewhere, a to-do list, attachments, one category, any number of labels, an assignee, a comment thread, and a history. Imported TestFlight feedback and Jira issues become tickets too, with the original submission or issue attached. Tickets are moved by dragging, archived instead of deleted, and numbered instance-wide.
+A ticket is a card on a board: a title, a description, an internal comment, priority, due date, build number, an optional link to something elsewhere, a to-do list, attachments, one category, any number of labels, an assignee, a comment thread, and a history. Imported TestFlight feedback and Jira issues become tickets too, with the original submission or issue attached. The build number, in the editor and on the card, only appears on boards with TestFlight connected. Tickets are moved by dragging, archived instead of deleted, and numbered instance-wide.
 
 ## Using it
 

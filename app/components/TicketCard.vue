@@ -15,7 +15,9 @@ const props = withDefaults(defineProps<{
   draggable?: boolean
   /** Whether files dragged in from the desktop may be dropped on the card as attachments. */
   droppable?: boolean
-}>(), { laneCount: 0, draggable: true, droppable: false })
+  /** Whether the board has TestFlight connected; without it the build number stays hidden. */
+  testflight?: boolean
+}>(), { laneCount: 0, draggable: true, droppable: false, testflight: true })
 const emit = defineEmits<{
   open: [ticket: Ticket]
   move: [laneId: string]
@@ -174,7 +176,7 @@ const reorderButtons = computed(() => [
             <span v-if="cardDateText" class="ml-auto flex shrink-0 items-center gap-1"><CalendarClock :size="13" /> {{ cardDateText }}</span>
           </div>
           <div class="flex items-center gap-3" :class="authorText || cardDateText ? 'mt-2' : ''">
-            <span v-if="ticket.buildNumber" class="flex min-w-0 items-center gap-1"><TestTubeDiagonal :size="13" class="shrink-0" /> <span class="truncate">Build {{ ticket.buildNumber }}</span></span>
+            <span v-if="testflight && ticket.buildNumber" class="flex min-w-0 items-center gap-1"><TestTubeDiagonal :size="13" class="shrink-0" /> <span class="truncate">Build {{ ticket.buildNumber }}</span></span>
             <a
               v-if="ticket.link"
               :href="ticket.link"
