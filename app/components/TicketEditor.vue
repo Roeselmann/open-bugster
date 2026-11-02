@@ -187,6 +187,91 @@ function rememberComments(open: boolean) {
   }
 }
 
+/**
+ * The files column can be dragged wider, from its narrow default up to about the width of the
+ * comments column. Only the files column changes: the drawer grows by as much, so the fields
+ * and the comments keep their width — as long as the window has the room, which caps the
+ * drag. The width is one for every ticket, kept in this browser like the comments column.
+ */
+const FILES_WIDTH_KEY = 'open-bugster-ticket-files-width'
+const FILES_MIN_WIDTH = 240
+// The drawer at the narrow files column: 52rem, or 78rem with the comments beside the fields.
+const DRAWER_WIDTH = 832
+const DRAWER_WIDTH_WITH_COMMENTS = 1248
+// As wide as the comments column at that size.
+const FILES_MAX_WIDTH = (DRAWER_WIDTH_WITH_COMMENTS - FILES_MIN_WIDTH) / 2
+const LG_BREAKPOINT = 1024
+const columns = ref<HTMLElement | null>(null)
+const filesWidth = ref(FILES_MIN_WIDTH)
+const resizingFiles = ref(false)
+const viewportWidth = ref(LG_BREAKPOINT)
+const baseDrawerWidth = computed(() => commentsOpen.value && viewportWidth.value >= LG_BREAKPOINT ? DRAWER_WIDTH_WITH_COMMENTS : DRAWER_WIDTH)
+const maxFilesWidth = () => Math.max(FILES_MIN_WIDTH, Math.min(FILES_MAX_WIDTH, viewportWidth.value - baseDrawerWidth.value + FILES_MIN_WIDTH))
+const shownFilesWidth = computed(() => Math.min(filesWidth.value, maxFilesWidth()))
+const drawerStyle = computed(() => ({
+  maxWidth: `${baseDrawerWidth.value + shownFilesWidth.value - FILES_MIN_WIDTH}px`,
+  '--files-width': `${shownFilesWidth.value}px`
+}))
+const measureViewport = () => { viewportWidth.value = window.innerWidth }
+onMounted(() => {
+  measureViewport()
+  window.addEventListener('resize', measureViewport)
+})
+onBeforeUnmount(() => window.removeEventListener('resize', measureViewport))
+
+function setFilesWidth(width: number) {
+  filesWidth.value = Math.round(Math.min(maxFilesWidth(), Math.max(FILES_MIN_WIDTH, width)))
+}
+function rememberFilesWidth() {
+  try {
+    localStorage.setItem(FILES_WIDTH_KEY, String(filesWidth.value))
+  } catch {
+    // As with the comments: the column still resizes, it just forgets.
+  }
+}
+onMounted(() => {
+  try {
+    const stored = Number(localStorage.getItem(FILES_WIDTH_KEY))
+    if (stored >= FILES_MIN_WIDTH) filesWidth.value = Math.round(stored)
+  } catch {
+    // Nothing stored, or nothing readable: the default stands.
+  }
+})
+
+function startFilesResize(event: PointerEvent) {
+  if (event.button !== 0 || !columns.value) return
+  event.preventDefault()
+  // The column is the rightmost one, so its width is wherever the pointer is, counted from the right.
+  const right = columns.value.getBoundingClientRect().right
+  setFilesWidth(right - event.clientX)
+  resizingFiles.value = true
+  const move = (moved: PointerEvent) => setFilesWidth(right - moved.clientX)
+  const stop = () => {
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', stop)
+    window.removeEventListener('pointercancel', stop)
+    resizingFiles.value = false
+    rememberFilesWidth()
+  }
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', stop)
+  window.addEventListener('pointercancel', stop)
+}
+function resizeFilesByKey(event: KeyboardEvent) {
+  const step = event.shiftKey ? 64 : 16
+  if (event.key === 'ArrowLeft') setFilesWidth(filesWidth.value + step)
+  else if (event.key === 'ArrowRight') setFilesWidth(filesWidth.value - step)
+  else if (event.key === 'Home') setFilesWidth(FILES_MIN_WIDTH)
+  else if (event.key === 'End') setFilesWidth(maxFilesWidth())
+  else return
+  event.preventDefault()
+  rememberFilesWidth()
+}
+function resetFilesWidth() {
+  setFilesWidth(FILES_MIN_WIDTH)
+  rememberFilesWidth()
+}
+
 function closeComments() {
   commentsOpen.value = false
   rememberComments(false)
@@ -251,7 +336,7 @@ function toggleTransfer() {
   if (transferOpen.value && !props.boards.some(board => board.id === targetBoardId.value)) targetBoardId.value = props.boards[0]?.id || ''
 }
 // The small pill beside a field label ("Assign to me").
-const labelPill = 'focus-ring flex h-5 items-center gap-1 rounded-full border px-2 text-[11px] font-semibold leading-none transition'
+const labelPill = 'focus-ring flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-2 text-[11px] font-semibold leading-none transition'
 const labelPillIdle = 'muted border-[var(--line)] hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]'
 // The icon buttons beside the lane in the header: to the top, to the bottom, to another board.
 const headerButton = 'focus-ring muted flex size-8 shrink-0 items-center justify-center rounded-lg border border-[var(--line)] transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--line)] disabled:hover:bg-transparent'
@@ -628,7 +713,8 @@ function focusTitle(event: Event) {
       <DialogContent
         data-ticket-editor-scroll
         class="ui-dialog-content fixed inset-y-0 right-0 z-[51] h-full w-full overflow-y-auto bg-[var(--panel)] shadow-2xl outline-none transition-[max-width] duration-200 ease-out"
-        :class="commentsOpen ? 'max-w-[52rem] lg:max-w-[78rem]' : 'max-w-[52rem]'"
+        :class="resizingFiles ? '!transition-none' : ''"
+        :style="drawerStyle"
         @open-auto-focus="focusTitle"
       >
         <VisuallyHidden>
@@ -679,7 +765,12 @@ function focusTitle(event: Event) {
             <button type="button" class="focus-ring grid size-10 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]" aria-label="Close" @click="requestClose"><X :size="20" /></button>
           </header>
 
-          <div class="flex-1 sm:grid sm:grid-cols-[minmax(0,1fr)_240px] sm:items-start" :class="commentsOpen ? 'lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_240px]' : ''">
+          <!-- Columns stretch to the footer so the lines between them run all the way down; what sticks is inside. -->
+          <div
+            ref="columns"
+            class="flex-1 sm:grid sm:grid-cols-[minmax(0,1fr)_var(--files-width)]"
+            :class="[commentsOpen ? 'lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_var(--files-width)]' : '', resizingFiles ? 'cursor-col-resize select-none' : '']"
+          >
           <div class="space-y-6 px-5 py-6 sm:px-7">
             <!-- The transfer, folded out by the header button: destination board and lane, then one deliberate button. -->
             <div v-if="ticket && targetBoard" class="surface-strong rounded-xl p-3">
@@ -1002,10 +1093,34 @@ function focusTitle(event: Event) {
           </div>
 
           <!-- Attachments ride as a narrow column at the far right, past the comments when those are open; on a phone they follow the fields. -->
-          <aside :class="commentsOpen ? 'lg:order-last' : ''" class="space-y-3 border-t border-[var(--line)] px-5 py-6 sm:sticky sm:top-[4.5rem] sm:max-h-[calc(100dvh-9rem)] sm:overflow-y-auto sm:border-l sm:border-t-0 sm:px-3 scrollbar-thin">
+          <div :class="commentsOpen ? 'lg:order-last' : ''" class="relative border-t border-[var(--line)] sm:border-l sm:border-t-0">
+            <!-- The whole line can be grabbed; the handle in its middle shows where. -->
+            <div class="absolute inset-y-0 -left-1.5 z-20 hidden w-3 cursor-col-resize sm:block" aria-hidden="true" @pointerdown="startFilesResize" @dblclick="resetFilesWidth" />
+            <div class="sm:sticky sm:top-[4.5rem] sm:h-[calc(100dvh-9rem)]">
+              <div
+                role="separator"
+                tabindex="0"
+                aria-orientation="vertical"
+                aria-label="Width of the files column"
+                :aria-valuenow="shownFilesWidth"
+                :aria-valuemin="FILES_MIN_WIDTH"
+                title="Drag to resize · double-click to reset"
+                class="group/handle focus-ring absolute left-0 top-1/2 z-30 hidden h-12 w-3 -translate-x-1/2 -translate-y-1/2 cursor-col-resize place-items-center rounded-full sm:grid"
+                @pointerdown="startFilesResize"
+                @dblclick="resetFilesWidth"
+                @keydown="resizeFilesByKey"
+              >
+                <span
+                  class="flex h-full w-full flex-col items-center justify-center gap-[3px] rounded-full border bg-[var(--panel-strong)] shadow-sm transition-colors group-hover/handle:border-[var(--accent)] group-hover/handle:bg-[var(--accent-soft)]"
+                  :class="resizingFiles ? 'border-[var(--accent)] bg-[var(--accent-soft)]' : 'border-[var(--line)]'"
+                >
+                  <span v-for="dot in 3" :key="dot" class="size-[3px] rounded-full bg-[var(--muted)] group-hover/handle:bg-[var(--accent)]" />
+                </span>
+              </div>
+          <aside class="space-y-3 px-5 py-6 sm:max-h-full sm:overflow-y-auto sm:px-3 scrollbar-thin">
             <h3 class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Paperclip :size="14" /> Files</h3>
             <p v-if="!canEdit && !ticket?.attachments.length" class="muted text-xs">No files.</p>
-            <div v-if="pendingFiles.length || ticket?.attachments.length" class="grid grid-cols-2 gap-2 sm:grid-cols-1">
+            <div v-if="pendingFiles.length || ticket?.attachments.length" class="grid grid-cols-2 gap-2 sm:grid-cols-[repeat(auto-fill,minmax(200px,1fr))]">
               <div v-for="(file, fileIndex) in pendingFiles" :key="`${file.name}-${file.size}-${file.lastModified}`" class="surface-strong min-w-0 rounded-xl p-2 text-xs">
                 <div class="flex items-center gap-1.5 font-semibold" :title="file.name"><FileText :size="14" class="muted shrink-0" /> <span class="min-w-0 truncate">{{ file.name }}</span></div>
                 <div class="mt-1 flex items-center">
@@ -1050,13 +1165,16 @@ function focusTitle(event: Event) {
             <p v-if="fileError" class="text-xs font-semibold text-rose-600" role="alert">{{ fileError }}</p>
             <TicketLinks :links="links" :saved="ticket?.links" :can-edit="canEdit" :card-image-options="cardImageOptions" :shown-on-card="shownOnCard" class="border-t border-[var(--line)] pt-4" @change="changeLinks" @toggle-card-image="toggleCardImage" />
           </aside>
+            </div>
+          </div>
 
           <!-- The thread lives on the saved ticket, so a brand-new one gets it after the first save. -->
-          <aside
+          <div
             v-if="ticket && commentsMounted"
             v-show="commentsOpen"
-            class="relative border-t border-[var(--line)] px-5 py-6 scrollbar-thin sm:col-span-2 sm:px-7 lg:sticky lg:top-[4.5rem] lg:col-span-1 lg:max-h-[calc(100dvh-9rem)] lg:overflow-y-auto lg:border-l lg:border-t-0"
+            class="border-t border-[var(--line)] sm:col-span-2 lg:col-span-1 lg:border-l lg:border-t-0"
           >
+          <aside class="relative px-5 py-6 scrollbar-thin sm:px-7 lg:sticky lg:top-[4.5rem] lg:max-h-[calc(100dvh-9rem)] lg:overflow-y-auto">
             <button type="button" class="focus-ring muted absolute right-4 top-4 grid size-8 place-items-center rounded-lg hover:bg-[var(--panel-strong)] hover:text-[var(--ink)] sm:right-6" aria-label="Hide comments" title="Hide comments" @click="closeComments"><X :size="16" /></button>
             <TicketComments
               :ticket-id="ticket.id"
@@ -1065,6 +1183,7 @@ function focusTitle(event: Event) {
               @notify="(type, text) => emit('notify', type, text)"
             />
           </aside>
+          </div>
           </div>
 
           <footer class="sticky bottom-0 flex items-center gap-3 border-t border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_62%,var(--canvas))] px-5 py-4 sm:px-7">

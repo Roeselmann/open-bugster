@@ -14,7 +14,7 @@ Cards are moved by dragging them between lanes or within a lane. On narrow scree
 
 ### To-dos and attachments
 
-Each ticket carries a to-do list: record the next steps, reorder them, and tick them off. Files such as screenshots and documents are attached directly to the ticket; images open in a lightbox. Each file is at most 25 MB, a ticket holds up to ten, and the file type has to be on the allowlist. Imported tickets work the same way: they take further files, and every attachment, including the screenshots, crash logs and Jira files an import brought along, can be deleted.
+Each ticket carries a to-do list: record the next steps, reorder them, and tick them off. Files such as screenshots and documents are attached directly to the ticket; images open in a lightbox. The files and links share a side column at the right of the ticket. Drag the handle in the middle of its left edge to widen it, up to the width of the comments column. The drawer grows by as much, so the fields and the comments keep their width; only a window too narrow for the wider drawer stops the drag earlier. Wider, the files and link cards sit side by side. The width holds for every ticket in this browser, and a double-click on the handle (or Home with the handle focused, the arrow keys in between) goes back to the narrow default. Each file is at most 25 MB, a ticket holds up to ten, and the file type has to be on the allowlist. Imported tickets work the same way: they take further files, and every attachment, including the screenshots, crash logs and Jira files an import brought along, can be deleted.
 
 ### Pictures on the card
 

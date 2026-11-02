@@ -86,8 +86,8 @@ function paste(event: ClipboardEvent) {
     <h3 class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><LinkIcon :size="14" /> Links</h3>
     <p v-if="!canEdit && !links.length" class="muted text-xs">No links.</p>
 
-    <div v-if="rows.length" class="grid grid-cols-2 gap-2 sm:grid-cols-1">
-      <div v-for="(link, index) in rows" :key="link.url" class="group/link surface-strong relative min-w-0 overflow-hidden rounded-xl text-xs" :class="link.display === 'text' ? 'col-span-2 sm:col-span-1' : ''">
+    <div v-if="rows.length" class="grid grid-cols-2 gap-2 sm:grid-cols-[repeat(auto-fill,minmax(200px,1fr))]">
+      <div v-for="(link, index) in rows" :key="link.url" class="group/link surface-strong relative min-w-0 overflow-hidden rounded-xl text-xs" :class="link.display === 'text' ? 'col-span-full' : ''">
         <a
           v-if="link.display === 'preview'"
           :href="link.url"
