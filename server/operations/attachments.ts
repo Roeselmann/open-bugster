@@ -11,6 +11,7 @@ import {
 } from '../utils/attachment-policy'
 import { AttachmentFetchError, fetchAttachmentSource } from '../utils/attachment-fetch'
 import { getServerConfig } from '../utils/config'
+import { createUploadSlot, UPLOAD_SLOT_MINUTES } from '../utils/upload-slot'
 import { createdId, defineOperation } from './types'
 import { orNotFound } from './run'
 import type { Ticket } from '~~/shared/types/domain'
@@ -158,5 +159,44 @@ export const attachmentAddFromUrl = defineOperation({
       throw error
     }
     return { attachment: await storeValidatedAttachment(ticket.id, source) }
+  }
+})
+
+/**
+ * An address the caller can send one file to, for when the file is on its own disk.
+ *
+ * `attachment.addFromUrl` covers a file somebody else is hosting; this covers the one an
+ * agent was handed in a chat. The agent sends it with `curl -F file=@…`, so the bytes go
+ * straight from its machine to the server — never through the model's context, and never
+ * with the API token in the agent's hands. The address is the only credential involved, good
+ * for one file, one ticket and a few minutes.
+ *
+ * The upload itself is `attachment.add`, run as this caller when the file arrives — so the
+ * access check is made again then, and the audit entry and webhook are the ordinary ones.
+ */
+export const attachmentUploadUrl = defineOperation({
+  name: 'attachment.uploadUrl',
+  summary: 'Get a one-time address to upload a file to a ticket',
+  input: z.object({
+    ticketId: z.string().trim().min(1).max(64),
+    filename: z.string().trim().min(1).max(180).optional()
+      .describe('Overrides the name the upload carries — the extension decides which types are allowed.')
+  }),
+  requires: { scope: 'ticket', role: 'editor', ticketId: input => input.ticketId },
+  // The secret is in the result, not the input, so the allowlist cannot reach it.
+  audit: { targetType: 'ticket', targetId: input => input.ticketId, changes: ['filename'] },
+  run: (ctx, input) => {
+    const ticket = ctx.ticket!
+    assertAttachable(ticket)
+    const { secret, slot } = createUploadSlot(ctx.actor, ticket.id, input.filename ?? null)
+    return {
+      upload: {
+        path: `/api/uploads/${secret}`,
+        method: 'POST' as const,
+        field: 'file',
+        expiresAt: slot.expiresAt,
+        expiresInMinutes: UPLOAD_SLOT_MINUTES
+      }
+    }
   }
 })

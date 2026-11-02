@@ -97,6 +97,19 @@ export const v1Routes: readonly V1Route[] = [
     method: 'POST', path: '/tickets/{ticketId}/attachments/from-url', operation: ops.attachmentAddFromUrl, status: 201,
     response: z.object({ attachment: attachmentSchema })
   },
+  // For a file on the caller's own disk, sent without the token: see `attachment.uploadUrl`.
+  {
+    method: 'POST', path: '/tickets/{ticketId}/attachments/upload-url', operation: ops.attachmentUploadUrl, status: 201,
+    response: z.object({
+      upload: z.object({
+        path: z.string().describe('POST one file here as the multipart field `field`, with no Authorization header.'),
+        method: z.literal('POST'),
+        field: z.string(),
+        expiresAt: z.string(),
+        expiresInMinutes: z.number().int()
+      })
+    })
+  },
 
   // Comments
   { method: 'GET', path: '/tickets/{ticketId}/comments', operation: ops.commentList, response: z.object({ comments: z.array(ticketCommentSchema) }) },

@@ -1,5 +1,6 @@
 import { auditRetentionDays, pruneAudit } from '~~/server/utils/audit'
 import { pruneIdempotent } from '~~/server/utils/db'
+import { pruneUploadSlots } from '~~/server/utils/upload-slot'
 import { pruneDeliveries } from '~~/server/utils/webhook'
 
 /**
@@ -14,6 +15,9 @@ export default defineNitroPlugin(() => {
   // regardless of what the audit log's retention is set to.
   const replayed = pruneIdempotent(24)
   if (replayed) console.info(`[open-bugster] pruned ${replayed} expired idempotency keys.`)
+
+  // Upload addresses live ten minutes; what is left of them is litter.
+  pruneUploadSlots(24)
 
   // Delivery attempts are a diagnostic, not a record; a week is long enough to debug with.
   const attempts = pruneDeliveries(7)

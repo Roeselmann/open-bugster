@@ -17,19 +17,21 @@ Mint a token under **Your profile → Integrations** (see [api.md](api.md) for s
 }
 ```
 
-The tools are shaped around what somebody actually asks for: searching one board or every reachable one, filing a ticket with its to-do list, commenting, asking `whats_new` for everything that happened on a board since a timestamp, restoring what was archived by mistake, and attaching a file by URL. For that last one the agent hands over a link (a Telegram file URL, say) and the server downloads it itself, so no bytes ever travel through the model's context.
+The tools are shaped around what somebody actually asks for: searching one board or every reachable one, filing a ticket with its to-do list, commenting, asking `whats_new` for everything that happened on a board since a timestamp, restoring what was archived by mistake, and attaching a file. For a file online the agent hands over a link (a Telegram file URL, say) and the server downloads it itself; for one on the agent's own disk it asks for a one-time upload address and sends the file there with `curl`. Either way no bytes ever travel through the model's context.
 
 The **What an agent can do** panel under **Your profile → Integrations** lists the tools of the running build. An agent's actions appear in ticket histories and the audit log as *via <agent label>*, beside the person who answers for it.
 
-## The surface: fifteen tools, on purpose
+## The surface: sixteen tools, on purpose
 
 Tool-selection accuracy falls off well before thirty options, so the surface is capped in the
-low teens — `tests/mcp.test.ts` enforces `tools.size <= 15`, and the answer to a new need is a
+low teens — `tests/mcp.test.ts` enforces `tools.size <= 16`, and the answer to a new need is a
 better-shaped tool, not another one. That cap is why to-do lists ride on `create_ticket` /
 `update_ticket` (whole-list replace) instead of having tools of their own, and why cross-board
 search is `search_tickets` without a `boardId` rather than a second search tool. The one
 exception so far is `get_attachment`: returning image content is something no existing tool
-could take on without every `get_ticket` call paying for pictures nobody asked to see.
+could take on without every `get_ticket` call paying for pictures nobody asked to see. The
+other is `create_upload_url`: folding it into `add_attachment` would give one tool two
+unrelated jobs and two sets of annotations.
 
 | Tool | Does | Annotations |
 |---|---|---|
@@ -48,6 +50,7 @@ could take on without every `get_ticket` call paying for pictures nobody asked t
 | `archive_ticket` | Off the board, reversibly | idempotent, non-destructive |
 | `restore_ticket` | The undo of archiving (board admin) | idempotent |
 | `add_attachment` | Download a URL server-side and attach it | **open-world** |
+| `create_upload_url` | A one-time address to `curl` a local file to | additive |
 
 The `description` of `create_ticket` and `update_ticket` and the `body` of `comment_on_ticket`
 are Markdown; their field descriptions say so, so an agent formats with headings, lists and
@@ -121,6 +124,35 @@ policy — extension allowlist, magic-byte signatures — shared with `attachmen
 without a usable extension (a Telegram file path, say) is named from the response's content
 type. The same operation is reachable as `POST /api/v1/tickets/{id}/attachments/from-url`.
 
+## Files on the agent's disk: `create_upload_url`
+
+A file somebody hands an agent in a chat sits on the agent's machine, not at a URL, and
+pushing it through the tool call as base64 would cost its whole size in output tokens — and
+an image the model only *saw* cannot be reproduced byte for byte anyway. Giving the agent
+the API token to `curl` the REST upload itself is out too: the token stays in the client's
+MCP configuration, out of the agent's reach, on purpose.
+
+So `create_upload_url` (operation `attachment.uploadUrl`, also `POST
+/api/v1/tickets/{id}/attachments/upload-url`) mints an address instead:
+`/api/uploads/{secret}`, good for **one file, one ticket and ten minutes**, returned with the
+`curl -F 'file=@…'` command that spends it. The address is its own credential, so the auth
+middleware lets `/api/uploads/*` through without a token; the secret is 256 random bits and
+only its hash is stored (`upload_slots`, `server/utils/upload-slot.ts`).
+
+When the file arrives, the handler (`server/api/uploads/[secret].post.ts`):
+
+1. looks the slot up before reading the body, so a dead address costs no upload — an
+   unknown one leaves an `attachment.upload` *denied* entry in the audit log;
+2. spends it atomically, so two racing uploads cannot both get through — a rejected file
+   costs the agent a new address, never a second try on the same one;
+3. rebuilds the actor that asked, through the token it asked with — a token revoked or an
+   account disabled in the meantime takes the address down with it;
+4. runs the ordinary `attachment.add` as that actor, so access is checked again, the policy
+   (allowlist, signatures, 25 MB) applies unchanged, and the audit entry and webhook are the
+   usual ones, *via* the agent's label.
+
+Spent and expired slots are swept at startup with the other retention work.
+
 ## Looking at attachments: `get_attachment`
 
 `get_ticket` lists attachments with a `/api/v1/attachments/{id}` url, but an agent usually
@@ -152,17 +184,19 @@ client's view, the client is on an older build or a cached list.
 | [server/api/mcp-info.get.ts](../server/api/mcp-info.get.ts) | The tool list for the profile panel, collected from the real registration. |
 | [server/middleware/auth.ts](../server/middleware/auth.ts) | Accepts bearer tokens on `/mcp*`; builds the `Actor` with channel `mcp`. |
 | [server/utils/attachment-fetch.ts](../server/utils/attachment-fetch.ts) | The server-side download behind `add_attachment`. |
+| [server/utils/upload-slot.ts](../server/utils/upload-slot.ts), [server/api/uploads/[secret].post.ts](../server/api/uploads/[secret].post.ts) | The one-time upload addresses behind `create_upload_url`, and where they are spent. |
 | [server/utils/image-preview.ts](../server/utils/image-preview.ts) | The scaled JPEG `get_attachment` returns for an image. |
 | `app/components/McpConnection.vue`, `app/pages/profile/integrations.vue` | The connection snippet and the **What an agent can do** panel. |
 
 ## Surfaces
 
-Every tool is a thin shape over one or more operations: `whoami` reads the actor; `list_boards` and `board_overview` use `board.list`, `board.get`, `lane.list`, `member.list`, `category.list`, `label.list`; `search_tickets` and `get_ticket` use `ticket.list`, `ticket.get`, `ticket.getByNumber`; `get_attachment` uses `attachment.get`; `whats_new` uses `board.activity`; the write tools map to `ticket.create`, `ticket.update`, `ticket.move`, `comment.add`, `ticket.archive`, `ticket.restore`, `attachment.addFromUrl`. Because they go through `run()`, every call is audited and fires webhooks like any other.
+Every tool is a thin shape over one or more operations: `whoami` reads the actor; `list_boards` and `board_overview` use `board.list`, `board.get`, `lane.list`, `member.list`, `category.list`, `label.list`; `search_tickets` and `get_ticket` use `ticket.list`, `ticket.get`, `ticket.getByNumber`; `get_attachment` uses `attachment.get`; `whats_new` uses `board.activity`; the write tools map to `ticket.create`, `ticket.update`, `ticket.move`, `comment.add`, `ticket.archive`, `ticket.restore`, `attachment.addFromUrl`, `attachment.uploadUrl`. Because they go through `run()`, every call is audited and fires webhooks like any other.
 
 ## Tests
 
 - `tests/mcp.test.ts`: the tool cap, titles and descriptions, the exact read-only and open-world split, the naming rules, and each tool's behaviour against a stub server.
 - `tests/token.test.ts`, `tests/access.test.ts`: the scope ceiling the tools inherit.
+- `tests/upload-slot.test.ts`: upload addresses are single-use, expire, die with their token, keep their secret out of the database and the log, and act as the agent that asked.
 
 ## Configuration
 

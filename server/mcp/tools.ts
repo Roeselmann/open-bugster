@@ -67,7 +67,12 @@ const LINK_INPUT = z.object({
 
 const MARKDOWN_FIELD = 'Markdown. Headings, lists, links and fenced code blocks render; raw HTML is shown as text, not interpreted.'
 
-export function registerTools(server: McpServer, actor: Actor) {
+export interface ToolOptions {
+  /** This instance as the caller reached it, for the addresses a tool hands back. */
+  origin?: string
+}
+
+export function registerTools(server: McpServer, actor: Actor, options: ToolOptions = {}) {
   // `AnyOperation` for the same reason the registry uses it: `ZodType` is invariant, so a
   // parameter typed `Operation<unknown>` rejects every concrete operation.
   const call = <T>(operation: AnyOperation, input: unknown) => run(operation, actor, input) as Promise<T>
@@ -455,6 +460,34 @@ export function registerTools(server: McpServer, actor: Actor) {
       ops.attachmentAddFromUrl, { ticketId, url, filename }
     )
     return reply(attachment)
+  })
+
+  server.registerTool('create_upload_url', {
+    title: 'Get an upload address',
+    description:
+      'For a file on your own disk — one somebody handed you in a chat, a log you wrote. Returns '
+      + 'a one-time address and the curl command that sends the file there, so it travels '
+      + 'straight from your machine to the ticket and never through your context. Run the '
+      + 'command in your shell within 10 minutes; the address takes one file and is then spent. '
+      + 'A file already online goes through add_attachment instead. Same limits: up to 25 MB, '
+      + 'images, PDF, text and Office types, the extension deciding the type.',
+    // Writes nothing to the ticket by itself, but hands out the means to — so a write.
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    inputSchema: {
+      ticketId: z.string(),
+      filename: z.string().max(180).optional().describe('Overrides the name of the file you send, extension included.')
+    }
+  }, async ({ ticketId, filename }) => {
+    const { upload } = await call<{ upload: { path: string; field: string; expiresAt: string } }>(
+      ops.attachmentUploadUrl, { ticketId, filename }
+    )
+    const url = options.origin ? new URL(upload.path, options.origin).toString() : upload.path
+    return reply({
+      url,
+      expiresAt: upload.expiresAt,
+      // What to run, with the path to fill in. The answer is the attachment, as add_attachment returns it.
+      command: `curl -sS -F '${upload.field}=@<path to the file>' '${url}'`
+    })
   })
 
   server.registerTool('restore_ticket', {

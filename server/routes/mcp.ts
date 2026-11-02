@@ -42,7 +42,7 @@ export default defineEventHandler(async (event) => {
     }
   )
 
-  registerTools(server, actor)
+  registerTools(server, actor, { origin: getRequestURL(event).origin })
 
   const transport = new WebStandardStreamableHTTPServerTransport({
     // Stateless: see above.

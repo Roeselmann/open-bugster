@@ -30,6 +30,8 @@ export default defineEventHandler(async (event) => {
   const bearerSurface = acceptsBearer(path)
   if (!path.startsWith('/api/') && !bearerSurface) return
   if (publicPaths.includes(path) || path.startsWith('/api/invite/')) return
+  // A one-time upload address carries its own credential in the path; see `attachment.uploadUrl`.
+  if (path.startsWith('/api/uploads/')) return
 
   if (bearerSurface) {
     const header = getRequestHeader(event, 'authorization') || ''

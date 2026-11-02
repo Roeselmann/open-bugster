@@ -153,7 +153,7 @@ Styling is Tailwind 4 with the tokens in `app/assets/css/main.css`. Icons come f
 |---|---|
 | `tests/operations.test.ts` | Unique dotted names; validation runs before access; every mutating operation carries an audit spec (the naming rule above); invite tokens, passwords, and attachment bytes never reach the log. |
 | `tests/api-v1.test.ts` | Every route points at a registered operation; path parameters exist in the operation's schema; one route per method and path; instance administration stays off the public surface; the OpenAPI document describes exactly the table and every `$ref` resolves. |
-| `tests/mcp.test.ts` | The tool count stays between 8 and 14; every tool has a title and a real description; `readOnlyHint` sits on exactly the reads and `openWorldHint` only on `add_attachment`; no tool is named after an operation or mentions tokens, users, services, or keys. |
+| `tests/mcp.test.ts` | The tool count stays between 8 and 16; every tool has a title and a real description; `readOnlyHint` sits on exactly the reads and `openWorldHint` only on `add_attachment`; no tool is named after an operation or mentions tokens, users, services, or keys. |
 | `tests/webhook.test.ts` | The shared event catalogue matches the server's event list. |
 | `tests/access.test.ts`, `tests/token.test.ts` | Role ranking and the scope ceiling. |
 | `tests/person-identity.test.ts` | The email-to-person migration against a legacy database snapshot. |

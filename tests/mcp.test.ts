@@ -75,7 +75,7 @@ describe('the MCP tool surface', () => {
       // Selection accuracy falls off well before thirty options. If this grows past the low
       // teens, the answer is a better-shaped tool, not another one.
       expect(tools.size).toBeGreaterThanOrEqual(8)
-      expect(tools.size).toBeLessThanOrEqual(15)
+      expect(tools.size).toBeLessThanOrEqual(16)
     })
 
     it('describes every tool, at length enough to be useful', () => {

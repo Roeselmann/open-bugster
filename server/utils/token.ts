@@ -133,6 +133,22 @@ export function resolveToken(raw: string | null | undefined, channel: ActorChann
   const actual = Buffer.from(hashToken(secret), 'hex')
   if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return null
 
+  return actorForTokenRow(row, channel)
+}
+
+/**
+ * The actor a token stands for, looked up by its id with no secret presented.
+ *
+ * For a credential that was already checked and left something behind that acts for it
+ * later — an upload address. Every other refusal still applies: a token revoked or expired
+ * in the meantime, or a principal disabled since, takes what it left behind down with it.
+ */
+export function resolveTokenById(id: string, channel: ActorChannel): Actor | null {
+  const row = getDb().prepare('SELECT * FROM api_tokens WHERE id = ?').get(id) as TokenRow | undefined
+  return row ? actorForTokenRow(row, channel) : null
+}
+
+function actorForTokenRow(row: TokenRow, channel: ActorChannel): Actor | null {
   if (row.revoked_at || tokenExpired(row.expires_at)) return null
 
   const principal = findPrincipal(row.principal_id)

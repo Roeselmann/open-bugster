@@ -337,6 +337,8 @@ export function getDb() {
   // After every rebuild of `tickets`: the copy reads the old column, and the table hangs off it.
   ensureTicketLinks(database)
   ensureTicketCardImages(database)
+  // After every rebuild of `tickets` too, for the same reason.
+  ensureUploadSlots(database)
   // Not in `boardIndexes`: that block also runs inside `ensureBoards`, before an upgrading
   // database has been given the ticket_activity table. Serves the board-wide digest query.
   database.exec('CREATE INDEX IF NOT EXISTS idx_ticket_activity_created ON ticket_activity(created_at DESC)')
@@ -1693,6 +1695,33 @@ export function saveIdempotent(key: string, principalId: string, record: Idempot
     VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT (key, principal_id) DO NOTHING
   `).run(key, principalId, record.fingerprint, record.status, record.body, new Date().toISOString())
+}
+
+/**
+ * One-time upload addresses, handed to an agent that has a file on disk and a shell.
+ *
+ * The secret in the address is the credential, so only its hash is kept, as for tokens. The
+ * row remembers who asked and through which token, so the upload is attributed — and
+ * refused — exactly as if that token had made it. `used_at` makes it single-use.
+ */
+export function ensureUploadSlots(db: Database.Database) {
+  const existed = Boolean(db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'upload_slots'").get())
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS upload_slots (
+      id TEXT PRIMARY KEY,
+      secret_hash TEXT NOT NULL UNIQUE,
+      ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+      principal_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_id TEXT REFERENCES api_tokens(id) ON DELETE CASCADE,
+      channel TEXT NOT NULL,
+      filename TEXT,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      used_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_upload_slots_expires ON upload_slots(expires_at);
+  `)
+  return !existed
 }
 
 /** Keys are only useful for as long as a client might still retry. */
