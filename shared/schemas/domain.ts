@@ -255,6 +255,8 @@ export const boardSchema = z.object({
   syncLimit: z.number().int(),
   autoAuthor: z.boolean(),
   importTypeId: z.string().nullable().describe('The ticket type every TestFlight import lands with; null leaves them untyped.'),
+  dueWarningDays: z.number().int().describe('Days before its due date a card is marked orange.'),
+  dueAlertDays: z.number().int().describe('Days before its due date a card is marked red; 0 is the day itself.'),
   createdAt: z.string()
 })
 

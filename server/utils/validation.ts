@@ -119,6 +119,9 @@ export const boardUpdateSchema = z.object({
   autoAuthor: z.boolean(),
   /** A type of the board's workspace; null clears it. Omitted leaves it as it is. */
   importTypeId: idSchema.nullable(),
+  /** Days before the due date a card turns orange, and red; 0 is the day itself. */
+  dueWarningDays: z.number().int().min(0, 'A lead time cannot be negative.').max(365, 'At most 365 days ahead.'),
+  dueAlertDays: z.number().int().min(0, 'A lead time cannot be negative.').max(365, 'At most 365 days ahead.'),
   /** The Jira connection minus its token, which travels on its own route like the .p8 does. */
   jira: z.object({
     // A pasted issue link is reduced to its site first, so it does not fail for its path.

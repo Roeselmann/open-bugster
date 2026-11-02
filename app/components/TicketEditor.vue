@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, CircleAlert, Download, ExternalLink, FileText, GripVertical, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Shapes, SquareKanban, Star, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, CircleAlert, Download, ExternalLink, FileText, GripVertical, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Shapes, SquareKanban, Star, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogContent,
   DialogDescription,
@@ -11,8 +11,9 @@ import {
 } from 'reka-ui'
 import type { Attachment, BoardMember, Category, LabelSummary, Lane, Ticket, TicketLinkInput, TicketPatch, TicketPriority, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
+import { boardToday, dueDescription, dueLevel } from '~~/shared/utils/due-date'
 
-const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; /** How the last field-by-field save went; shown in the footer of an existing ticket. */ saveState?: 'idle' | 'saving' | 'saved' | 'error'; deletingAttachmentId?: string | null; initialLaneId?: string | null; initialPlacement?: 'top' | 'bottom'; laneTicketCount?: number; /** Other boards of the workspace the ticket may be moved onto. */ boards?: BoardSummary[]; /** Whether the board has TestFlight connected; without it a build number has nothing to refer to. */ testflight?: boolean }>(), { canEdit: true, testflight: true, saveState: 'idle', initialLaneId: null, initialPlacement: 'bottom', laneTicketCount: 0, boards: () => [] })
+const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; /** How the last field-by-field save went; shown in the footer of an existing ticket. */ saveState?: 'idle' | 'saving' | 'saved' | 'error'; deletingAttachmentId?: string | null; initialLaneId?: string | null; initialPlacement?: 'top' | 'bottom'; laneTicketCount?: number; /** Other boards of the workspace the ticket may be moved onto. */ boards?: BoardSummary[]; /** Whether the board has TestFlight connected; without it a build number has nothing to refer to. */ testflight?: boolean; /** The board's lead times for the due date warning, as on the card. */ dueWarningDays?: number; dueAlertDays?: number }>(), { canEdit: true, testflight: true, dueWarningDays: 7, dueAlertDays: 0, saveState: 'idle', initialLaneId: null, initialPlacement: 'bottom', laneTicketCount: 0, boards: () => [] })
 const emit = defineEmits<{
   close: []
   /** Creates a new ticket. An existing one never comes through here: its fields save themselves via `patch`. */
@@ -33,6 +34,10 @@ const emit = defineEmits<{
 }>()
 
 const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '', typeId: 'none', laneId: '', placement: 'bottom' as 'top' | 'bottom' })
+// Lit the same way as the card, and follows the field while it is being changed.
+const today = boardToday()
+const dueState = computed(() => dueLevel(form.dueDate || null, today, { warningDays: props.dueWarningDays, alertDays: props.dueAlertDays }))
+const dueText = computed(() => (dueState.value === 'none' ? null : dueDescription(form.dueDate, today)))
 interface EditableTodo extends TicketTodoInput { key: string }
 const todos = ref<EditableTodo[]>([])
 const links = ref<TicketLinkInput[]>([])
@@ -878,8 +883,22 @@ function focusTitle(event: Event) {
                 />
               </div>
               <label class="block">
-                <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Calendar :size="14" /> Due date</span>
-                <input v-model="form.dueDate" type="date" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none" :readonly="!canEdit" @change="commit({ dueDate: payload.dueDate() })">
+                <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]">
+                  <Calendar :size="14" /> Due date
+                  <span
+                    v-if="dueText"
+                    class="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal"
+                    :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
+                  ><AlarmClock :size="11" /> {{ dueText }}</span>
+                </span>
+                <input
+                  v-model="form.dueDate"
+                  type="date"
+                  class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
+                  :class="dueState === 'alert' ? 'ring-2 ring-rose-600' : dueState === 'warning' ? 'ring-2 ring-orange-400' : ''"
+                  :readonly="!canEdit"
+                  @change="commit({ dueDate: payload.dueDate() })"
+                >
               </label>
             </div>
 

@@ -260,6 +260,10 @@ export interface Board {
   autoAuthor: boolean
   /** The ticket type every TestFlight import lands with; null leaves imports untyped. */
   importTypeId: string | null
+  /** How many days before its due date a card gets an orange border. */
+  dueWarningDays: number
+  /** How many days before its due date the border turns red; 0 means on the day itself. */
+  dueAlertDays: number
   createdAt: string
 }
 
@@ -399,6 +403,19 @@ export interface JiraIssue {
   labels: string[]
   sourceCreatedAt: string
   sourceUpdatedAt: string | null
+}
+
+/** A ticket whose due date has lit its card, with where it lives — for the header's overview. */
+export interface DueTicket {
+  id: string
+  ticketNumber: number
+  title: string
+  dueDate: string
+  level: 'warning' | 'alert'
+  boardId: string
+  boardName: string
+  workspaceId: string
+  workspaceName: string
 }
 
 /** Kept as the historic name for a ticket's author; identical to `Person`. */

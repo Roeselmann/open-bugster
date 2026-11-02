@@ -153,6 +153,44 @@ describe('boards and lanes', () => {
     expect(db.updateBoard(board.id, { description: '' })?.description).toBe('')
   })
 
+  it('keeps the due date lead times per board, starting at a week and the day itself', () => {
+    const board = db.createBoard('Deadlines')
+    expect(board.dueWarningDays).toBe(db.DEFAULT_DUE_WARNING_DAYS)
+    expect(board.dueAlertDays).toBe(db.DEFAULT_DUE_ALERT_DAYS)
+
+    const updated = db.updateBoard(board.id, { dueWarningDays: 3, dueAlertDays: 1 })
+    expect(updated).toMatchObject({ dueWarningDays: 3, dueAlertDays: 1 })
+    expect(db.updateBoard(board.id, { name: 'Deadlines renamed' })).toMatchObject({ dueWarningDays: 3, dueAlertDays: 1 })
+  })
+
+  it('lists the tickets whose due date lit their card, by each board’s lead times', () => {
+    const relaxed = db.createBoard('Relaxed deadlines')
+    const strict = db.createBoard('Strict deadlines')
+    db.updateBoard(strict.id, { dueWarningDays: 10, dueAlertDays: 3 })
+    const today = '2026-11-02'
+    const add = (boardId: string, title: string, dueDate: string | null) => db.createTicket(boardId, { title, dueDate })!
+    add(relaxed.id, 'Relaxed today', '2026-11-02')
+    add(relaxed.id, 'Relaxed in five', '2026-11-07')
+    add(relaxed.id, 'Relaxed in nine', '2026-11-11')
+    add(relaxed.id, 'Relaxed undated', null)
+    add(strict.id, 'Strict in three', '2026-11-05')
+    add(strict.id, 'Strict in nine', '2026-11-11')
+    db.archiveTicket(add(strict.id, 'Strict archived', '2026-11-01').id)
+
+    const due = db.listDueTickets({ userId: 'nobody', instanceAdmin: true }, today)
+      .filter(ticket => ticket.boardId === relaxed.id || ticket.boardId === strict.id)
+    expect(due.map(ticket => [ticket.title, ticket.level])).toEqual([
+      ['Relaxed today', 'alert'],
+      ['Relaxed in five', 'warning'],
+      ['Strict in three', 'alert'],
+      ['Strict in nine', 'warning'],
+    ])
+    expect(due[0]).toMatchObject({ boardName: 'Relaxed deadlines', workspaceName: expect.any(String) })
+
+    // Somebody on none of these boards sees none of it.
+    expect(db.listDueTickets({ userId: 'nobody', instanceAdmin: false }, today)).toEqual([])
+  })
+
   it('deletes a board with everything on it', () => {
     const board = db.createBoard('Disposable')
     const ticket = db.createTicket(board.id, { title: 'Goes away', categoryName: 'Temp' })!

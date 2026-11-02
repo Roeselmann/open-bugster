@@ -30,6 +30,38 @@ const saving = ref(false)
 const unsaved = computed(() => Boolean(board.value)
   && (name.value.trim() !== board.value!.name || description.value.trim() !== board.value!.description))
 
+/* ── due date warnings ─────────────────────────────────────────────────── */
+
+const dueWarningDays = ref(7)
+const dueAlertDays = ref(0)
+watchEffect(() => {
+  if (!board.value) return
+  dueWarningDays.value = board.value.dueWarningDays
+  dueAlertDays.value = board.value.dueAlertDays
+})
+const leadTimeValid = (days: number) => Number.isInteger(days) && days >= 0 && days <= 365
+const dueValid = computed(() => leadTimeValid(dueWarningDays.value) && leadTimeValid(dueAlertDays.value))
+const dueUnsaved = computed(() => Boolean(board.value)
+  && (dueWarningDays.value !== board.value!.dueWarningDays || dueAlertDays.value !== board.value!.dueAlertDays))
+const savingDue = ref(false)
+
+async function saveDueWarnings() {
+  if (!board.value || !dueValid.value || !dueUnsaved.value || savingDue.value) return
+  savingDue.value = true
+  try {
+    await $fetch(`/api/boards/${board.value.id}`, {
+      method: 'PATCH',
+      body: { dueWarningDays: dueWarningDays.value, dueAlertDays: dueAlertDays.value },
+    })
+    await refreshBoards()
+    notify('success', 'Due date warnings saved.')
+  } catch (error) {
+    notify('error', errorText(error))
+  } finally {
+    savingDue.value = false
+  }
+}
+
 const confirmation = ref<PendingConfirmation | null>(null)
 const confirmationPending = ref(false)
 const { notify } = useNotify()
@@ -219,6 +251,64 @@ async function executeConfirmation() {
           >
             <Save :size="16" />
             {{ saving ? 'Saving…' : 'Save' }}
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <section class="surface rounded-2xl">
+      <header class="border-b border-[var(--line)] px-5 py-4">
+        <h2 class="text-lg font-bold">Due date warnings</h2>
+        <p class="muted mt-1 text-sm">
+          A card with a due date gets a coloured border as the date comes near — orange first, then red.
+          Overdue cards stay red. 0 means on the day itself.
+        </p>
+      </header>
+      <form class="grid gap-4 px-5 py-5 sm:grid-cols-2" @submit.prevent="saveDueWarnings">
+        <label class="block">
+          <span class="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[.08em]">
+            <span class="size-2.5 rounded-full bg-orange-400" aria-hidden="true" /> Orange from
+          </span>
+          <span class="flex items-center gap-2">
+            <input
+              v-model.number="dueWarningDays"
+              type="number"
+              min="0"
+              max="365"
+              step="1"
+              class="focus-ring surface-strong h-11 w-24 rounded-xl px-3 text-sm font-semibold tabular-nums outline-none"
+            >
+            <span class="muted text-sm">days before</span>
+          </span>
+        </label>
+        <label class="block">
+          <span class="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[.08em]">
+            <span class="size-2.5 rounded-full bg-rose-600" aria-hidden="true" /> Red from
+          </span>
+          <span class="flex items-center gap-2">
+            <input
+              v-model.number="dueAlertDays"
+              type="number"
+              min="0"
+              max="365"
+              step="1"
+              class="focus-ring surface-strong h-11 w-24 rounded-xl px-3 text-sm font-semibold tabular-nums outline-none"
+            >
+            <span class="muted text-sm">days before</span>
+          </span>
+        </label>
+        <div class="flex flex-wrap items-center justify-end gap-3 sm:col-span-2">
+          <p v-if="dueValid && dueAlertDays >= dueWarningDays" class="muted mr-auto text-xs">
+            Red starts as early as orange, so cards skip orange and go straight to red.
+          </p>
+          <p v-else-if="!dueValid" class="mr-auto text-xs text-rose-600">Enter whole days between 0 and 365.</p>
+          <button
+            type="submit"
+            :disabled="savingDue || !dueValid || !dueUnsaved"
+            class="focus-ring flex h-11 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"
+          >
+            <Save :size="16" />
+            {{ savingDue ? 'Saving…' : 'Save' }}
           </button>
         </div>
       </form>

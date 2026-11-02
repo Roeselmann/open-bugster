@@ -1,8 +1,8 @@
 import { createError } from 'h3'
 import { z } from 'zod'
-import { boardMemberIds, requireBoardAccess } from '../utils/access'
+import { boardMemberIds, boardViewer, requireBoardAccess } from '../utils/access'
 import {
-  archiveTicket, createTicket, listActivity, listBoardActivity, listTickets, listTicketsPage,
+  archiveTicket, createTicket, listActivity, listDueTickets, listBoardActivity, listTickets, listTicketsPage,
   findBoard, moveTicket, personById, restoreTicket, ticketIdByNumber, ticketTypeBelongsToBoard, transferTicket, updateTicket
 } from '../utils/db'
 import { importedTicketUpdateSchema, ticketCreateSchema, ticketMoveSchema, ticketTransferSchema, ticketUpdateSchema } from '../utils/validation'
@@ -30,6 +30,16 @@ export const ticketList = defineOperation({
     const page = listTicketsPage(input.boardId, { archived: input.archived, limit: input.limit, cursor: input.cursor })
     return { tickets: page.tickets, nextCursor: page.nextCursor }
   }
+})
+
+/** Across every board the caller can see: the tickets whose due date has lit their card. */
+export const ticketDueList = defineOperation({
+  name: 'ticket.listDue',
+  summary: 'List the tickets whose due date is near or past, across the caller’s boards',
+  input: z.object({}),
+  requires: { scope: 'authenticated' },
+  audit: false,
+  run: ctx => ({ tickets: listDueTickets(boardViewer(ctx.account)) })
 })
 
 /**

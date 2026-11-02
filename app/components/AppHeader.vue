@@ -72,6 +72,7 @@ function openWorkspace(item: WorkspaceSummary) {
         <WorkspaceSwitcher />
       </div>
 
+      <DueAlerts v-if="user" />
       <NuxtLink
         v-if="showArchiveLink"
         :to="archiveMode ? `/b/${boardId}` : `/b/${boardId}/archive`"
@@ -147,6 +148,7 @@ function openWorkspace(item: WorkspaceSummary) {
         </slot>
       </div>
       <slot name="actions" />
+      <DueAlerts v-if="user" />
       <button
         type="button"
         class="focus-ring grid size-10 shrink-0 place-items-center rounded-xl border border-[var(--line)] transition hover:bg-[var(--panel-strong)]"

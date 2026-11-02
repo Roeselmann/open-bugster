@@ -294,6 +294,21 @@ function openTicket(ticket: Ticket) {
   editorOpen.value = true
 }
 
+// `?ticket=42` opens that ticket once — how the header's due date list points at one.
+watch([() => route.query.ticket, tickets], ([requested]) => {
+  if (typeof requested !== 'string') return
+  const ticket = tickets.value.find(item => String(item.ticketNumber) === requested)
+  if (!ticket) return
+  openTicket(ticket)
+  const { ticket: _opened, ...rest } = route.query
+  router.replace({ query: rest })
+}, { immediate: true })
+
+// The header's alarm counts due dates across boards; a change here should reach it.
+watch(() => tickets.value.map(ticket => `${ticket.id}:${ticket.dueDate}`).join(), (now, before) => {
+  if (before !== undefined) refreshDueTickets()
+})
+
 // Only new tickets come through here: an existing one saves each field on its own (see `patchTicketFromEditor`).
 async function saveTicket(payload: TicketPatch & { laneId?: string; placement?: 'top' | 'bottom'; todos: TicketTodoInput[]; attachments: File[]; stayOpen?: boolean }) {
   saving.value = true
@@ -628,13 +643,13 @@ async function sync(provider: IntegrationProvider) {
       </div>
       <!-- The server renders the desktop board; the phone view takes over once the viewport is known. -->
       <div v-else-if="isMobile" class="md:hidden" @touchstart.passive="beginSwipe" @touchend.passive="endSwipe">
-        <KanbanBoard v-if="selectedLaneId" :board-id="board.id" :testflight="board.credentials.complete" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" :lane-id="selectedLaneId" @open="openTicket" @move="moveTicket" @create="newTicket" @upload="uploadAttachmentsFromCard" />
+        <KanbanBoard v-if="selectedLaneId" :board-id="board.id" :testflight="board.credentials.complete" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" :lane-id="selectedLaneId" @open="openTicket" @move="moveTicket" @create="newTicket" @upload="uploadAttachmentsFromCard" />
         <p v-else class="muted py-16 text-center text-sm">This board has no lanes yet.</p>
       </div>
-      <div v-else class="scrollbar-thin overflow-x-auto max-md:hidden"><KanbanBoard :board-id="board.id" :testflight="board.credentials.complete" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" @open="openTicket" @move="moveTicket" @create="newTicket" @upload="uploadAttachmentsFromCard" /></div>
+      <div v-else class="scrollbar-thin overflow-x-auto max-md:hidden"><KanbanBoard :board-id="board.id" :testflight="board.credentials.complete" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" @open="openTicket" @move="moveTicket" @create="newTicket" @upload="uploadAttachmentsFromCard" /></div>
     </main>
 
-    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :save-state="saveState" :deleting-attachment-id="deletingAttachmentId" :initial-lane-id="newTicketLaneId" :initial-placement="newTicketPlacement" :lane-ticket-count="selectedLaneTicketCount" :boards="transferableBoards" :testflight="board.credentials.complete" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @reorder="reorderTicketFromEditor" @transfer="transferTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @save-description="saveDescriptionFromEditor" @save-title="saveTitleFromEditor" @patch="patchTicketFromEditor" @upload="uploadAttachmentsFromEditor" @commented="refresh()" @notify="notify" />
+    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :save-state="saveState" :deleting-attachment-id="deletingAttachmentId" :initial-lane-id="newTicketLaneId" :initial-placement="newTicketPlacement" :lane-ticket-count="selectedLaneTicketCount" :boards="transferableBoards" :testflight="board.credentials.complete" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @reorder="reorderTicketFromEditor" @transfer="transferTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @save-description="saveDescriptionFromEditor" @save-title="saveTitleFromEditor" @patch="patchTicketFromEditor" @upload="uploadAttachmentsFromEditor" @commented="refresh()" @notify="notify" />
 
     <UiConfirmDialog
       v-if="confirmation"

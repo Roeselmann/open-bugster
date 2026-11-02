@@ -4,12 +4,13 @@ import { dirname, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type {
   ActivityKind, AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardRole, BoardSummary, Category, CategoryColor,
-  CategorySummary, IntegrationProvider, JiraIntegration, JiraIssue, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
+  CategorySummary, DueTicket, IntegrationProvider, JiraIntegration, JiraIssue, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
   LinkDisplay, LinkPreview, TicketLink, TicketLinkInput, TicketPriority, TicketSource, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary,
   UserAccount, UserBoardMembership, UserRole, UserStatus, Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
 } from '../../shared/types/domain'
 import type { Actor, ActorChannel } from './actor'
 import { DEFAULT_TICKET_TYPES, DEFAULT_WORKSPACE_NAME } from '../../shared/utils/constants'
+import { boardToday, dueLevel } from '../../shared/utils/due-date'
 import { decryptSecret, encryptSecret, secretKeyAvailable } from './secret-box'
 import { hashStoredPassword } from './password'
 import { getServerConfig } from './config'
@@ -34,6 +35,8 @@ CREATE TABLE IF NOT EXISTS boards (
   position INTEGER NOT NULL,
   sync_limit INTEGER NOT NULL DEFAULT 100,
   auto_author INTEGER NOT NULL DEFAULT 1 CHECK (auto_author IN (0, 1)),
+  due_warning_days INTEGER NOT NULL DEFAULT 7,
+  due_alert_days INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS board_integrations (
@@ -233,6 +236,10 @@ CREATE INDEX IF NOT EXISTS idx_ticket_labels_label ON ticket_labels(label_id);
 /** How many of the newest feedback submissions a sync looks at, per feedback type. */
 export const DEFAULT_SYNC_LIMIT = 100
 
+/** How many days ahead of its due date a card turns orange, and red. Red on the day itself. */
+export const DEFAULT_DUE_WARNING_DAYS = 7
+export const DEFAULT_DUE_ALERT_DAYS = 0
+
 /** The type a board's imports land with unless somebody picks another: the plain "Ticket". */
 export const DEFAULT_IMPORT_TYPE_NAME = 'Ticket'
 
@@ -299,6 +306,7 @@ export function getDb() {
   ensureActivityLog(database)
   ensureBoardAutoAuthor(database)
   ensureBoardDescription(database)
+  ensureBoardDueWarnings(database)
   // Last of the email-era migrations: every one above still speaks in email columns.
   ensurePersonIdentity(database)
   // From here on, person ids only.
@@ -1146,6 +1154,18 @@ export function ensureBoardDescription(db: Database.Database) {
   return true
 }
 
+/**
+ * Adds the two lead times that colour a card by its due date: orange from `due_warning_days`
+ * before, red from `due_alert_days` before. Existing boards start on the defaults.
+ */
+export function ensureBoardDueWarnings(db: Database.Database) {
+  const columns = tableColumns(db, 'boards')
+  if (columns.has('due_warning_days') && columns.has('due_alert_days')) return false
+  if (!columns.has('due_warning_days')) db.exec(`ALTER TABLE boards ADD COLUMN due_warning_days INTEGER NOT NULL DEFAULT ${DEFAULT_DUE_WARNING_DAYS}`)
+  if (!columns.has('due_alert_days')) db.exec(`ALTER TABLE boards ADD COLUMN due_alert_days INTEGER NOT NULL DEFAULT ${DEFAULT_DUE_ALERT_DAYS}`)
+  return true
+}
+
 /** The email columns `ensurePersonIdentity` replaces, as `[table, column]`. */
 const legacyPersonColumns: Array<[string, string]> = [
   ['tickets', 'author_email'],
@@ -1887,6 +1907,7 @@ export function ensureTicketSourceJira(db: Database.Database) {
 type BoardRow = {
   id: string; name: string; description: string; position: number
   sync_limit: number; auto_author: number; import_type_id: string | null; created_at: string
+  due_warning_days: number; due_alert_days: number
   // Nullable in the column (SQLite cannot add NOT NULL after the fact), never null in
   // practice: `ensureWorkspaces` adopts every orphan on start.
   workspace_id: string
@@ -1930,7 +1951,7 @@ function iconColumns(icon: TicketTypeIcon): [TicketTypeIcon['kind'], string] {
 }
 
 function toBoard(row: BoardRow): Board {
-  return { id: row.id, workspaceId: row.workspace_id, name: row.name, description: row.description, position: row.position, syncLimit: row.sync_limit, autoAuthor: Boolean(row.auto_author), importTypeId: row.import_type_id ?? null, createdAt: row.created_at }
+  return { id: row.id, workspaceId: row.workspace_id, name: row.name, description: row.description, position: row.position, syncLimit: row.sync_limit, autoAuthor: Boolean(row.auto_author), importTypeId: row.import_type_id ?? null, dueWarningDays: row.due_warning_days, dueAlertDays: row.due_alert_days, createdAt: row.created_at }
 }
 
 type IntegrationRow = {
@@ -2246,8 +2267,8 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
   const attachmentCopies: AttachmentCopy[] = []
   db.transaction(() => {
     const position = (db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM boards WHERE workspace_id = ?').get(options.workspaceId) as { position: number }).position
-    db.prepare('INSERT INTO boards (id, workspace_id, name, description, position, sync_limit, auto_author, import_type_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, options.workspaceId, options.name, source.description, position, source.sync_limit, source.auto_author, source.import_type_id ?? null, now)
+    db.prepare('INSERT INTO boards (id, workspace_id, name, description, position, sync_limit, auto_author, import_type_id, due_warning_days, due_alert_days, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, options.workspaceId, options.name, source.description, position, source.sync_limit, source.auto_author, source.import_type_id ?? null, source.due_warning_days, source.due_alert_days, now)
     if (options.workspaceId !== source.workspace_id) retargetImportType(db, id, options.workspaceId)
 
     const laneIds = new Map<string, string>()
@@ -2460,6 +2481,8 @@ export interface BoardUpdateInput {
   autoAuthor?: boolean
   /** Omitted leaves it alone; null clears it. */
   importTypeId?: string | null
+  dueWarningDays?: number
+  dueAlertDays?: number
   /** The Jira connection's settings; the token has its own route. */
   jira?: { siteUrl?: string; email?: string; jql?: string }
 }
@@ -2469,12 +2492,14 @@ export function updateBoard(id: string, input: BoardUpdateInput, viewer?: BoardV
   const row = db.prepare('SELECT * FROM boards WHERE id = ?').get(id) as BoardRow | undefined
   if (!row) return null
   db.transaction(() => {
-    db.prepare('UPDATE boards SET name = ?, description = ?, sync_limit = ?, auto_author = ?, import_type_id = ? WHERE id = ?').run(
+    db.prepare('UPDATE boards SET name = ?, description = ?, sync_limit = ?, auto_author = ?, import_type_id = ?, due_warning_days = ?, due_alert_days = ? WHERE id = ?').run(
       input.name ?? row.name,
       input.description ?? row.description,
       input.syncLimit ?? row.sync_limit,
       input.autoAuthor === undefined ? row.auto_author : Number(input.autoAuthor),
       input.importTypeId === undefined ? row.import_type_id : input.importTypeId,
+      input.dueWarningDays ?? row.due_warning_days,
+      input.dueAlertDays ?? row.due_alert_days,
       id
     )
     const testflight = pick({ issuerId: input.issuerId, keyId: input.keyId, appId: input.appId })
@@ -2734,6 +2759,35 @@ function hydrateTicket(row: TicketRow): Ticket {
     attachments,
     todos
   }
+}
+
+/**
+ * Every open ticket on the viewer's boards whose due date has turned its card orange or red,
+ * by each board's own lead times. Ordered by workspace and board, the most pressing first.
+ */
+export function listDueTickets(viewer: BoardViewer, today = boardToday()): DueTicket[] {
+  const scoped = !viewer.instanceAdmin
+  const rows = getDb().prepare(`
+    SELECT t.id, t.ticket_number, t.title, t.due_date, b.id AS board_id, b.name AS board_name,
+      b.due_warning_days, b.due_alert_days, w.id AS workspace_id, w.name AS workspace_name
+    FROM tickets t
+    JOIN boards b ON b.id = t.board_id
+    JOIN workspaces w ON w.id = b.workspace_id
+    ${scoped ? 'JOIN board_members m ON m.board_id = b.id AND m.user_id = @userId' : ''}
+    WHERE t.archived_at IS NULL AND t.due_date IS NOT NULL
+    ORDER BY w.position, w.created_at, b.position, b.created_at, t.due_date, t.ticket_number
+  `).all(scoped ? { userId: viewer.userId } : {}) as Array<{
+    id: string; ticket_number: number; title: string; due_date: string; board_id: string; board_name: string
+    due_warning_days: number; due_alert_days: number; workspace_id: string; workspace_name: string
+  }>
+  return rows.flatMap((row) => {
+    const level = dueLevel(row.due_date, today, { warningDays: row.due_warning_days, alertDays: row.due_alert_days })
+    if (level === 'none') return []
+    return [{
+      id: row.id, ticketNumber: row.ticket_number, title: row.title, dueDate: row.due_date, level,
+      boardId: row.board_id, boardName: row.board_name, workspaceId: row.workspace_id, workspaceName: row.workspace_name
+    }]
+  })
 }
 
 export function listTickets(boardId: string, archived = false): Ticket[] {

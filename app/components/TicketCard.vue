@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ArrowDownToLine, ArrowUpToLine, CalendarClock, Check, ChevronDown, ChevronUp, Image, Link as LinkIcon, ListTodo, MessageSquare, Paperclip, SquareKanban, Tag, TestTubeDiagonal, TriangleAlert, UserRound } from '@lucide/vue'
+import { AlarmClock, ArrowDownToLine, ArrowUpToLine, CalendarClock, Check, ChevronDown, ChevronUp, Image, Link as LinkIcon, ListTodo, MessageSquare, Paperclip, SquareKanban, Tag, TestTubeDiagonal, TriangleAlert, UserRound } from '@lucide/vue'
 import type { Lane, Ticket } from '~~/shared/types/domain'
 import { CATEGORY_TONE_CLASSES } from '~~/shared/utils/constants'
+import { boardToday, dueDescription, dueLevel } from '~~/shared/utils/due-date'
 
 const props = withDefaults(defineProps<{
   ticket: Ticket
@@ -17,7 +18,10 @@ const props = withDefaults(defineProps<{
   droppable?: boolean
   /** Whether the board has TestFlight connected; without it the build number stays hidden. */
   testflight?: boolean
-}>(), { laneCount: 0, draggable: true, droppable: false, testflight: true })
+  /** The board's lead times: orange from this many days before the due date, red from the other. */
+  dueWarningDays?: number
+  dueAlertDays?: number
+}>(), { laneCount: 0, draggable: true, droppable: false, testflight: true, dueWarningDays: 7, dueAlertDays: 0 })
 const emit = defineEmits<{
   open: [ticket: Ticket]
   move: [laneId: string]
@@ -59,6 +63,11 @@ const cardDateText = computed(() => {
   const date = new Date(rawDate)
   return Number.isNaN(date.getTime()) ? null : dateFormatter.format(date)
 })
+
+const today = boardToday()
+const dueState = computed(() => dueLevel(props.ticket.dueDate, today, { warningDays: props.dueWarningDays, alertDays: props.dueAlertDays }))
+// Only said when the border is lit, so the colour always comes with its reason.
+const dueText = computed(() => (dueState.value === 'none' || !props.ticket.dueDate ? null : dueDescription(props.ticket.dueDate, today)))
 
 // The picture picked in the editor, or the oldest one when nobody picked.
 const imageAttachment = computed(() => {
@@ -105,7 +114,9 @@ const reorderButtons = computed(() => [
       preview
         ? 'scale-[.99] cursor-grabbing opacity-[.96] shadow-[0_18px_45px_rgba(0,0,0,.18),0_3px_12px_rgba(0,0,0,.12)]'
         : 'hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/10',
-      dropActive ? 'ring-2 ring-[var(--accent)]' : '',
+      dropActive ? 'ring-2 ring-[var(--accent)]'
+      : dueState === 'alert' ? 'ring-[3px] ring-rose-600'
+        : dueState === 'warning' ? 'ring-2 ring-orange-400' : '',
     ]"
     @dragenter="fileDragOver"
     @dragover="fileDragOver"
@@ -128,6 +139,12 @@ const reorderButtons = computed(() => [
       <div class="px-4 pb-4 pt-3">
         <div class="flex flex-wrap items-center gap-2">
           <PriorityPill :priority="ticket.priority" />
+          <span
+            v-if="dueText"
+            class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold"
+            :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
+            :title="`Due ${ticket.dueDate}`"
+          ><AlarmClock :size="11" /> {{ dueText }}</span>
           <span v-if="ticket.category" class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold" :class="CATEGORY_TONE_CLASSES[ticket.category.color]"><Tag :size="11" /> {{ ticket.category.name }}</span>
           <span v-if="ticket.source !== 'manual'" class="muted flex items-center gap-1 text-[11px] font-semibold" :title="ticket.jira?.url || ''">
             <TriangleAlert v-if="ticket.source === 'testflight_crash'" :size="13" />

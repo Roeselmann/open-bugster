@@ -8,7 +8,7 @@ A board is one Kanban board with its own lanes, categories, labels, members, arc
 
 The board name in the header becomes a dropdown as soon as a second board exists. The icon next to it opens the board settings and is shown to board administrators only. A newly created board is selected right away and opens its settings so lanes and credentials can be set up.
 
-The settings are split into sections: **Board** for the name, description, lanes, categories, moving, duplicating, and deletion; **Users** for who has access; **Integration** for the App Store Connect key; **Webhooks** for outgoing events; **Audit** for the change log.
+The settings are split into sections: **Board** for the name, description, due date warnings, lanes, categories, moving, duplicating, and deletion; **Users** for who has access; **Integration** for the App Store Connect key; **Webhooks** for outgoing events; **Audit** for the change log.
 
 Deleting a board removes all of it, including attachments and the stored key. The last board of an instance cannot be deleted.
 
