@@ -99,6 +99,10 @@ const authorText = computed(() => {
 })
 const authorTitle = computed(() => props.ticket.author?.email || props.ticket.feedback?.tester?.email || props.ticket.jira?.reporter?.email || '')
 const completedTodoCount = computed(() => props.ticket.todos.filter(todo => todo.completed).length)
+// The card shows the first three to-dos; "+ N more" unfolds the rest right on the card.
+const COLLAPSED_TODOS = 3
+const todosExpanded = ref(false)
+const visibleTodos = computed(() => (todosExpanded.value ? props.ticket.todos : props.ticket.todos.slice(0, COLLAPSED_TODOS)))
 // The host of the first link is enough to tell where they lead; the whole address is in the title.
 const linkHost = computed(() => {
   if (!props.ticket.link) return null
@@ -196,14 +200,24 @@ const reorderButtons = computed(() => [
             <span class="ml-auto tabular-nums">{{ completedTodoCount }}/{{ ticket.todos.length }}</span>
           </div>
           <div class="space-y-1">
-            <div v-for="todo in ticket.todos.slice(0, 3)" :key="todo.id" class="flex min-w-0 items-center gap-1.5 text-[11px] leading-tight" :class="todo.completed ? 'muted' : ''">
+            <div v-for="todo in visibleTodos" :key="todo.id" class="flex min-w-0 items-center gap-1.5 text-[11px] leading-tight" :class="todo.completed ? 'muted' : ''">
               <span class="grid size-3 shrink-0 place-items-center rounded-[3px] border" :class="todo.completed ? 'border-[var(--accent)] bg-[var(--accent)] text-white' : 'border-[var(--line)]'">
                 <Check v-if="todo.completed" :size="9" :stroke-width="3" />
               </span>
               <span class="truncate" :class="todo.completed ? 'line-through' : ''">{{ todo.text }}</span>
             </div>
           </div>
-          <p v-if="ticket.todos.length > 3" class="muted mt-1.5 text-[10px] font-semibold">+ {{ ticket.todos.length - 3 }} more</p>
+          <!-- Inside the card's own button, so a span acting as one; the click stays off the card. -->
+          <span
+            v-if="ticket.todos.length > COLLAPSED_TODOS"
+            role="button"
+            :tabindex="preview ? -1 : 0"
+            class="focus-ring muted mt-1.5 inline-block rounded text-[10px] font-semibold hover:text-[var(--accent)] hover:underline"
+            :aria-expanded="todosExpanded"
+            @click.stop="todosExpanded = !todosExpanded"
+            @keydown.enter.stop.prevent="todosExpanded = !todosExpanded"
+            @keydown.space.stop.prevent="todosExpanded = !todosExpanded"
+          >{{ todosExpanded ? 'Show less' : `+ ${ticket.todos.length - COLLAPSED_TODOS} more` }}</span>
         </div>
 
         <div v-if="ticket.labels.length" class="mt-3 flex flex-wrap gap-1.5">
