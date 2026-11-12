@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlarmClock, ChevronRight } from '@lucide/vue'
+import { AlarmClock, ChevronRight, X } from '@lucide/vue'
 import { PopoverClose, PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from 'reka-ui'
 import type { DueTicket } from '~~/shared/types/domain'
 import { boardToday, daysUntil } from '~~/shared/utils/due-date'
@@ -86,9 +86,18 @@ function openWorkspace(workspaceId: string) {
         class="ui-popover z-[100] max-h-[min(32rem,calc(100dvh-6rem))] w-[min(24rem,calc(100vw-1.5rem))] overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--panel-strong)] p-1 text-[var(--ink)] shadow-[0_18px_45px_rgba(0,0,0,.16),0_3px_12px_rgba(0,0,0,.08)]"
         @open-auto-focus.prevent
       >
-        <div class="px-3 pb-1 pt-2">
-          <p class="text-sm font-bold">Due dates</p>
-          <p class="muted text-xs">{{ summary }}.</p>
+        <div class="flex items-start gap-2 pb-1 pl-3 pr-1 pt-1">
+          <div class="min-w-0 flex-1 pt-1">
+            <p class="text-sm font-bold">Due dates</p>
+            <p class="muted text-xs">{{ summary }}.</p>
+          </div>
+          <!-- A tap outside is easy to miss on a phone, so the popover can always be closed here. -->
+          <PopoverClose
+            class="focus-ring muted grid size-9 shrink-0 place-items-center rounded-lg hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
+            aria-label="Close due dates"
+          >
+            <X :size="18" aria-hidden="true" />
+          </PopoverClose>
         </div>
 
         <section v-for="workspace in groups" :key="workspace.id" class="mt-1 border-t border-[var(--line)] pt-1">

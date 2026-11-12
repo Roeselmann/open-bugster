@@ -2,7 +2,7 @@
 import { AlarmClock, ArrowDownToLine, ArrowUpToLine, CalendarClock, Check, ChevronDown, ChevronUp, Image, Link as LinkIcon, ListTodo, MessageSquare, Paperclip, SquareKanban, Tag, TestTubeDiagonal, TriangleAlert, UserRound } from '@lucide/vue'
 import type { Lane, Ticket } from '~~/shared/types/domain'
 import { CATEGORY_TONE_CLASSES } from '~~/shared/utils/constants'
-import { boardToday, dueDescription, dueLevel } from '~~/shared/utils/due-date'
+import { boardToday, daysUntil, dueDescription, dueLevel } from '~~/shared/utils/due-date'
 import { cardImages } from '~~/shared/utils/card-images'
 
 const props = withDefaults(defineProps<{
@@ -69,8 +69,17 @@ const today = boardToday()
 // Finished work is done with its deadline too: a done lane silences the warning.
 const inDoneLane = computed(() => props.lanes.some(lane => lane.id === props.ticket.laneId && lane.isDone))
 const dueState = computed(() => (inDoneLane.value ? 'none' : dueLevel(props.ticket.dueDate, today, { warningDays: props.dueWarningDays, alertDays: props.dueAlertDays })))
-// Only said when the border is lit, so the colour always comes with its reason.
-const dueText = computed(() => (dueState.value === 'none' || !props.ticket.dueDate ? null : dueDescription(props.ticket.dueDate, today)))
+// Every due date is shown under the title; the colour follows the border's warning level.
+// Far-off dates and finished work read better as a date than as a count of days.
+const dueDayFormatter = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+const dueText = computed(() => {
+  const dueDate = props.ticket.dueDate
+  if (!dueDate) return null
+  const days = daysUntil(dueDate, today)
+  if (days === null) return null
+  if (inDoneLane.value || days > 30) return `Due ${dueDayFormatter.format(new Date(`${dueDate}T00:00:00Z`))}`
+  return dueDescription(dueDate, today)
+})
 
 // The pictures ticked in the editor, or one picked by default (see `cardImages`). A link
 // preview finished since the board was loaded is already counted, before the next reload.
@@ -139,19 +148,23 @@ const reorderButtons = computed(() => [
         class="flex items-center justify-between gap-3 px-4 py-3.5"
         :class="ticket.type && ticket.type.color !== 'none' ? CATEGORY_TONE_CLASSES[ticket.type.color] : ''"
       >
-        <h3 class="min-w-0 text-[15px] font-semibold leading-snug tracking-[-.01em]">{{ ticket.title }}</h3>
+        <div class="min-w-0">
+          <h3 class="text-[15px] font-semibold leading-snug tracking-[-.01em]">{{ ticket.title }}</h3>
+          <span
+            v-if="dueText"
+            class="mt-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold"
+            :class="dueState === 'alert' ? 'bg-rose-600 text-white'
+              : dueState === 'warning' ? 'bg-orange-400/20 text-orange-700 dark:text-orange-300'
+                : 'bg-[color-mix(in_srgb,var(--panel)_70%,transparent)] text-[var(--ink)] opacity-75'"
+            :title="`Due ${ticket.dueDate}`"
+          ><AlarmClock :size="12" aria-hidden="true" /> {{ dueText }}</span>
+        </div>
         <TicketTypeBadge v-if="ticket.type" :type="ticket.type" inverted class="pointer-events-none" />
       </div>
 
       <div class="px-4 pb-4 pt-3">
         <div class="flex flex-wrap items-center gap-2">
           <PriorityPill :priority="ticket.priority" />
-          <span
-            v-if="dueText"
-            class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold"
-            :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
-            :title="`Due ${ticket.dueDate}`"
-          ><AlarmClock :size="11" /> {{ dueText }}</span>
           <span v-if="ticket.category" class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold" :class="CATEGORY_TONE_CLASSES[ticket.category.color]"><Tag :size="11" /> {{ ticket.category.name }}</span>
           <span v-if="ticket.source !== 'manual'" class="muted flex items-center gap-1 text-[11px] font-semibold" :title="ticket.jira?.url || ''">
             <TriangleAlert v-if="ticket.source === 'testflight_crash'" :size="13" />
