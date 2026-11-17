@@ -13,7 +13,7 @@ import {
   CategoryNameTakenError, LaneDeleteError, boardMembers, boardRoleFor, countBoardAdmins, countBoards,
   createBoard, createComment, createLane, defaultWorkspaceId, deleteBoard, deleteCategory, deleteComment, deleteLane, duplicateBoard, findBoard, findBoardSummary,
   boardJiraCredentials, boardSyncCredentials, clearBoardJiraToken, clearBoardPrivateKey, findCategory, findLane, importLaneFor, latestSyncRun, listBoards, listCategories, listComments, listLabels, listLanes,
-  listUsers, moveBoardToWorkspace, personById, removeBoardMember, reorderLanes, setBoardJiraToken, setBoardMember, setBoardPrivateKey, ticketTypeBelongsToBoard, updateBoard, updateCategory, updateComment, updateLane
+  listAgents, listUsers, moveBoardToWorkspace, personById, removeBoardMember, reorderLanes, setBoardJiraToken, setBoardMember, setBoardPrivateKey, ticketTypeBelongsToBoard, updateBoard, updateCategory, updateComment, updateLane
 } from '../utils/db'
 import {
   boardCreateSchema, boardMemberSchema, boardUpdateSchema, categoryUpdateSchema, commentSaveSchema, connectionTestSchema,
@@ -271,10 +271,16 @@ export const memberCandidates = defineOperation({
   run: (_ctx, input) => {
     const existing = new Set(boardMembers(input.boardId).map(member => member.userId))
     return {
-      candidates: listUsers()
-        // An anonymized account is a tombstone: it keeps its history and is offered to nobody.
-        .filter(user => !existing.has(user.id) && !user.anonymizedAt)
-        .map(user => ({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, status: user.status }))
+      candidates: [
+        ...listUsers()
+          // An anonymized account is a tombstone: it keeps its history and is offered to nobody.
+          .filter(user => !existing.has(user.id) && !user.anonymizedAt)
+          .map(user => ({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, status: user.status, isService: false })),
+        // Agents join a board like anybody else; a disabled one would be a member who cannot act.
+        ...listAgents()
+          .filter(agent => !existing.has(agent.id) && agent.status === 'active')
+          .map(agent => ({ id: agent.id, email: null, firstName: agent.name, lastName: '', status: agent.status, isService: true })),
+      ]
     }
   }
 })

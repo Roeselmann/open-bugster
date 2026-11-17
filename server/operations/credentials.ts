@@ -1,7 +1,7 @@
 import { createError } from 'h3'
 import { z } from 'zod'
 import { isInstanceAdmin } from '../utils/access'
-import { createServiceIdentity, findPrincipal, listServiceIdentities, setPrincipalStatus } from '../utils/db'
+import { createServiceIdentity, deleteUser, findAgent, findPrincipal, listAgents, setPrincipalStatus, updateServiceIdentity } from '../utils/db'
 import { createApiToken, findApiToken, listApiTokens, revokeApiToken, tokenScopes } from '../utils/token'
 import { createdId, defineOperation } from './types'
 
@@ -9,37 +9,82 @@ const id = z.string().trim().min(1).max(64)
 
 /* ── service identities ─────────────────────────────────────────────────── */
 
+const agentName = z.string().trim().min(1, 'A name is required.').max(80)
+const agentDescription = z.string().trim().max(500)
+
+function requireAgent(id: string) {
+  const agent = findAgent(id)
+  if (!agent) throw createError({ statusCode: 404, statusMessage: 'Agent not found.' })
+  return agent
+}
+
+/*
+ * A service identity is what people see as an agent: a principal with no address and no
+ * password that acts only through tokens minted for it, so the tickets it is given and the
+ * comments it writes are its own. The operation names keep the older word.
+ */
+
 export const serviceList = defineOperation({
   name: 'service.list',
-  summary: 'List the machine principals on this instance',
+  summary: 'List the agents on this instance',
   input: z.object({}),
   requires: { scope: 'instance' },
   audit: false,
-  run: () => ({ services: listServiceIdentities().map(service => ({ ...service, passwordHash: undefined })) })
+  run: () => ({ services: listAgents() })
 })
 
 export const serviceCreate = defineOperation({
   name: 'service.create',
-  summary: 'Open a machine principal that acts through tokens',
-  input: z.object({ name: z.string().trim().min(1, 'A name is required.').max(80) }),
+  summary: 'Open an agent: a principal of its own that acts through tokens',
+  input: z.object({ name: agentName, description: agentDescription.default('') }),
   requires: { scope: 'instance' },
-  audit: { targetType: 'user', targetId: createdId('service'), changes: ['name'] },
-  run: (_ctx, input) => ({ service: { ...createServiceIdentity(input.name), passwordHash: undefined } })
+  audit: { targetType: 'user', targetId: createdId('service'), changes: ['name', 'description'] },
+  run: (_ctx, input) => {
+    const created = createServiceIdentity(input.name, input.description)
+    return { service: requireAgent(created.id) }
+  }
+})
+
+export const serviceUpdate = defineOperation({
+  name: 'service.update',
+  summary: 'Rename an agent or change what it is for',
+  input: z.object({ serviceId: id, name: agentName.optional(), description: agentDescription.optional() }),
+  requires: { scope: 'instance' },
+  audit: { targetType: 'user', targetId: input => input.serviceId, changes: ['name', 'description'] },
+  run: (_ctx, input) => {
+    requireAgent(input.serviceId)
+    updateServiceIdentity(input.serviceId, { name: input.name, description: input.description })
+    return { service: requireAgent(input.serviceId) }
+  }
 })
 
 export const serviceSetStatus = defineOperation({
   name: 'service.setStatus',
-  summary: 'Enable or disable a machine principal',
+  summary: 'Enable or disable an agent',
   input: z.object({ serviceId: id, status: z.enum(['active', 'disabled']) }),
   requires: { scope: 'instance' },
   audit: { targetType: 'user', targetId: input => input.serviceId, changes: ['status'] },
   run: (_ctx, input) => {
-    if (!findPrincipal(input.serviceId)) throw createError({ statusCode: 404, statusMessage: 'Account not found.' })
+    requireAgent(input.serviceId)
     // Disabling the principal is what stops every one of its tokens at once, so this is
     // deliberately the blunt instrument: no token has to be found and revoked individually.
-    const updated = setPrincipalStatus(input.serviceId, input.status)
-    if (!updated) throw createError({ statusCode: 409, statusMessage: 'This is not a service identity.' })
-    return { service: { ...updated, passwordHash: undefined } }
+    setPrincipalStatus(input.serviceId, input.status)
+    return { service: requireAgent(input.serviceId) }
+  }
+})
+
+export const serviceDelete = defineOperation({
+  name: 'service.delete',
+  summary: 'Delete an agent and every token minted for it',
+  input: z.object({ serviceId: id }),
+  requires: { scope: 'instance' },
+  audit: { targetType: 'user', targetId: input => input.serviceId },
+  run: (_ctx, input) => {
+    requireAgent(input.serviceId)
+    // Its tokens cascade with the row. Tickets it filed or was given, and comments it wrote,
+    // stay on the boards without a person behind them — the same as removing an account.
+    deleteUser(input.serviceId)
+    return { ok: true }
   }
 })
 

@@ -86,6 +86,7 @@ function via(entry: TicketActivityEntry): string | null {
         <span class="shrink-0 tabular-nums">{{ timeFormat.format(new Date(entry.createdAt)) }}</span>
         <span>
           <strong class="font-semibold text-[var(--ink)]">{{ actor(entry) }}</strong>
+          <span v-if="entry.actor?.isService" class="muted"> (agent)</span>
           <span v-if="via(entry)" class="muted" :title="`Performed by ${via(entry)} on their behalf`"> via {{ via(entry) }}</span>
           {{ sentence(entry) }}
         </span>

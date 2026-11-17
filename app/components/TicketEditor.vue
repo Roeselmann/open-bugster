@@ -134,7 +134,7 @@ const person = computed(() => {
 // reka-ui refuses an empty `SelectItem` value, so "nobody" needs a sentinel. No id can
 // collide with it, since every id is a uuid.
 const UNASSIGNED = 'unassigned'
-const memberOptions = computed(() => (props.members || []).map(member => ({ value: member.userId, label: displayName(member) })))
+const memberOptions = computed(() => (props.members || []).map(member => ({ value: member.userId, label: member.isService ? `${displayName(member)} · agent` : displayName(member) })))
 const assigneeOptions = computed(() => [{ value: UNASSIGNED, label: 'Unassigned' }, ...memberOptions.value])
 // The shortcut beside the label: only for a member of this board, and only while the
 // ticket is not theirs already.

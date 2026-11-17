@@ -41,9 +41,10 @@ export default defineEventHandler(async (event) => {
         'Search before creating. A comment on the ticket that already reports something is worth',
         'more than a second ticket reporting it again.',
         '',
-        'Everything you do is recorded against the person this token acts for, with your agent',
-        'label beside it. Call whoami if a write is refused: the token may be more restricted',
-        'than the person is.'
+        'Everything you do is recorded against the principal this token acts for, with your agent',
+        'label beside it. That is usually a person; it can also be an agent with an account of its',
+        'own — whoami says which, and then tickets assigned to that principal are your work. Call',
+        'whoami if a write is refused: the token may be more restricted than the principal is.'
       ].join('\n')
     }
   )

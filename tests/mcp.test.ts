@@ -123,6 +123,24 @@ describe('the MCP tool surface', () => {
       })
     })
 
+    it('tells an agent with an identity of its own that the principal is itself', async () => {
+      const agent = db.createServiceIdentity('Hermes', 'Triages bug reports')
+      db.setBoardMember(boardId, agent.id, 'editor')
+      const own = new Map<string, RegisteredTool>()
+      const server = { registerTool: (name: string, config: RegisteredTool['config'], handler: RegisteredTool['handler']) => own.set(name, { name, config, handler }) }
+      const { registerTools } = await import('../server/mcp/tools')
+      registerTools(server as never, actorModule.actorFor(db.findPrincipal(agent.id)!, { channel: 'mcp', agentId: 'Telegram', tokenId: 'tok_agent' }))
+      const result = await own.get('whoami')!.handler({})
+      expect(JSON.parse(result.content[0]!.text!)).toMatchObject({
+        principalId: agent.id, name: 'Hermes', kind: 'agent', description: 'Triages bug reports', note: expect.stringContaining('assigneeId')
+      })
+      // And people browsing the board can tell it apart from a colleague.
+      const { members } = await call('board_overview', { boardId })
+      expect(members.find((member: { id: string }) => member.id === agent.id)).toMatchObject({ isAgent: true })
+      expect(await call('whoami')).toMatchObject({ kind: 'person' })
+      db.deleteUser(agent.id)
+    })
+
     it('lists boards with the lane ids every other tool needs, and the workspaces around them', async () => {
       const { boards, workspaces } = await call('list_boards')
       expect(boards[0]).toMatchObject({ id: boardId, name: expect.any(String), yourRole: 'admin' })

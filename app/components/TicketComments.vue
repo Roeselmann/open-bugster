@@ -107,8 +107,9 @@ async function confirmDelete() {
         <div class="flex items-center gap-2.5">
           <UiAvatar :person="comment.author" size="sm" />
           <div class="min-w-0 flex-1">
-            <p class="truncate text-sm font-semibold">
+            <p class="flex items-center gap-1.5 truncate text-sm font-semibold">
               {{ comment.author ? displayName(comment.author) : 'Unknown' }}
+              <span v-if="comment.author?.isService" class="tone tone-neutral rounded px-1 py-px text-[9px] font-bold uppercase tracking-wide">Agent</span>
             </p>
             <p class="muted text-[11px]">
               {{ timeFormat.format(new Date(comment.createdAt)) }}

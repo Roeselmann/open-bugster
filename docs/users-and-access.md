@@ -72,7 +72,7 @@ So Open-Bugster separates the two. **Anonymize** clears the email, the name, and
 - **Sessions carry a version.** Every request compares the cookie's `sessionVersion` with the account row; a password change, reset, disable, or anonymize bumps it and signs every other session out.
 - **Invites and resets are hashed tokens** with a seven-day expiry, shown once. Using a reset invalidates the old password; an unused one lapses.
 - **The owner is seeded once**, from `APP_ADMIN_EMAIL` and `APP_ADMIN_PASSWORD` or `APP_PASSWORD_HASH`, only when the users table is empty. Passwords are hashed with scrypt.
-- **Service identities** are accounts that cannot sign in and act only through tokens; see [api.md](api.md).
+- **Agents** (service identities in the code) are users of their own that cannot sign in and act only through tokens: assigned tickets, comments under their own name. Created under **Users → Agents**; see [api.md](api.md#agents-service-identities).
 - **Instance administration is cookie-only.** `user.*` operations require the instance scope, which also demands an `admin`-scoped token and refuses board-pinned ones, and none of them are on the public REST surface.
 
 ## Code map
@@ -90,7 +90,7 @@ So Open-Bugster separates the two. **Anonymize** clears the email, the name, and
 | `scripts/reset-owner.mjs`, `scripts/hash-password.mjs` | `npm run owner:reset`, `npm run password:hash`. |
 | `app/composables/useAuth.ts`, `app/middleware/auth.global.ts` | The session on the client and the redirect to `/login`. |
 | `app/pages/login.vue`, `invite/[token].vue` | Sign-in; accepting an invitation or a reset. |
-| `app/pages/admin/users.vue` | The **Users** page: create, invite, reset, disable, anonymize, delete, service identities. |
+| `app/pages/admin/users.vue` | The **Users** page: create, invite, reset, disable, anonymize, delete; agents (`AdminAgents.vue`). |
 | `app/pages/profile/index.vue`, `security.vue`, `boards.vue` | Your profile, password, and board memberships. |
 | `app/components/BoardMemberSettings.vue`, `UiAvatar.vue` | The board roster; avatars and initials. |
 

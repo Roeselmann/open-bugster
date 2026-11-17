@@ -6,7 +6,7 @@ import * as ops from '~~/server/operations'
 import type { Actor } from '~~/server/utils/actor'
 import { resolveAttachmentFile } from '~~/server/utils/attachment-file'
 import { DEFAULT_PREVIEW_DIMENSION, imagePreview } from '~~/server/utils/image-preview'
-import { parentTicketIdsOf } from '~~/server/utils/db'
+import { isServiceIdentity, parentTicketIdsOf, principalDescription } from '~~/server/utils/db'
 import { todoLight } from '~~/shared/utils/todo-progress'
 import type { BoardSummary, LaneSummary, Ticket, TicketTodo, TicketActivityEntry, TicketComment, TicketTypeSummary, WorkspaceSummary } from '~~/shared/types/domain'
 
@@ -119,18 +119,32 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
     title: 'Who am I',
     description:
       'The principal this token acts for, the agent label it carries, and what its scopes permit. '
+      + 'kind says whether that principal is a person you act for or an agent with an identity of '
+      + 'its own — in which case it is you, and the tickets assigned to principalId are your work. '
       + 'Worth calling first when a write is unexpectedly refused: a token is a ceiling on what its '
       + 'principal can do, so being denied usually means the scopes are narrower than the person.',
     annotations: readsOnly,
     inputSchema: {}
-  }, async () => reply({
-    principalId: actor.principalId,
-    name: nameOf(actor.principal),
-    agent: actor.agentId,
-    channel: actor.channel,
-    scopes: actor.scopes ?? 'unrestricted',
-    boardScope: actor.boardScope ?? 'all boards this principal can reach'
-  }))
+  }, async () => {
+    const isAgent = isServiceIdentity(actor.principal)
+    return reply({
+      principalId: actor.principalId,
+      name: nameOf(actor.principal),
+      kind: isAgent ? 'agent' : 'person',
+      ...(isAgent
+        ? {
+            description: principalDescription(actor.principalId) || null,
+            note: 'You are a user of your own. Tickets assigned to you and comments you write carry your name. '
+              + 'Find your work with search_tickets and assigneeId set to principalId; assign a ticket to yourself '
+              + 'with update_ticket and the same id.'
+          }
+        : {}),
+      agent: actor.agentId,
+      channel: actor.channel,
+      scopes: actor.scopes ?? 'unrestricted',
+      boardScope: actor.boardScope ?? 'all boards this principal can reach'
+    })
+  })
 
   server.registerTool('list_boards', {
     title: 'List boards',
@@ -182,7 +196,7 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       description: board.description,
       yourRole: board.role,
       lanes: board.lanes.map(laneOf),
-      members: board.members.map(member => ({ id: member.userId, name: `${member.firstName} ${member.lastName}`.trim(), role: member.role })),
+      members: board.members.map(member => ({ id: member.userId, name: `${member.firstName} ${member.lastName}`.trim(), role: member.role, ...(member.isService ? { isAgent: true } : {}) })),
       labels: labels.map(label => label.name),
       categories: categories.map(category => category.name),
       ticketTypes: types.map(type => ({ id: type.id, name: type.name }))

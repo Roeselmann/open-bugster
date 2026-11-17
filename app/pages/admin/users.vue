@@ -352,6 +352,8 @@ async function copyLink() {
           </button>
         </form>
       </section>
+
+      <AdminAgents />
     </main>
 
     <UiConfirmDialog

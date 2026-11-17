@@ -138,7 +138,7 @@ const assigneeFilterOptions = computed(() => [
   { value: 'unassigned', label: 'Unassigned' },
   ...(board.value?.members || [])
     .filter(member => member.userId !== ownId.value)
-    .map(member => ({ value: member.userId, label: displayName(member) })),
+    .map(member => ({ value: member.userId, label: member.isService ? `${displayName(member)} · agent` : displayName(member) })),
 ])
 
 // Losing a member would otherwise leave a filter selected that matches nothing.

@@ -35,7 +35,7 @@ unrelated jobs and two sets of annotations.
 
 | Tool | Does | Annotations |
 |---|---|---|
-| `whoami` | The principal, agent label, and scopes behind this token | read-only |
+| `whoami` | The principal, agent label, and scopes behind this token; `kind` says whether the principal is a person or the agent itself | read-only |
 | `list_boards` | Boards with lanes and counts, plus the workspaces around them | read-only |
 | `board_overview` | One board: lanes, members, labels, categories, its workspace | read-only |
 | `search_tickets` | Filtered slim listing; instance-wide when `boardId` is omitted | read-only |
@@ -61,6 +61,10 @@ A to-do can be a ticket of its own, and an agent can follow it both ways without
 - **Up, from the subticket.** `get_ticket` lists `parents`: the tickets whose lists hold this one, each with its own `progress`. Only parents this token can read appear; others are left out without a trace.
 - **Progress at a glance.** `search_tickets` and the replies of the write tools carry `progress: { done, total, light, openSubtickets, subtickets }`, or null without to-dos. `light` is the card's traffic light: `green` when everything is done, `orange` from half, `red` below. The list itself stays in `get_ticket`, so a search stays cheap.
 - **Writing.** `create_ticket` with `parentTicketId` files a new subticket on any board of the workspace; `update_ticket` links an existing ticket by naming its id as `subticketId` in the to-dos, and unlinks one by leaving it out.
+
+### An agent as a user of its own
+
+A token usually acts for a person. It can instead belong to an agent with an account of its own (see [api.md](api.md#agents-service-identities)). Then `whoami` answers `kind: "agent"` with the agent's `description` and a note that the tickets assigned to its `principalId` are its own work, found with `search_tickets` and `assigneeId`. In `board_overview`, such a member carries `isAgent: true`. The server instructions mention both cases, so an agent learns which one it is from its first `whoami`.
 
 The `description` of `create_ticket` and `update_ticket` and the `body` of `comment_on_ticket`
 are Markdown; their field descriptions say so, so an agent formats with headings, lists and

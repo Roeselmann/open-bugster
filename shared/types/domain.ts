@@ -116,6 +116,24 @@ export interface UserBoardMembership {
   role: BoardRole
 }
 
+/**
+ * An agent with an identity of its own: a service identity, shown to people as an agent.
+ * It has no address and no password and acts only through tokens minted for it, so tickets
+ * it is assigned and comments it writes are its own rather than a person's.
+ */
+export interface AgentAccount {
+  id: string
+  name: string
+  /** What the agent is for, in the words of whoever set it up. */
+  description: string
+  status: UserStatus
+  createdAt: string
+  /** Tokens that still work: neither revoked nor expired. */
+  activeTokens: number
+  lastUsedAt: string | null
+  boards: UserBoardMembership[]
+}
+
 export interface BoardMember {
   userId: string
   /** null for a service identity, which holds a role without having an address. */
@@ -130,6 +148,8 @@ export interface BoardMember {
    * Shown as the **Integration** box under Board settings → Users.
    */
   mayAutomate: boolean
+  /** An agent rather than a person. It always acts through a token, so `mayAutomate` is true. */
+  isService: boolean
   addedAt: string
 }
 

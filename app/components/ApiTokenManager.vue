@@ -20,7 +20,12 @@ const props = withDefaults(defineProps<{
   principalId?: string | null
   /** Boards the token can be pinned to. */
   boards?: BoardSummary[]
-}>(), { principalId: null, boards: () => [] })
+  /** The agent the tokens belong to, so the copy names it rather than saying “you”. */
+  holderName?: string | null
+}>(), { principalId: null, boards: () => [], holderName: null })
+
+/** Tells a parent that the set of working tokens changed, so a count beside it can follow. */
+const emit = defineEmits<{ changed: [] }>()
 
 const { notify } = useNotify()
 
@@ -87,6 +92,7 @@ async function create() {
     form.scopes = ['read']
     form.boardId = ''
     await load()
+    emit('changed')
   } catch (error) {
     notify('error', errorText(error))
   } finally {
@@ -109,6 +115,7 @@ async function revoke(token: ApiToken) {
     await $fetch(`/api/tokens/${token.id}`, { method: 'DELETE' })
     notify('success', `“${token.name}” stopped working.`)
     await load()
+    emit('changed')
   } catch (error) {
     notify('error', errorText(error))
   }
@@ -167,15 +174,21 @@ const live = computed(() => tokens.value.filter(token => !token.revokedAt))
           </label>
         </div>
         <p class="muted mt-2 text-xs">
-          A ceiling, not a grant: a token can never do more than you can. Giving it
-          <strong class="font-semibold">write</strong> on a board where you are a viewer still leaves it a viewer.
+          <template v-if="holderName">
+            A ceiling, not a grant: a token can never do more than {{ holderName }} can, and that
+            is decided by the boards it is a member of.
+          </template>
+          <template v-else>
+            A ceiling, not a grant: a token can never do more than you can. Giving it
+            <strong class="font-semibold">write</strong> on a board where you are a viewer still leaves it a viewer.
+          </template>
         </p>
       </fieldset>
 
       <label v-if="boards.length" class="block">
         <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Limit to one board</span>
         <select v-model="form.boardId" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none">
-          <option value="">Every board you can reach</option>
+          <option value="">{{ holderName ? `Every board ${holderName} is on` : 'Every board you can reach' }}</option>
           <option v-for="board in boards" :key="board.id" :value="board.id">{{ board.name }}</option>
         </select>
       </label>

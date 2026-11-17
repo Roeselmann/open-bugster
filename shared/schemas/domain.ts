@@ -217,6 +217,7 @@ export const boardMemberSchema = z.object({
   status: z.enum(userStatuses),
   role: z.enum(boardRoles),
   mayAutomate: z.boolean(),
+  isService: z.boolean().describe('An agent with an identity of its own rather than a person.'),
   addedAt: z.string()
 })
 

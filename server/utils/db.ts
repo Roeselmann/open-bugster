@@ -6,7 +6,7 @@ import type {
   ActivityKind, AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardRole, BoardSummary, Category, CategoryColor,
   CategorySummary, DueTicket, IntegrationProvider, JiraIntegration, JiraIssue, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
   LinkDisplay, LinkPreview, TicketLink, TicketLinkInput, TicketPriority, TicketSource, SubticketRef, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary,
-  UserAccount, UserBoardMembership, UserRole, UserStatus, Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
+  AgentAccount, UserAccount, UserBoardMembership, UserRole, UserStatus, Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
 } from '../../shared/types/domain'
 import type { Actor, ActorChannel } from './actor'
 import { DEFAULT_TICKET_TYPES, DEFAULT_WORKSPACE_NAME } from '../../shared/utils/constants'
@@ -341,6 +341,8 @@ export function getDb() {
   ensureUploadSlots(database)
   // After every rebuild of `tickets` as well: the new column points into that table.
   ensureTodoSubtickets(database)
+  // Agents (service identities) say what they are for; people leave it empty.
+  ensureUserDescription(database)
   // Not in `boardIndexes`: that block also runs inside `ensureBoards`, before an upgrading
   // database has been given the ticket_activity table. Serves the board-wide digest query.
   database.exec('CREATE INDEX IF NOT EXISTS idx_ticket_activity_created ON ticket_activity(created_at DESC)')
@@ -648,6 +650,12 @@ export function ensureTodoSubtickets(db: Database.Database) {
     db.exec('ALTER TABLE ticket_todos ADD COLUMN subticket_id TEXT REFERENCES tickets(id) ON DELETE CASCADE')
     db.exec('CREATE INDEX IF NOT EXISTS idx_ticket_todos_subticket ON ticket_todos(subticket_id) WHERE subticket_id IS NOT NULL')
   })()
+  return true
+}
+
+export function ensureUserDescription(db: Database.Database) {
+  if (tableColumns(db, 'users').has('description')) return false
+  db.exec("ALTER TABLE users ADD COLUMN description TEXT NOT NULL DEFAULT ''")
   return true
 }
 
@@ -2128,17 +2136,23 @@ export interface BoardViewer {
 export function boardMembers(boardId: string): BoardMember[] {
   const rows = getDb().prepare(`
     SELECT u.id AS userId, u.email, u.first_name AS firstName, u.last_name AS lastName, u.status,
-           m.role, m.may_automate AS mayAutomate, m.added_at AS addedAt
+           m.role, m.may_automate AS mayAutomate, m.added_at AS addedAt, u.kind = 'service' AS isService
     FROM board_members m
     JOIN users u ON u.id = m.user_id
     WHERE m.board_id = ?
     ORDER BY u.first_name COLLATE NOCASE, u.last_name COLLATE NOCASE, u.email COLLATE NOCASE
-  `).all(boardId) as Array<Omit<BoardMember, 'mayAutomate'> & { mayAutomate: number }>
+  `).all(boardId) as Array<Omit<BoardMember, 'mayAutomate' | 'isService'> & { mayAutomate: number; isService: number }>
   // SQLite has no boolean, so the flag arrives as 0 or 1 and is mapped rather than cast.
   // A board administrator always holds it: they may hand it to anybody, themselves included,
   // so withholding it from them would be a lock with the key beside it. The stored value is
   // left untouched, so demoting somebody to editor brings back whatever they were given.
-  return rows.map(row => ({ ...row, mayAutomate: row.role === 'admin' || Boolean(row.mayAutomate) }))
+  // An agent can only ever act through a token, so for it the flag is its membership: adding
+  // it to a board without letting it work there would be a member who cannot do anything.
+  return rows.map(row => ({
+    ...row,
+    isService: Boolean(row.isService),
+    mayAutomate: row.role === 'admin' || Boolean(row.isService) || Boolean(row.mayAutomate),
+  }))
 }
 
 /**
@@ -2147,10 +2161,13 @@ export function boardMembers(boardId: string): BoardMember[] {
  * Absent membership reads as false; the caller has already decided what a non-member is told.
  */
 export function boardAutomationAllowed(boardId: string, userId: string): boolean {
-  const row = getDb().prepare('SELECT role, may_automate FROM board_members WHERE board_id = ? AND user_id = ?')
-    .get(boardId, userId) as { role: BoardRole; may_automate: number } | undefined
+  const row = getDb().prepare(`
+    SELECT m.role, m.may_automate, u.kind FROM board_members m JOIN users u ON u.id = m.user_id
+    WHERE m.board_id = ? AND m.user_id = ?
+  `).get(boardId, userId) as { role: BoardRole; may_automate: number; kind: string } | undefined
   if (!row) return false
-  return row.role === 'admin' || Boolean(row.may_automate)
+  // Same rule as `boardMembers` reports: an agent's membership is its permission to automate.
+  return row.role === 'admin' || row.kind === 'service' || Boolean(row.may_automate)
 }
 
 function toWorkspace(row: WorkspaceRow): Workspace {
@@ -3959,12 +3976,12 @@ export interface UserCreateInput {
  * `role` is fixed at `member`: an instance administrator that nobody can log in as, whose
  * whole reach is a token, is not a thing this should be able to create by accident.
  */
-export function createServiceIdentity(name: string): UserRecord {
+export function createServiceIdentity(name: string, description = ''): UserRecord {
   const id = randomUUID()
   getDb().prepare(`
-    INSERT INTO users (id, email, first_name, last_name, kind, role, status, created_at)
-    VALUES (?, NULL, ?, '', 'service', 'member', 'active', ?)
-  `).run(id, name.trim(), new Date().toISOString())
+    INSERT INTO users (id, email, first_name, last_name, kind, role, status, created_at, description)
+    VALUES (?, NULL, ?, '', 'service', 'member', 'active', ?, ?)
+  `).run(id, name.trim(), new Date().toISOString(), description.trim())
   invalidateUserDirectory()
   return findPrincipal(id)!
 }
@@ -3972,6 +3989,59 @@ export function createServiceIdentity(name: string): UserRecord {
 export function listServiceIdentities(): UserRecord[] {
   const rows = getDb().prepare("SELECT id FROM users WHERE kind = 'service' ORDER BY created_at DESC").all() as Array<{ id: string }>
   return rows.map(row => findPrincipal(row.id)!).filter(Boolean)
+}
+
+/**
+ * Every agent with what the admin screen shows for it: what it is for, the boards it is on,
+ * how many tokens still work for it and when one was last used.
+ */
+export function listAgents(): AgentAccount[] {
+  const db = getDb()
+  const rows = db.prepare(`
+    SELECT u.id, u.first_name AS name, u.description, u.status, u.created_at AS createdAt,
+           (SELECT COUNT(*) FROM api_tokens t WHERE t.principal_id = u.id AND t.revoked_at IS NULL
+              AND (t.expires_at IS NULL OR t.expires_at > ?)) AS activeTokens,
+           (SELECT MAX(t.last_used_at) FROM api_tokens t WHERE t.principal_id = u.id) AS lastUsedAt
+    FROM users u
+    WHERE u.kind = 'service'
+    ORDER BY u.first_name COLLATE NOCASE, u.created_at
+  `).all(new Date().toISOString()) as Omit<AgentAccount, 'boards'>[]
+  const memberships = db.prepare(`
+    SELECT m.user_id AS userId, b.id AS boardId, b.name AS boardName, m.role
+    FROM board_members m
+    JOIN boards b ON b.id = m.board_id
+    JOIN users u ON u.id = m.user_id AND u.kind = 'service'
+    ORDER BY b.position, b.created_at
+  `).all() as (UserBoardMembership & { userId: string })[]
+  const byAgent = new Map<string, UserBoardMembership[]>()
+  for (const { userId, ...membership } of memberships) {
+    const list = byAgent.get(userId)
+    if (list) list.push(membership)
+    else byAgent.set(userId, [membership])
+  }
+  return rows.map(row => ({ ...row, boards: byAgent.get(row.id) || [] }))
+}
+
+export function findAgent(id: string): AgentAccount | null {
+  return listAgents().find(agent => agent.id === id) || null
+}
+
+/** Renames an agent or rewrites what it is for. A person's row is never touched here. */
+export function updateServiceIdentity(id: string, input: { name?: string; description?: string }): boolean {
+  const sets: string[] = []
+  const values: string[] = []
+  if (input.name !== undefined) { sets.push('first_name = ?'); values.push(input.name.trim()) }
+  if (input.description !== undefined) { sets.push('description = ?'); values.push(input.description.trim()) }
+  if (!sets.length) return Boolean(getDb().prepare("SELECT 1 FROM users WHERE id = ? AND kind = 'service'").get(id))
+  const changed = getDb().prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ? AND kind = 'service'`).run(...values, id).changes
+  if (changed) invalidateUserDirectory()
+  return changed > 0
+}
+
+/** The agent's description, for `whoami`. Empty for anyone who is not an agent. */
+export function principalDescription(id: string): string {
+  const row = getDb().prepare('SELECT description FROM users WHERE id = ?').get(id) as { description: string } | undefined
+  return row?.description || ''
 }
 
 export function isServiceIdentity(account: UserRecord): boolean {

@@ -46,7 +46,7 @@ Open-Bugster is a lightweight, self-hosted Kanban board that is meant to be driv
 - **Push events to other systems**  
   Signed webhooks tell n8n, a chat channel, or a build pipeline when a ticket is created, updated, moved, archived, or restored, when somebody comments, and when an import finishes.
 - **Give machines their own identity**  
-  Scoped tokens, service identities for pipelines and jobs, and an audit trail that records which agent acted through which channel—so automation is accountable rather than anonymous.
+  Scoped tokens, agents with a user of their own (assigned tickets, own comments, no email needed), and an audit trail that records which agent acted through which channel—so automation is accountable rather than anonymous.
 
 ### The integrations that ship with it
 

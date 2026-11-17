@@ -60,7 +60,7 @@ export const v1Routes: readonly V1Route[] = [
 
   // Members
   { method: 'GET', path: '/boards/{boardId}/members', operation: ops.memberList, response: z.object({ members: z.array(boardMemberSchema) }) },
-  { method: 'GET', path: '/boards/{boardId}/member-candidates', operation: ops.memberCandidates, response: z.object({ candidates: z.array(personSchema.pick({ id: true, email: true, firstName: true, lastName: true, status: true })) }) },
+  { method: 'GET', path: '/boards/{boardId}/member-candidates', operation: ops.memberCandidates, response: z.object({ candidates: z.array(personSchema.pick({ id: true, email: true, firstName: true, lastName: true, status: true, isService: true })) }) },
   { method: 'PUT', path: '/boards/{boardId}/members/{userId}', operation: ops.memberSet, response: z.object({ member: boardMemberSchema, board: boardSummarySchema.nullable() }) },
   { method: 'DELETE', path: '/boards/{boardId}/members/{userId}', operation: ops.memberRemove, response: z.object({ board: boardSummarySchema.nullable() }) },
 

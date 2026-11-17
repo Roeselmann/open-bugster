@@ -76,6 +76,63 @@ describe('service identities and API tokens', () => {
     db.setBoardMember(otherBoardId, people.editor!, 'editor', true)
   })
 
+  describe('agents with an identity of their own', () => {
+    it('creates, renames, lists and deletes an agent with its tokens', async () => {
+      const { service } = await ops.run(ops.serviceCreate, actorOf('owner'), { name: 'Hermes', description: 'Triages bug reports' }) as { service: { id: string; name: string; description: string; activeTokens: number; boards: unknown[] } }
+      expect(service).toMatchObject({ name: 'Hermes', description: 'Triages bug reports', activeTokens: 0, boards: [] })
+
+      const minted = await ops.run(ops.tokenCreate, actorOf('owner'), { name: 'telegram', principalId: service.id, scopes: ['write'] }) as { secret: string }
+      db.setBoardMember(boardId, service.id, 'editor')
+      const { services } = await ops.run(ops.serviceList, actorOf('owner'), {}) as { services: Array<{ id: string; activeTokens: number; boards: Array<{ boardId: string }> }> }
+      expect(services.find(agent => agent.id === service.id)).toMatchObject({ activeTokens: 1, boards: [{ boardId }] })
+
+      const { service: renamed } = await ops.run(ops.serviceUpdate, actorOf('owner'), { serviceId: service.id, name: 'Hermes II', description: '' }) as { service: { name: string; description: string } }
+      expect(renamed).toMatchObject({ name: 'Hermes II', description: '' })
+      // Renaming reaches the directory every ticket and comment reads its people from.
+      expect(db.personById(service.id)).toMatchObject({ firstName: 'Hermes II', isService: true })
+
+      await ops.run(ops.serviceDelete, actorOf('owner'), { serviceId: service.id })
+      expect(token.resolveToken(minted.secret, 'api')).toBeNull()
+      expect(db.findPrincipal(service.id)).toBeNull()
+    })
+
+    it('refuses to edit or delete a person through the agent operations', async () => {
+      expect(await statusOf(ops.run(ops.serviceUpdate, actorOf('owner'), { serviceId: people.editor!, name: 'Bot' }))).toBe(404)
+      expect(await statusOf(ops.run(ops.serviceDelete, actorOf('owner'), { serviceId: people.editor! }))).toBe(404)
+      expect(db.findUser(people.editor!)).not.toBeNull()
+    })
+
+    it('keeps agents to instance administrators', async () => {
+      expect(await statusOf(ops.run(ops.serviceCreate, actorOf('editor'), { name: 'Rogue' }))).toBe(403)
+      expect(await statusOf(ops.run(ops.serviceList, actorOf('editor'), {}))).toBe(403)
+    })
+
+    it('is offered as a board member and works the board without the Integration box', async () => {
+      const { service } = await ops.run(ops.serviceCreate, actorOf('owner'), { name: 'Triage Bot' }) as { service: { id: string } }
+      const { candidates } = await ops.run(ops.memberCandidates, actorOf('owner'), { boardId }) as { candidates: Array<{ id: string; isService: boolean; email: string | null }> }
+      expect(candidates.find(candidate => candidate.id === service.id)).toMatchObject({ isService: true, email: null })
+
+      // Added the way the settings screen adds anybody: no automation flag passed.
+      db.setBoardMember(boardId, service.id, 'editor')
+      expect(db.boardMembers(boardId).find(member => member.userId === service.id)).toMatchObject({ isService: true, mayAutomate: true })
+
+      const minted = await ops.run(ops.tokenCreate, actorOf('owner'), { name: 'bot', principalId: service.id, scopes: ['write'] }) as { secret: string }
+      const bot = token.resolveToken(minted.secret, 'mcp')!
+      const { ticket } = await ops.run(ops.ticketCreate, bot, { boardId, laneId, title: 'Mine', assigneeId: service.id }) as { ticket: { id: string; assignee: { id: string; isService: boolean } | null } }
+      expect(ticket.assignee).toMatchObject({ id: service.id, isService: true })
+      const { comment } = await ops.run(ops.commentAdd, bot, { ticketId: ticket.id, body: 'On it.' }) as { comment: { author: { id: string; isService: boolean } } }
+      expect(comment.author).toMatchObject({ id: service.id, isService: true })
+
+      // A board it is not on stays out of reach, exactly as for a person.
+      expect(await statusOf(ops.run(ops.ticketList, bot, { boardId: otherBoardId }))).toBe(404)
+
+      // A disabled agent is not offered to another board.
+      await ops.run(ops.serviceSetStatus, actorOf('owner'), { serviceId: service.id, status: 'disabled' })
+      const later = await ops.run(ops.memberCandidates, actorOf('owner'), { boardId: otherBoardId }) as { candidates: Array<{ id: string }> }
+      expect(later.candidates.some(candidate => candidate.id === service.id)).toBe(false)
+    })
+  })
+
   describe('service identities', () => {
     it('opens a principal that cannot sign in but holds roles like anyone', () => {
       const bot = db.createServiceIdentity('Release Bot')

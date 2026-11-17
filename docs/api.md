@@ -22,9 +22,15 @@ Being on a board and being allowed to drive it from other software are two diffe
 
 It is a second axis rather than a rank above editor: it says *through what* somebody may act, never *how much*. The reasoning is that an editor can already do by hand everything their agent would do; what a token changes is that it happens in bulk and at machine pace, which is worth handing out deliberately. Administrators always hold it, the board's and the instance's alike.
 
-### Service identities
+### Agents (service identities)
 
-For something that is not a person, such as a CI pipeline or a scheduled job, open a **service identity** under **Users**. It holds board roles like anyone, appears in the history under its own name, and cannot sign in: it acts only through a token.
+A token from your profile acts *as you*: what the agent does is recorded against you. When an agent should be a user of its own, with tickets assigned to it and comments under its own name, create it under **Users → Agents** instead. The code calls such a principal a **service identity**; the interface calls it an agent. It suits a CI pipeline or a scheduled job just as well.
+
+- **No address, no password.** An agent has a name and an optional description of what it is for. It cannot sign in and acts only through the tokens an instance administrator makes for it on its row. The same panel shows the MCP connection details.
+- **Boards like anybody else.** It is added under **Board settings → Users** with a role and reaches only those boards. Its tokens are its only way in, so its **Integration** box is always ticked and cannot be cleared.
+- **Recognisable.** A square avatar and an *Agent* badge in the member list, comments and the history, and "· agent" in the assignee choices.
+- **Lifecycle.** Rename it or change its description at any time. Disabling it stops every one of its tokens at once. Deleting it removes the tokens too; its tickets and comments stay but lose the name behind them.
+- **Operations:** `service.list`, `service.create`, `service.update`, `service.setStatus`, `service.delete`, all for instance administrators. Over MCP, `whoami` answers `kind: "agent"` with the description, so the agent knows that the tickets assigned to its `principalId` are its own work.
 
 ### REST v1
 
@@ -56,7 +62,7 @@ Lists are paged with a cursor, errors are `application/problem+json` with a stab
 | File | What lives there |
 |---|---|
 | [server/utils/token.ts](../server/utils/token.ts) | `tokenScopes`, `ceilingFor`, `TOKEN_PREFIX`, `hashToken`, `createApiToken`, `resolveToken`, `tokenExpired`, `revokeApiToken`. |
-| [server/operations/credentials.ts](../server/operations/credentials.ts) | `service.list`, `service.create`, `service.setStatus` (instance admin); `token.list`, `token.create`, `token.revoke` (authenticated, own tokens). |
+| [server/operations/credentials.ts](../server/operations/credentials.ts) | `service.list`, `service.create`, `service.update`, `service.setStatus`, `service.delete` (instance admin); `token.list`, `token.create`, `token.revoke` (authenticated, own tokens). |
 | [server/utils/access.ts](../server/utils/access.ts) | `effectiveRole`, `requireAutomationAllowed`, `requireInstanceAdmin`. |
 | [server/middleware/auth.ts](../server/middleware/auth.ts) | `acceptsBearer`, the bearer path, the `auth.token` denial audit. |
 | [server/api/v1/routes.ts](../server/api/v1/routes.ts) | `v1Routes`, `compiledRoutes`, `matchRoute`. |
@@ -71,20 +77,20 @@ Lists are paged with a cursor, errors are `application/problem+json` with a stab
 | [server/utils/db.ts](../server/utils/db.ts) | `ensureActorContext`, `ensureAuditLog`, `ensureServiceIdentities`, `ensureApiTokens`, `ensureIdempotencyKeys`, `ensureBoardMemberAutomation`; `findIdempotent`, `saveIdempotent`, `pruneIdempotent`, `boardAutomationAllowed`. |
 | [shared/utils/errors.ts](../shared/utils/errors.ts) | Error shapes shared with the client. |
 | `app/components/ApiTokenManager.vue`, `app/pages/profile/integrations.vue` | Minting and revoking tokens; the **What an agent can do** panel. |
-| `app/pages/admin/users.vue` | Service identities. |
+| `app/pages/admin/users.vue`, `app/components/AdminAgents.vue` | Agents (service identities), with their tokens and MCP connection. |
 | `app/components/BoardMemberSettings.vue` | The Integration checkbox per member. |
 | `app/pages/b/[board]/settings/audit.vue` | The audit view. |
 
 ## Surfaces
 
-- **Internal routes:** `server/api/tokens/index.get.ts`, `index.post.ts`, `[id].delete.ts`; `server/api/services/index.get.ts`, `index.post.ts`, `[id].patch.ts`; `server/api/boards/[id]/audit.get.ts`; `server/api/mcp-info.get.ts`.
+- **Internal routes:** `server/api/tokens/index.get.ts`, `index.post.ts`, `[id].delete.ts`; `server/api/services/index.get.ts`, `index.post.ts`, `[id].patch.ts`, `[id].delete.ts`; `server/api/boards/[id]/audit.get.ts`; `server/api/mcp-info.get.ts`.
 - **REST v1:** the full table in `routes.ts`, grouped as workspaces, boards, lanes, members, tickets, attachments, comments, categories and labels, and the imports (`GET`/`POST /boards/{boardId}/import`, TestFlight or Jira by `provider`). Deliberately absent: user administration, tokens, service identities, App Store Connect and Jira credentials, webhooks, and the audit log.
-- **MCP:** `whoami` shows the principal, agent label, and scopes behind a token.
+- **MCP:** `whoami` shows the principal, agent label, and scopes behind a token, and whether that principal is a person (`kind: "person"`) or an agent of its own (`kind: "agent"`).
 - **Webhooks:** none of the operations here emit events.
 
 ## Tests
 
-- `tests/token.test.ts`: service identities, token creation and resolution, the scope ceiling, expiry, revocation.
+- `tests/token.test.ts`: agents and service identities (lifecycle, board membership, own tickets and comments), token creation and resolution, the scope ceiling, expiry, revocation.
 - `tests/api-v1.test.ts`: the route table invariants, the OpenAPI document, problem documents, rate limiting, cursor paging, idempotency.
 - `tests/audit.test.ts`: entries, actor context, denial logging, retention.
 - `tests/operations.test.ts`: audit by construction, and that secrets never reach the log.

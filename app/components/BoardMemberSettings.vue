@@ -5,7 +5,7 @@ import type { BoardMember, BoardRole, BoardSummary, UserStatus } from '~~/shared
 const props = defineProps<{ board: BoardSummary }>()
 const emit = defineEmits<{ changed: []; notify: [type: 'success' | 'error', text: string] }>()
 
-type Candidate = { id: string; email: string; firstName: string; lastName: string; status: UserStatus }
+type Candidate = { id: string; email: string | null; firstName: string; lastName: string; status: UserStatus; isService: boolean }
 
 const canManage = computed(() => props.board.role === 'admin')
 const members = computed(() => props.board.members)
@@ -44,7 +44,7 @@ const adding = ref(false)
 
 const candidateOptions = computed(() => candidates.value.map(candidate => ({
   value: candidate.id,
-  label: `${displayName(candidate)} · ${candidate.email}`,
+  label: candidate.isService ? `${displayName(candidate)} · agent` : `${displayName(candidate)} · ${candidate.email}`,
 })))
 
 async function loadCandidates() {
@@ -147,25 +147,34 @@ async function removeMember(member: BoardMember) {
       <li v-for="member in members" :key="member.userId" class="flex flex-wrap items-center gap-3 px-5 py-3.5">
         <UiAvatar :person="member" :muted="member.status !== 'active'" />
         <div class="min-w-0 flex-1">
-          <p class="truncate text-sm font-semibold">{{ displayName(member) }}</p>
+          <p class="flex items-center gap-2 truncate text-sm font-semibold">
+            {{ displayName(member) }}
+            <span v-if="member.isService" class="tone tone-neutral rounded px-1.5 py-px text-[10px] font-bold uppercase tracking-wide">Agent</span>
+          </p>
           <p class="muted truncate text-xs">
-            {{ member.email }}<span v-if="member.status === 'invited'"> · invitation pending</span>
+            <template v-if="member.isService">Works only through its own tokens{{ member.status === 'disabled' ? ' · disabled' : '' }}</template>
+            <template v-else>{{ member.email }}<span v-if="member.status === 'invited'"> · invitation pending</span></template>
           </p>
         </div>
-        <!-- An administrator always holds it, so the box is ticked and left alone. -->
+        <!--
+          An administrator always holds it, and so does an agent, whose tokens are its only way
+          in — for both the box is ticked and left alone.
+        -->
         <label
           class="flex shrink-0 items-center gap-2"
-          :class="member.role === 'admin' ? 'cursor-default' : 'cursor-pointer'"
-          :title="member.role === 'admin'
-            ? 'A board administrator may always work this board through the API or an agent.'
-            : `Whether ${displayName(member)} may work this board through the API or an agent`"
+          :class="member.role === 'admin' || member.isService ? 'cursor-default' : 'cursor-pointer'"
+          :title="member.isService
+            ? 'An agent always works through its tokens, so it always may.'
+            : member.role === 'admin'
+              ? 'A board administrator may always work this board through the API or an agent.'
+              : `Whether ${displayName(member)} may work this board through the API or an agent`"
         >
           <input
             type="checkbox"
             :checked="member.mayAutomate"
-            :disabled="!canManage || member.role === 'admin' || busyId === member.userId"
+            :disabled="!canManage || member.role === 'admin' || member.isService || busyId === member.userId"
             class="focus-ring size-4 rounded"
-            :class="member.role === 'admin' ? 'cursor-default' : 'disabled:opacity-40'"
+            :class="member.role === 'admin' || member.isService ? 'cursor-default' : 'disabled:opacity-40'"
             @change="setAutomation(member, !member.mayAutomate)"
           >
           <span class="muted text-[10px] font-bold uppercase tracking-[.08em]">Integration</span>
