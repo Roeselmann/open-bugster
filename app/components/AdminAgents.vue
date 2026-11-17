@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { Bot, Pencil, Plug, Trash2 } from '@lucide/vue'
+import { Bot, Pencil, Plug, ShieldCheck, Trash2 } from '@lucide/vue'
 import type { AgentAccount, BoardRole } from '~~/shared/types/domain'
+import type { AgentIcon } from '~~/shared/utils/agent-icons'
 
 /**
  * Agents with an identity of their own. Unlike a token on somebody's profile, which acts as
@@ -10,6 +11,8 @@ import type { AgentAccount, BoardRole } from '~~/shared/types/domain'
  */
 const { notify } = useNotify()
 const { boards } = useBoards()
+const { workspaces } = useWorkspaces()
+await loadWorkspaces()
 
 const { data, refresh } = await useFetch<{ services: AgentAccount[] }>('/api/services')
 const agents = computed(() => data.value?.services || [])
@@ -17,12 +20,36 @@ const agents = computed(() => data.value?.services || [])
 const boardRoleLabels: Record<BoardRole, string> = { viewer: 'Viewer', editor: 'Editor', admin: 'Administrator' }
 const dateFormat = new Intl.DateTimeFormat('en', { day: '2-digit', month: 'short', year: 'numeric' })
 
-const form = reactive({ name: '', description: '' })
+const form = reactive({ name: '', description: '', icon: 'bot' as AgentIcon | null })
 const creating = ref(false)
 const busyId = ref('')
 /** The agent whose tokens and connection details are open below its row. */
 const connectingId = ref('')
-const editing = ref<{ id: string; name: string; description: string } | null>(null)
+/** The agent whose access settings are open below its row. One panel at a time. */
+const accessId = ref('')
+
+function togglePanel(kind: 'tokens' | 'access', id: string) {
+  const current = kind === 'tokens' ? connectingId : accessId
+  const other = kind === 'tokens' ? accessId : connectingId
+  current.value = current.value === id ? '' : id
+  other.value = ''
+}
+
+/** The grants in one line, shown above the boards it was added to by hand. */
+function reach(agent: AgentAccount): string | null {
+  const { access } = agent
+  if (access.mode === 'all') return `Every board · ${boardRoleLabels[access.role || 'viewer']}`
+  if (access.mode === 'workspaces') {
+    return access.workspaces.map(grant => `${grant.workspaceName} · ${boardRoleLabels[grant.role]}`).join(', ')
+  }
+  return null
+}
+
+async function accessSaved() {
+  await refresh()
+  accessId.value = ''
+}
+const editing = ref<{ id: string; name: string; description: string; icon: AgentIcon | null } | null>(null)
 const removal = ref<AgentAccount | null>(null)
 const removalPending = ref(false)
 
@@ -39,6 +66,7 @@ async function createAgent() {
     const { service } = await $fetch<{ service: AgentAccount }>('/api/services', { method: 'POST', body: { ...form } })
     form.name = ''
     form.description = ''
+    form.icon = 'bot'
     await refresh()
     // The next thing anybody does with a new agent is give it a token, so open that straight away.
     connectingId.value = service.id
@@ -55,7 +83,7 @@ async function saveEdit() {
   if (!pending || !pending.name.trim()) return
   busyId.value = pending.id
   try {
-    await $fetch(`/api/services/${pending.id}`, { method: 'PATCH', body: { name: pending.name, description: pending.description } })
+    await $fetch(`/api/services/${pending.id}`, { method: 'PATCH', body: { name: pending.name, description: pending.description, icon: pending.icon } })
     editing.value = null
     await refresh()
     notify('success', 'The agent was updated.')
@@ -107,7 +135,8 @@ async function confirmRemoval() {
       <p class="muted mt-1 text-sm">
         An agent with a user of its own: tickets can be assigned to it, and its comments carry its
         own name. It needs no email address, cannot sign in, and connects only through the tokens
-        made for it here. Add it to a board under Board settings → Users, like anybody else.
+        made for it here. Under Access it gets whole workspaces or every board; single boards are
+        added under Board settings → Users, like anybody else.
         An agent that should act as you instead uses a token from your profile.
       </p>
     </header>
@@ -125,6 +154,10 @@ async function confirmRemoval() {
               <input v-model="editing.description" maxlength="500" class="focus-ring surface-strong h-10 w-full rounded-xl px-3 text-sm outline-none" @keydown.enter.prevent="saveEdit">
             </label>
           </div>
+          <div>
+            <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Icon</span>
+            <AgentIconPicker v-model="editing.icon" :name="editing.name" />
+          </div>
           <div class="flex justify-end gap-2">
             <button type="button" class="focus-ring h-9 rounded-lg px-3 text-sm font-semibold transition hover:bg-[var(--panel-strong)]" @click="editing = null">Cancel</button>
             <button type="button" :disabled="busyId === agent.id || !editing.name.trim()" class="focus-ring h-9 rounded-lg bg-[var(--ink)] px-3.5 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50" @click="saveEdit">Save</button>
@@ -132,7 +165,7 @@ async function confirmRemoval() {
         </div>
 
         <div v-else class="flex flex-wrap items-center gap-3">
-          <UiAvatar :person="{ firstName: agent.name, lastName: '', email: null, isService: true }" size="lg" :muted="agent.status !== 'active'" />
+          <UiAvatar :person="{ firstName: agent.name, lastName: '', email: null, isService: true, icon: agent.icon }" size="lg" :muted="agent.status !== 'active'" />
           <div class="min-w-0 flex-1">
             <p class="flex items-center gap-2 truncate text-sm font-semibold">
               {{ agent.name }}
@@ -142,6 +175,13 @@ async function confirmRemoval() {
             <p class="muted mt-0.5 text-[11px]">{{ usage(agent) }}</p>
             <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
               <span
+                v-if="reach(agent)"
+                class="tone tone-violet rounded-full px-2 py-0.5 text-[11px] font-semibold"
+                :title="agent.access.mode === 'all' ? 'Every board of the instance, including new ones' : 'Every board of these workspaces, including new ones'"
+              >
+                {{ agent.access.mode === 'all' ? '' : 'Workspaces: ' }}{{ reach(agent) }}
+              </span>
+              <span
                 v-for="membership in agent.boards"
                 :key="membership.boardId"
                 class="tone tone-neutral rounded-full px-2 py-0.5 text-[11px] font-semibold"
@@ -150,16 +190,25 @@ async function confirmRemoval() {
                 {{ membership.boardName }}
                 <span class="font-normal opacity-70">· {{ boardRoleLabels[membership.role] }}</span>
               </span>
-              <span v-if="!agent.boards.length" class="muted text-[11px]">On no board yet — it can see nothing until it is added to one</span>
+              <span v-if="!agent.boards.length && !reach(agent)" class="muted text-[11px]">On no board yet — it can see nothing until it is added to one or given access</span>
             </div>
           </div>
 
           <button
             type="button"
             class="focus-ring flex h-8 items-center gap-1.5 rounded-lg border border-[var(--line)] px-2.5 text-xs font-semibold transition hover:bg-[var(--panel-strong)]"
+            :class="accessId === agent.id ? 'bg-[var(--panel-strong)]' : ''"
+            :aria-expanded="accessId === agent.id"
+            @click="togglePanel('access', agent.id)"
+          >
+            <ShieldCheck :size="14" aria-hidden="true" /> Access
+          </button>
+          <button
+            type="button"
+            class="focus-ring flex h-8 items-center gap-1.5 rounded-lg border border-[var(--line)] px-2.5 text-xs font-semibold transition hover:bg-[var(--panel-strong)]"
             :class="connectingId === agent.id ? 'bg-[var(--panel-strong)]' : ''"
             :aria-expanded="connectingId === agent.id"
-            @click="connectingId = connectingId === agent.id ? '' : agent.id"
+            @click="togglePanel('tokens', agent.id)"
           >
             <Plug :size="14" aria-hidden="true" /> Tokens
           </button>
@@ -167,7 +216,7 @@ async function confirmRemoval() {
             type="button"
             class="focus-ring grid size-8 place-items-center rounded-lg transition hover:bg-[var(--panel-strong)]"
             :aria-label="`Edit ${agent.name}`"
-            @click="editing = { id: agent.id, name: agent.name, description: agent.description }"
+            @click="editing = { id: agent.id, name: agent.name, description: agent.description, icon: agent.icon }"
           >
             <Pencil :size="15" />
           </button>
@@ -187,6 +236,10 @@ async function confirmRemoval() {
           >
             <Trash2 :size="15" />
           </button>
+        </div>
+
+        <div v-if="accessId === agent.id" class="surface-strong mt-3 overflow-hidden rounded-xl">
+          <AgentAccessEditor :agent="agent" :workspaces="workspaces" @saved="accessSaved" />
         </div>
 
         <div v-if="connectingId === agent.id" class="surface-strong mt-3 overflow-hidden rounded-xl">
@@ -215,6 +268,10 @@ async function confirmRemoval() {
       <button :disabled="creating || !form.name.trim()" class="focus-ring h-11 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50">
         {{ creating ? 'Creating…' : 'Create agent' }}
       </button>
+      <div class="basis-full">
+        <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Icon</span>
+        <AgentIconPicker v-model="form.icon" :name="form.name" />
+      </div>
     </form>
 
     <UiConfirmDialog

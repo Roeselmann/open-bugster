@@ -1,4 +1,4 @@
-import { findUser } from '~~/server/utils/db'
+import { avatarOf, findUser } from '~~/server/utils/db'
 
 /**
  * Re-reads the account on every session fetch, so disabling someone or changing a password
@@ -21,6 +21,7 @@ export default defineNitroPlugin(() => {
       lastName: account.lastName,
       role: account.role,
       sessionVersion: account.sessionVersion,
+      avatarUrl: avatarOf(account.id).avatarUrl,
     }
   })
 })

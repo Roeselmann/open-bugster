@@ -1,3 +1,4 @@
+import { isAgentIcon, type AgentIcon } from '../../shared/utils/agent-icons'
 import Database from 'better-sqlite3'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { dirname, extname, join } from 'node:path'
@@ -6,7 +7,7 @@ import type {
   ActivityKind, AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardRole, BoardSummary, Category, CategoryColor,
   CategorySummary, DueTicket, IntegrationProvider, JiraIntegration, JiraIssue, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
   LinkDisplay, LinkPreview, TicketLink, TicketLinkInput, TicketPriority, TicketSource, SubticketRef, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary,
-  AgentAccount, UserAccount, UserBoardMembership, UserRole, UserStatus, Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
+  AgentAccess, AgentAccessMode, AgentAccount, AgentGrantRole, UserAccount, UserBoardMembership, UserRole, UserStatus, Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
 } from '../../shared/types/domain'
 import type { Actor, ActorChannel } from './actor'
 import { DEFAULT_TICKET_TYPES, DEFAULT_WORKSPACE_NAME } from '../../shared/utils/constants'
@@ -280,6 +281,9 @@ export function getDb() {
   database.pragma('journal_mode = WAL')
   database.pragma('foreign_keys = ON')
   database.pragma('busy_timeout = 5000')
+  // Out of the way of the migrations below: a table rebuild that renames a table a view
+  // reads from fails while the view exists. `ensureAgentGrants` puts it back at the end.
+  database.exec('DROP VIEW IF EXISTS board_access')
   database.exec(schema)
   ensureQuestionStatus(database)
   ensureTicketCategory(database)
@@ -343,6 +347,9 @@ export function getDb() {
   ensureTodoSubtickets(database)
   // Agents (service identities) say what they are for; people leave it empty.
   ensureUserDescription(database)
+  ensureUserAvatars(database)
+  // After every table it reads from: the view joins boards, users and both kinds of grant.
+  ensureAgentGrants(database)
   // Not in `boardIndexes`: that block also runs inside `ensureBoards`, before an upgrading
   // database has been given the ticket_activity table. Serves the board-wide digest query.
   database.exec('CREATE INDEX IF NOT EXISTS idx_ticket_activity_created ON ticket_activity(created_at DESC)')
@@ -426,8 +433,12 @@ let directoryCache: Map<string, Person> | null = null
 
 function personDirectory(): Map<string, Person> {
   if (directoryCache) return directoryCache
-  const rows = getDb().prepare('SELECT id, email, first_name, last_name, kind, status, anonymized_at FROM users').all() as Array<{
+  const rows = getDb().prepare(`
+    SELECT u.id, u.email, u.first_name, u.last_name, u.kind, u.status, u.anonymized_at, u.icon, a.updated_at AS avatar_at
+    FROM users u LEFT JOIN user_avatars a ON a.user_id = u.id
+  `).all() as Array<{
     id: string; email: string | null; first_name: string; last_name: string; kind: UserKind; status: UserStatus | null; anonymized_at: string | null
+    icon: string | null; avatar_at: string | null
   }>
   directoryCache = new Map(rows.map(row => [row.id, {
     id: row.id,
@@ -438,8 +449,40 @@ function personDirectory(): Map<string, Person> {
     isService: row.kind === 'service',
     status: row.status,
     anonymizedAt: row.anonymized_at,
+    avatarUrl: avatarUrlFor(row.id, row.avatar_at),
+    icon: row.kind === 'service' && isAgentIcon(row.icon) ? row.icon : null,
   }]))
   return directoryCache
+}
+
+/** Versioned by the upload time, so the image can be cached for good and a new one still shows. */
+function avatarUrlFor(id: string, updatedAt: string | null): string | null {
+  return updatedAt ? `/api/avatars/${id}?v=${encodeURIComponent(updatedAt)}` : null
+}
+
+/** How somebody is drawn, from the directory, for the lists that are built by their own query. */
+export function avatarOf(id: string): { avatarUrl: string | null; icon: AgentIcon | null } {
+  const person = personById(id)
+  return { avatarUrl: person?.avatarUrl ?? null, icon: person?.icon ?? null }
+}
+
+export function getUserAvatar(id: string): { mime: string; data: Buffer; updatedAt: string } | null {
+  const row = getDb().prepare('SELECT mime, data, updated_at AS updatedAt FROM user_avatars WHERE user_id = ?').get(id) as { mime: string; data: Buffer; updatedAt: string } | undefined
+  return row || null
+}
+
+export function setUserAvatar(id: string, mime: string, data: Buffer): void {
+  getDb().prepare(`
+    INSERT INTO user_avatars (user_id, mime, data, updated_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT (user_id) DO UPDATE SET mime = excluded.mime, data = excluded.data, updated_at = excluded.updated_at
+  `).run(id, mime, data, new Date().toISOString())
+  invalidateUserDirectory()
+}
+
+export function removeUserAvatar(id: string): boolean {
+  const changed = getDb().prepare('DELETE FROM user_avatars WHERE user_id = ?').run(id).changes
+  if (changed) invalidateUserDirectory()
+  return changed > 0
 }
 
 export function invalidateUserDirectory() {
@@ -657,6 +700,60 @@ export function ensureUserDescription(db: Database.Database) {
   if (tableColumns(db, 'users').has('description')) return false
   db.exec("ALTER TABLE users ADD COLUMN description TEXT NOT NULL DEFAULT ''")
   return true
+}
+
+/** A portrait per person, and an icon per agent. The image lives in its own table, out of `SELECT *`. */
+export function ensureUserAvatars(db: Database.Database) {
+  if (!tableColumns(db, 'users').has('icon')) db.exec('ALTER TABLE users ADD COLUMN icon TEXT')
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_avatars (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      mime TEXT NOT NULL,
+      data BLOB NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `)
+}
+
+/**
+ * How an agent reaches boards beyond the ones it was added to by hand: every board of a
+ * workspace, or every board of the instance (`workspace_id` null), at one role. People have
+ * no such grant — for them a board membership stays a deliberate, per-board decision.
+ *
+ * `board_access` is what every read of "who is on this board" goes through: the explicit
+ * memberships plus the boards an agent's grants open, one row per board and person, the
+ * higher role winning. Recreated on every start so its definition can change with the code.
+ */
+export function ensureAgentGrants(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_grants (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK (role IN ('viewer', 'editor')),
+      created_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_grants_scope ON agent_grants(user_id, COALESCE(workspace_id, '*'));
+    DROP VIEW IF EXISTS board_access;
+    CREATE VIEW board_access AS
+    SELECT board_id, user_id, role, may_automate, added_at, via FROM (
+      SELECT *, ROW_NUMBER() OVER (
+        PARTITION BY board_id, user_id
+        ORDER BY CASE role WHEN 'admin' THEN 3 WHEN 'editor' THEN 2 ELSE 1 END DESC,
+                 CASE via WHEN 'board' THEN 0 WHEN 'workspace' THEN 1 ELSE 2 END
+      ) AS rank
+      FROM (
+        SELECT board_id, user_id, role, may_automate, added_at, 'board' AS via FROM board_members
+        UNION ALL
+        SELECT b.id, g.user_id, g.role, 1, g.created_at,
+               CASE WHEN g.workspace_id IS NULL THEN 'instance' ELSE 'workspace' END
+        FROM agent_grants g
+        JOIN users u ON u.id = g.user_id AND u.kind = 'service'
+        JOIN boards b ON g.workspace_id IS NULL OR b.workspace_id = g.workspace_id
+      )
+    )
+    WHERE rank = 1;
+  `)
 }
 
 export function ensureTicketNumber(db: Database.Database) {
@@ -2136,12 +2233,12 @@ export interface BoardViewer {
 export function boardMembers(boardId: string): BoardMember[] {
   const rows = getDb().prepare(`
     SELECT u.id AS userId, u.email, u.first_name AS firstName, u.last_name AS lastName, u.status,
-           m.role, m.may_automate AS mayAutomate, m.added_at AS addedAt, u.kind = 'service' AS isService
-    FROM board_members m
+           m.role, m.may_automate AS mayAutomate, m.added_at AS addedAt, u.kind = 'service' AS isService, m.via
+    FROM board_access m
     JOIN users u ON u.id = m.user_id
     WHERE m.board_id = ?
     ORDER BY u.first_name COLLATE NOCASE, u.last_name COLLATE NOCASE, u.email COLLATE NOCASE
-  `).all(boardId) as Array<Omit<BoardMember, 'mayAutomate' | 'isService'> & { mayAutomate: number; isService: number }>
+  `).all(boardId) as Array<Omit<BoardMember, 'mayAutomate' | 'isService' | 'avatarUrl' | 'icon'> & { mayAutomate: number; isService: number }>
   // SQLite has no boolean, so the flag arrives as 0 or 1 and is mapped rather than cast.
   // A board administrator always holds it: they may hand it to anybody, themselves included,
   // so withholding it from them would be a lock with the key beside it. The stored value is
@@ -2150,6 +2247,7 @@ export function boardMembers(boardId: string): BoardMember[] {
   // it to a board without letting it work there would be a member who cannot do anything.
   return rows.map(row => ({
     ...row,
+    ...avatarOf(row.userId),
     isService: Boolean(row.isService),
     mayAutomate: row.role === 'admin' || Boolean(row.isService) || Boolean(row.mayAutomate),
   }))
@@ -2162,7 +2260,7 @@ export function boardMembers(boardId: string): BoardMember[] {
  */
 export function boardAutomationAllowed(boardId: string, userId: string): boolean {
   const row = getDb().prepare(`
-    SELECT m.role, m.may_automate, u.kind FROM board_members m JOIN users u ON u.id = m.user_id
+    SELECT m.role, m.may_automate, u.kind FROM board_access m JOIN users u ON u.id = m.user_id
     WHERE m.board_id = ? AND m.user_id = ?
   `).get(boardId, userId) as { role: BoardRole; may_automate: number; kind: string } | undefined
   if (!row) return false
@@ -2175,14 +2273,14 @@ function toWorkspace(row: WorkspaceRow): Workspace {
 }
 
 export function workspaceMembers(workspaceId: string): WorkspaceMember[] {
-  return getDb().prepare(`
+  return (getDb().prepare(`
     SELECT u.id AS userId, u.email, u.first_name AS firstName, u.last_name AS lastName, u.status,
            m.role, m.added_at AS addedAt
     FROM workspace_members m
     JOIN users u ON u.id = m.user_id
     WHERE m.workspace_id = ?
     ORDER BY u.first_name COLLATE NOCASE, u.last_name COLLATE NOCASE, u.email COLLATE NOCASE
-  `).all(workspaceId) as WorkspaceMember[]
+  `).all(workspaceId) as Array<Omit<WorkspaceMember, 'avatarUrl' | 'icon'>>).map(row => ({ ...row, ...avatarOf(row.userId) }))
 }
 
 /** The explicit role somebody holds on a workspace, or null when they hold none. */
@@ -2195,7 +2293,7 @@ export function workspaceRoleFor(workspaceId: string, userId: string): Workspace
 export function workspaceReachableThroughBoards(workspaceId: string, userId: string): boolean {
   return Boolean(getDb().prepare(`
     SELECT 1 FROM boards b
-    JOIN board_members m ON m.board_id = b.id AND m.user_id = ?
+    JOIN board_access m ON m.board_id = b.id AND m.user_id = ?
     WHERE b.workspace_id = ?
     LIMIT 1
   `).get(userId, workspaceId))
@@ -2220,7 +2318,7 @@ export function listWorkspaces(viewer?: BoardViewer | null): WorkspaceSummary[] 
         SELECT DISTINCT w.* FROM workspaces w
         LEFT JOIN workspace_members wm ON wm.workspace_id = w.id AND wm.user_id = ?
         LEFT JOIN boards b ON b.workspace_id = w.id
-        LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = ?
+        LEFT JOIN board_access bm ON bm.board_id = b.id AND bm.user_id = ?
         WHERE wm.user_id IS NOT NULL OR bm.user_id IS NOT NULL
         ORDER BY w.position, w.created_at
       `).all(viewer.userId, viewer.userId)
@@ -2537,7 +2635,7 @@ export function listBoards(viewer?: BoardViewer | null): BoardSummary[] {
   const rows = (scoped
     ? db.prepare(`
         SELECT b.* FROM boards b
-        JOIN board_members m ON m.board_id = b.id AND m.user_id = ?
+        JOIN board_access m ON m.board_id = b.id AND m.user_id = ?
         JOIN workspaces w ON w.id = b.workspace_id
         ORDER BY w.position, w.created_at, b.position, b.created_at
       `).all(viewer.userId)
@@ -2552,13 +2650,13 @@ export function listBoards(viewer?: BoardViewer | null): BoardSummary[] {
 /** The boards a user may see, or null when they may see all of them. */
 export function accessibleBoardIds(viewer: BoardViewer): string[] | null {
   if (viewer.instanceAdmin) return null
-  return (getDb().prepare('SELECT board_id FROM board_members WHERE user_id = ?').all(viewer.userId) as Array<{ board_id: string }>)
+  return (getDb().prepare('SELECT board_id FROM board_access WHERE user_id = ?').all(viewer.userId) as Array<{ board_id: string }>)
     .map(row => row.board_id)
 }
 
 /** The role a user holds on a board, or null when they hold none. */
 export function boardRoleFor(boardId: string, userId: string): BoardRole | null {
-  const row = getDb().prepare('SELECT role FROM board_members WHERE board_id = ? AND user_id = ?').get(boardId, userId) as { role: BoardRole } | undefined
+  const row = getDb().prepare('SELECT role FROM board_access WHERE board_id = ? AND user_id = ?').get(boardId, userId) as { role: BoardRole } | undefined
   return row?.role || null
 }
 
@@ -2903,7 +3001,7 @@ export function listDueTickets(viewer: BoardViewer, today = boardToday()): DueTi
     JOIN boards b ON b.id = t.board_id
     JOIN lanes l ON l.id = t.lane_id
     JOIN workspaces w ON w.id = b.workspace_id
-    ${scoped ? 'JOIN board_members m ON m.board_id = b.id AND m.user_id = @userId' : ''}
+    ${scoped ? 'JOIN board_access m ON m.board_id = b.id AND m.user_id = @userId' : ''}
     WHERE t.archived_at IS NULL AND t.due_date IS NOT NULL AND l.is_done = 0
     ORDER BY w.position, w.created_at, b.position, b.created_at, t.due_date, t.ticket_number
   `).all(scoped ? { userId: viewer.userId } : {}) as Array<{
@@ -3580,7 +3678,7 @@ export function transferTicket(id: string, targetBoardId: string, targetLaneId: 
   if (!targetLane || targetLane.boardId !== targetBoardId) return null
 
   const db = getDb()
-  const isMember = Boolean(current.assignee && db.prepare('SELECT 1 FROM board_members WHERE board_id = ? AND user_id = ?').get(targetBoardId, current.assignee.id))
+  const isMember = Boolean(current.assignee && db.prepare('SELECT 1 FROM board_access WHERE board_id = ? AND user_id = ?').get(targetBoardId, current.assignee.id))
   const assigneeCleared = Boolean(current.assignee) && !isMember
   const now = new Date().toISOString()
   db.transaction(() => {
@@ -3879,7 +3977,7 @@ export function listUsers(): UserAccount[] {
     FROM users u
     WHERE u.kind = 'account'
     ORDER BY u.first_name COLLATE NOCASE, u.last_name COLLATE NOCASE, u.email COLLATE NOCASE
-  `).all() as Omit<UserAccount, 'boards'>[]
+  `).all() as Omit<UserAccount, 'boards' | 'avatarUrl' | 'icon'>[]
 
   // One query for every membership rather than one per account, grouped in the order the
   // boards themselves are shown so a row reads the same as the board switcher.
@@ -3897,7 +3995,7 @@ export function listUsers(): UserAccount[] {
     else byUser.set(userId, [membership])
   }
 
-  return accounts.map(account => ({ ...account, boards: byUser.get(account.id) || [] }))
+  return accounts.map(account => ({ ...account, ...avatarOf(account.id), boards: byUser.get(account.id) || [] }))
 }
 
 export function countUsers(): number {
@@ -3998,7 +4096,7 @@ export function listServiceIdentities(): UserRecord[] {
 export function listAgents(): AgentAccount[] {
   const db = getDb()
   const rows = db.prepare(`
-    SELECT u.id, u.first_name AS name, u.description, u.status, u.created_at AS createdAt,
+    SELECT u.id, u.first_name AS name, u.description, u.status, u.created_at AS createdAt, u.icon,
            (SELECT COUNT(*) FROM api_tokens t WHERE t.principal_id = u.id AND t.revoked_at IS NULL
               AND (t.expires_at IS NULL OR t.expires_at > ?)) AS activeTokens,
            (SELECT MAX(t.last_used_at) FROM api_tokens t WHERE t.principal_id = u.id) AS lastUsedAt
@@ -4019,7 +4117,52 @@ export function listAgents(): AgentAccount[] {
     if (list) list.push(membership)
     else byAgent.set(userId, [membership])
   }
-  return rows.map(row => ({ ...row, boards: byAgent.get(row.id) || [] }))
+  return rows.map(row => ({ ...row, icon: isAgentIcon(row.icon) ? row.icon : null, boards: byAgent.get(row.id) || [], access: agentAccess(row.id) }))
+}
+
+/** What an agent's grants beyond single boards add up to. */
+export function agentAccess(agentId: string): AgentAccess {
+  const rows = getDb().prepare(`
+    SELECT g.workspace_id AS workspaceId, w.name AS workspaceName, g.role
+    FROM agent_grants g
+    LEFT JOIN workspaces w ON w.id = g.workspace_id
+    WHERE g.user_id = ?
+    ORDER BY w.position, w.created_at
+  `).all(agentId) as Array<{ workspaceId: string | null; workspaceName: string | null; role: AgentGrantRole }>
+  const everything = rows.find(row => row.workspaceId === null)
+  if (everything) return { mode: 'all', role: everything.role, workspaces: [] }
+  if (rows.length) {
+    return { mode: 'workspaces', role: null, workspaces: rows.map(row => ({ workspaceId: row.workspaceId!, workspaceName: row.workspaceName || '', role: row.role })) }
+  }
+  return { mode: 'boards', role: null, workspaces: [] }
+}
+
+export interface AgentAccessInput {
+  mode: AgentAccessMode
+  role?: AgentGrantRole | null
+  workspaces?: Array<{ workspaceId: string; role: AgentGrantRole }>
+}
+
+/**
+ * Replaces an agent's grants in one go. Its explicit board memberships are left alone: they
+ * keep counting in every mode, which is what lets one board rank higher than the rest.
+ */
+export function setAgentAccess(agentId: string, input: AgentAccessInput): void {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const insert = db.prepare('INSERT INTO agent_grants (id, user_id, workspace_id, role, created_at) VALUES (?, ?, ?, ?, ?)')
+  db.transaction(() => {
+    db.prepare('DELETE FROM agent_grants WHERE user_id = ?').run(agentId)
+    if (input.mode === 'all') insert.run(randomUUID(), agentId, null, input.role || 'viewer', now)
+    if (input.mode === 'workspaces') {
+      const seen = new Set<string>()
+      for (const grant of input.workspaces || []) {
+        if (seen.has(grant.workspaceId)) continue
+        seen.add(grant.workspaceId)
+        insert.run(randomUUID(), agentId, grant.workspaceId, grant.role, now)
+      }
+    }
+  })()
 }
 
 export function findAgent(id: string): AgentAccount | null {
@@ -4027,9 +4170,10 @@ export function findAgent(id: string): AgentAccount | null {
 }
 
 /** Renames an agent or rewrites what it is for. A person's row is never touched here. */
-export function updateServiceIdentity(id: string, input: { name?: string; description?: string }): boolean {
+export function updateServiceIdentity(id: string, input: { name?: string; description?: string; icon?: AgentIcon | null }): boolean {
   const sets: string[] = []
-  const values: string[] = []
+  const values: Array<string | null> = []
+  if (input.icon !== undefined) { sets.push('icon = ?'); values.push(input.icon) }
   if (input.name !== undefined) { sets.push('first_name = ?'); values.push(input.name.trim()) }
   if (input.description !== undefined) { sets.push('description = ?'); values.push(input.description.trim()) }
   if (!sets.length) return Boolean(getDb().prepare("SELECT 1 FROM users WHERE id = ? AND kind = 'service'").get(id))
@@ -4179,6 +4323,8 @@ export function anonymizeUser(id: string): UserRecord | null {
     `).run(new Date().toISOString(), id)
     // Erased means gone from the boards too: nobody should still be able to pick them.
     db.prepare('DELETE FROM board_members WHERE user_id = ?').run(id)
+    // A face is as identifying as a name.
+    db.prepare('DELETE FROM user_avatars WHERE user_id = ?').run(id)
   })()
   invalidateUserDirectory()
   return findUser(id)

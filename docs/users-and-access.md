@@ -56,13 +56,15 @@ The account exists from the moment you create it, so it can already be added to 
 
 Name, email address, and password live under **Your profile** in the account menu. Changing your address moves everything you have filed, written, or been assigned along with you, and the old address becomes free again. If the new address is one Open-Bugster already knew, that history is folded into your account. An address another account holds is refused. Changing your password signs out every other device.
 
+**Portrait.** A photo of yourself replaces your initials wherever you appear: cards, comments, member lists, the header. After picking a file, a circle as large as the photo's shorter side sits on it; you drag it left and right on a landscape photo, or up and down on a portrait one, and **OK** cuts out that square. The rounding is CSS. The server re-encodes the square as a 256 px JPEG, which drops every bit of metadata a phone photo carries, location included, and serves it only to signed-in users under an address that changes with each upload, so browsers may cache it for good. **Remove** brings the initials back. Anonymizing an account deletes its portrait too.
+
 ## Erasure without losing the work
 
 Anonymizing exists because of Article 17 of the [GDPR](https://eur-lex.europa.eu/eli/reg/2016/679/oj), the right to erasure. On a shared board that is normally a painful request to receive: deleting the account takes the person's tickets, comments, and history with it or leaves them orphaned.
 
 The regulation does not ask for that. Personal data is what identifies someone (Article 4(1)), here the name and the email address; the tickets are not. Recital 26 puts data that can no longer be tied back to a person outside the scope entirely, with identifiability judged by "all the means reasonably likely to be used" to get back to the person.
 
-So Open-Bugster separates the two. **Anonymize** clears the email, the name, and the password hash from the account row, drops the person from every board, and invalidates every session. The row itself stays, and everything written by it keeps pointing at it. Because the history stores people by reference rather than by address, an entry that read *Jane Doe moved this to Review* becomes *Deleted user moved this to Review* without a single row being rewritten. And because the app keeps no way back, what remains is anonymous in the sense Recital 26 means, not merely pseudonymous under Article 4(5). That also settles retention under Article 5(1)(e): anonymous data can stay for as long as the board is useful.
+So Open-Bugster separates the two. **Anonymize** clears the email, the name, the password hash and the portrait from the account row, drops the person from every board, and invalidates every session. The row itself stays, and everything written by it keeps pointing at it. Because the history stores people by reference rather than by address, an entry that read *Jane Doe moved this to Review* becomes *Deleted user moved this to Review* without a single row being rewritten. And because the app keeps no way back, what remains is anonymous in the sense Recital 26 means, not merely pseudonymous under Article 4(5). That also settles retention under Article 5(1)(e): anonymous data can stay for as long as the board is useful.
 
 **What it does not cover.** Anonymizing touches accounts, not the text on the board. A name or address typed into a title, description, or comment, or carried in an imported report or an attachment, has to be edited by hand. Open-Bugster is self-hosted, which makes whoever runs the instance the controller under Article 4(7): the legal basis, the retention policy, and answering a request within the month Article 12(3) allows are theirs. This is not legal advice.
 
@@ -72,14 +74,14 @@ So Open-Bugster separates the two. **Anonymize** clears the email, the name, and
 - **Sessions carry a version.** Every request compares the cookie's `sessionVersion` with the account row; a password change, reset, disable, or anonymize bumps it and signs every other session out.
 - **Invites and resets are hashed tokens** with a seven-day expiry, shown once. Using a reset invalidates the old password; an unused one lapses.
 - **The owner is seeded once**, from `APP_ADMIN_EMAIL` and `APP_ADMIN_PASSWORD` or `APP_PASSWORD_HASH`, only when the users table is empty. Passwords are hashed with scrypt.
-- **Agents** (service identities in the code) are users of their own that cannot sign in and act only through tokens: assigned tickets, comments under their own name. Created under **Users → Agents**; see [api.md](api.md#agents-service-identities).
+- **Agents** (service identities in the code) are users of their own that cannot sign in and act only through tokens: assigned tickets, comments under their own name. Created under **Users → Agents**, where **Access** can also open whole workspaces or every board to them (up to editor); see [api.md](api.md#agents-service-identities).
 - **Instance administration is cookie-only.** `user.*` operations require the instance scope, which also demands an `admin`-scoped token and refuses board-pinned ones, and none of them are on the public REST surface.
 
 ## Code map
 
 | File | What lives there |
 |---|---|
-| [server/operations/accounts.ts](../server/operations/accounts.ts) | `user.list`, `user.create`, `user.update`, `user.delete`, `user.anonymize`, `user.invite`, `user.revokeInvite` (instance admin); `profile.update`, `profile.changePassword` (authenticated). |
+| [server/operations/accounts.ts](../server/operations/accounts.ts) | `user.list`, `user.create`, `user.update`, `user.delete`, `user.anonymize`, `user.invite`, `user.revokeInvite` (instance admin); `profile.update`, `profile.changePassword`, `profile.setAvatar`, `profile.removeAvatar` (authenticated). |
 | [server/operations/board-domain.ts](../server/operations/board-domain.ts) | `member.list`, `member.candidates`, `member.set`, `member.remove`. |
 | [server/middleware/auth.ts](../server/middleware/auth.ts) | Cookie and bearer authentication, the public paths, the session version check. |
 | [server/utils/access.ts](../server/utils/access.ts) | The guards and role ranks. See [architecture.md](architecture.md#access-rules). |
@@ -91,12 +93,14 @@ So Open-Bugster separates the two. **Anonymize** clears the email, the name, and
 | `app/composables/useAuth.ts`, `app/middleware/auth.global.ts` | The session on the client and the redirect to `/login`. |
 | `app/pages/login.vue`, `invite/[token].vue` | Sign-in; accepting an invitation or a reset. |
 | `app/pages/admin/users.vue` | The **Users** page: create, invite, reset, disable, anonymize, delete; agents (`AdminAgents.vue`). |
-| `app/pages/profile/index.vue`, `security.vue`, `boards.vue` | Your profile, password, and board memberships. |
+| `app/pages/profile/index.vue`, `security.vue`, `boards.vue` | Your profile and portrait, password, and board memberships. |
+| `app/components/PortraitCropDialog.vue`, `server/utils/avatar-image.ts` | Choosing the circle on a photo, and re-encoding the square on the server. |
+| `app/components/UiAvatar.vue` | Portrait, agent icon or initials, wherever somebody is drawn. |
 | `app/components/BoardMemberSettings.vue`, `UiAvatar.vue` | The board roster; avatars and initials. |
 
 ## Surfaces
 
-- **Internal routes:** `server/api/auth/login.post.ts`, `logout.post.ts`; `server/api/users/index.get.ts`, `index.post.ts`, `[id].patch.ts`, `[id].delete.ts`, `[id]/anonymize.post.ts`, `[id]/invite.post.ts`, `[id]/invite.delete.ts`; `server/api/invite/[token].get.ts`, `[token].post.ts`; `server/api/profile/index.patch.ts`, `password.post.ts`; `server/api/boards/[id]/members/*`.
+- **Internal routes:** `server/api/auth/login.post.ts`, `logout.post.ts`; `server/api/users/index.get.ts`, `index.post.ts`, `[id].patch.ts`, `[id].delete.ts`, `[id]/anonymize.post.ts`, `[id]/invite.post.ts`, `[id]/invite.delete.ts`; `server/api/invite/[token].get.ts`, `[token].post.ts`; `server/api/profile/index.patch.ts`, `password.post.ts`, `avatar.put.ts`, `avatar.delete.ts`; `server/api/avatars/[id].get.ts`; `server/api/boards/[id]/members/*`.
 - **REST v1:** board membership only (`/boards/{boardId}/members`, `/member-candidates`). User administration is deliberately absent, and a test keeps it that way.
 - **MCP:** `whoami` reports the principal behind the token. No user tools.
 - **Webhooks:** none.
@@ -104,6 +108,7 @@ So Open-Bugster separates the two. **Anonymize** clears the email, the name, and
 ## Tests
 
 - `tests/accounts.test.ts`: accounts, invitations, resets, disable, anonymize, delete, board membership.
+- `tests/avatars.test.ts`: portrait upload and re-encoding, cache-busting addresses, removal and anonymizing, agent icons.
 - `tests/person-identity.test.ts`: the email-to-id migration against a legacy snapshot.
 - `tests/owner-seed.test.ts`: first-start seeding from the environment.
 - `tests/password.test.ts`: scrypt hashing.

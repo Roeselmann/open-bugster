@@ -1,3 +1,4 @@
+import type { AgentIcon } from '../utils/agent-icons'
 export const ticketPriorities = ['low', 'medium', 'high', 'urgent'] as const
 export const ticketSources = ['manual', 'testflight_screenshot', 'testflight_crash', 'jira_issue'] as const
 /** The systems a board can import tickets from. Each has its own settings tab and sync. */
@@ -90,6 +91,10 @@ export interface Person {
   /** null for contacts, which have no account lifecycle. */
   status: UserStatus | null
   anonymizedAt: string | null
+  /** A square portrait the person uploaded, drawn as a circle. Versioned, so it can be cached for good. */
+  avatarUrl: string | null
+  /** An agent's chosen face; null for people and for an agent that has none. */
+  icon: AgentIcon | null
 }
 
 export interface UserAccount {
@@ -107,6 +112,10 @@ export interface UserAccount {
   inviteExpiresAt: string | null
   /** Every board the account is an explicit member of, with the role it holds there. */
   boards: UserBoardMembership[]
+  /** A square portrait the person uploaded, drawn as a circle. Versioned, so it can be cached for good. */
+  avatarUrl: string | null
+  /** An agent's chosen face; null for people and for an agent that has none. */
+  icon: AgentIcon | null
 }
 
 /** One board an account belongs to, as listed on the account itself. */
@@ -121,6 +130,25 @@ export interface UserBoardMembership {
  * It has no address and no password and acts only through tokens minted for it, so tickets
  * it is assigned and comments it writes are its own rather than a person's.
  */
+/** The highest role a grant beyond single boards may carry. Admin stays a per-board decision. */
+export const agentGrantRoles = ['viewer', 'editor'] as const
+export type AgentGrantRole = typeof agentGrantRoles[number]
+export const agentAccessModes = ['boards', 'workspaces', 'all'] as const
+export type AgentAccessMode = typeof agentAccessModes[number]
+
+/**
+ * How far an agent reaches beyond the boards it was added to by hand. Those memberships
+ * count in every mode; where both apply to a board, the higher role wins.
+ */
+export interface AgentAccess {
+  /** `boards`: only explicit memberships. `workspaces`: every board of the listed workspaces. `all`: every board. */
+  mode: AgentAccessMode
+  /** The role on every board, for `all`; null otherwise. */
+  role: AgentGrantRole | null
+  /** For `workspaces`, one role per workspace; empty otherwise. */
+  workspaces: Array<{ workspaceId: string; workspaceName: string; role: AgentGrantRole }>
+}
+
 export interface AgentAccount {
   id: string
   name: string
@@ -131,7 +159,10 @@ export interface AgentAccount {
   /** Tokens that still work: neither revoked nor expired. */
   activeTokens: number
   lastUsedAt: string | null
+  /** The boards it was added to by hand. */
   boards: UserBoardMembership[]
+  access: AgentAccess
+  icon: AgentIcon | null
 }
 
 export interface BoardMember {
@@ -150,8 +181,20 @@ export interface BoardMember {
   mayAutomate: boolean
   /** An agent rather than a person. It always acts through a token, so `mayAutomate` is true. */
   isService: boolean
+  /**
+   * Where the membership comes from: added to this board (`board`), or an agent's grant on
+   * the whole workspace (`workspace`) or instance (`instance`). Only `board` can be changed here.
+   */
+  via: BoardMemberSource
   addedAt: string
+  /** A square portrait the person uploaded, drawn as a circle. Versioned, so it can be cached for good. */
+  avatarUrl: string | null
+  /** An agent's chosen face; null for people and for an agent that has none. */
+  icon: AgentIcon | null
 }
+
+export const boardMemberSources = ['board', 'workspace', 'instance'] as const
+export type BoardMemberSource = typeof boardMemberSources[number]
 
 export interface TicketComment {
   id: string
@@ -256,6 +299,8 @@ export interface WorkspaceMember {
   status: UserStatus
   role: WorkspaceRole
   addedAt: string
+  avatarUrl: string | null
+  icon: AgentIcon | null
 }
 
 export interface WorkspaceSummary extends Workspace {

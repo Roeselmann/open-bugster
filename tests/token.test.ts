@@ -76,6 +76,64 @@ describe('service identities and API tokens', () => {
     db.setBoardMember(otherBoardId, people.editor!, 'editor', true)
   })
 
+  describe('agent access beyond single boards', () => {
+    it('reaches every board of a granted workspace, new ones included, and nothing else', async () => {
+      const workspace = db.createWorkspace('Agency')
+      const first = db.createBoard('Client A', null, workspace.id)
+      const { service } = await ops.run(ops.serviceCreate, actorOf('owner'), { name: 'Scout' }) as { service: { id: string } }
+      await ops.run(ops.serviceSetAccess, actorOf('owner'), { serviceId: service.id, mode: 'workspaces', workspaces: [{ workspaceId: workspace.id, role: 'editor' }] })
+
+      const minted = await ops.run(ops.tokenCreate, actorOf('owner'), { name: 'scout', principalId: service.id, scopes: ['write'] }) as { secret: string }
+      const scout = token.resolveToken(minted.secret, 'mcp')!
+      const later = db.createBoard('Client B', null, workspace.id)
+
+      const { boards } = await ops.run(ops.boardList, scout, {}) as { boards: Array<{ id: string; role: string }> }
+      expect(boards.map(board => board.id).sort()).toEqual([first.id, later.id].sort())
+      expect(boards.every(board => board.role === 'editor')).toBe(true)
+      expect(db.boardMembers(later.id).find(member => member.userId === service.id)).toMatchObject({ via: 'workspace', role: 'editor', isService: true, mayAutomate: true })
+
+      // It works there as itself, and may be given tickets like any member.
+      const lane = db.listBoards().find(board => board.id === later.id)!.lanes[0]!.id
+      const { ticket } = await ops.run(ops.ticketCreate, scout, { boardId: later.id, laneId: lane, title: 'Found by Scout', assigneeId: service.id }) as { ticket: { assignee: { id: string } | null } }
+      expect(ticket.assignee?.id).toBe(service.id)
+
+      // Outside the workspace, nothing.
+      expect(await statusOf(ops.run(ops.ticketList, scout, { boardId }))).toBe(404)
+      // And a grant is not a membership a board admin can remove.
+      expect(await statusOf(ops.run(ops.memberRemove, actorOf('owner'), { boardId: later.id, userId: service.id }))).toBe(404)
+    })
+
+    it('lets the higher role win where a board membership and a grant meet', async () => {
+      const { service } = await ops.run(ops.serviceCreate, actorOf('owner'), { name: 'Ranker' }) as { service: { id: string } }
+      await ops.run(ops.serviceSetAccess, actorOf('owner'), { serviceId: service.id, mode: 'all', role: 'viewer' })
+      expect(db.boardRoleFor(otherBoardId, service.id)).toBe('viewer')
+      expect(db.boardMembers(otherBoardId).find(member => member.userId === service.id)?.via).toBe('instance')
+
+      db.setBoardMember(otherBoardId, service.id, 'editor')
+      expect(db.boardRoleFor(otherBoardId, service.id)).toBe('editor')
+      expect(db.boardMembers(otherBoardId).filter(member => member.userId === service.id)).toEqual([expect.objectContaining({ via: 'board', role: 'editor' })])
+      // Every other board stays at the grant's role.
+      expect(db.boardRoleFor(boardId, service.id)).toBe('viewer')
+
+      // Back to single boards: the grant goes, the hand-made membership stays.
+      const { service: reset } = await ops.run(ops.serviceSetAccess, actorOf('owner'), { serviceId: service.id, mode: 'boards' }) as { service: { access: { mode: string } } }
+      expect(reset.access.mode).toBe('boards')
+      expect(db.boardRoleFor(boardId, service.id)).toBeNull()
+      expect(db.boardRoleFor(otherBoardId, service.id)).toBe('editor')
+    })
+
+    it('refuses grants that make no sense, for people too', async () => {
+      const { service } = await ops.run(ops.serviceCreate, actorOf('owner'), { name: 'Strict' }) as { service: { id: string } }
+      const set = (input: Record<string, unknown>) => statusOf(ops.run(ops.serviceSetAccess, actorOf('owner'), { serviceId: service.id, ...input }))
+      expect(await set({ mode: 'all' })).toBe(422)
+      expect(await set({ mode: 'all', role: 'admin' })).toBe(422)
+      expect(await set({ mode: 'workspaces', workspaces: [] })).toBe(422)
+      expect(await set({ mode: 'workspaces', workspaces: [{ workspaceId: 'nope', role: 'viewer' }] })).toBe(422)
+      expect(await statusOf(ops.run(ops.serviceSetAccess, actorOf('owner'), { serviceId: people.editor!, mode: 'all', role: 'viewer' }))).toBe(404)
+      expect(await statusOf(ops.run(ops.serviceSetAccess, actorOf('editor'), { serviceId: service.id, mode: 'all', role: 'viewer' }))).toBe(403)
+    })
+  })
+
   describe('agents with an identity of their own', () => {
     it('creates, renames, lists and deletes an agent with its tokens', async () => {
       const { service } = await ops.run(ops.serviceCreate, actorOf('owner'), { name: 'Hermes', description: 'Triages bug reports' }) as { service: { id: string; name: string; description: string; activeTokens: number; boards: unknown[] } }

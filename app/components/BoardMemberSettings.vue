@@ -152,7 +152,9 @@ async function removeMember(member: BoardMember) {
             <span v-if="member.isService" class="tone tone-neutral rounded px-1.5 py-px text-[10px] font-bold uppercase tracking-wide">Agent</span>
           </p>
           <p class="muted truncate text-xs">
-            <template v-if="member.isService">Works only through its own tokens{{ member.status === 'disabled' ? ' · disabled' : '' }}</template>
+            <template v-if="member.isService">
+              {{ member.via === 'workspace' ? 'Through its access to this workspace' : member.via === 'instance' ? 'Through its access to every board' : 'Works only through its own tokens' }}{{ member.status === 'disabled' ? ' · disabled' : '' }}
+            </template>
             <template v-else>{{ member.email }}<span v-if="member.status === 'invited'"> · invitation pending</span></template>
           </p>
         </div>
@@ -189,8 +191,19 @@ async function removeMember(member: BoardMember) {
             @update:model-value="value => changeRole(member, value as BoardRole)"
           />
         </div>
+        <!--
+          A membership that comes from an agent's broader access is not this board's to take
+          away; the agent's Access settings under Users are. Picking a role here still adds an
+          explicit membership, which is how one board ranks higher than the rest.
+        -->
+        <span
+          v-if="canManage && member.via !== 'board'"
+          class="size-8"
+          :title="`Granted under Users → Agents → ${displayName(member)} → Access`"
+          aria-hidden="true"
+        />
         <button
-          v-if="canManage"
+          v-else-if="canManage"
           class="focus-ring grid size-8 place-items-center rounded-lg text-rose-600 transition hover:bg-rose-500/10 disabled:opacity-40"
           :disabled="busyId === member.userId"
           :aria-label="`Remove ${displayName(member)} from this board`"

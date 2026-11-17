@@ -1,7 +1,9 @@
 import { createError } from 'h3'
 import { z } from 'zod'
 import { isInstanceAdmin } from '../utils/access'
-import { createServiceIdentity, deleteUser, findAgent, findPrincipal, listAgents, setPrincipalStatus, updateServiceIdentity } from '../utils/db'
+import { agentAccessModes, agentGrantRoles } from '../../shared/types/domain'
+import { agentIcons } from '../../shared/utils/agent-icons'
+import { createServiceIdentity, deleteUser, findAgent, findPrincipal, findWorkspace, listAgents, setAgentAccess, setPrincipalStatus, updateServiceIdentity } from '../utils/db'
 import { createApiToken, findApiToken, listApiTokens, revokeApiToken, tokenScopes } from '../utils/token'
 import { createdId, defineOperation } from './types'
 
@@ -36,11 +38,12 @@ export const serviceList = defineOperation({
 export const serviceCreate = defineOperation({
   name: 'service.create',
   summary: 'Open an agent: a principal of its own that acts through tokens',
-  input: z.object({ name: agentName, description: agentDescription.default('') }),
+  input: z.object({ name: agentName, description: agentDescription.default(''), icon: z.enum(agentIcons).nullable().default(null) }),
   requires: { scope: 'instance' },
-  audit: { targetType: 'user', targetId: createdId('service'), changes: ['name', 'description'] },
+  audit: { targetType: 'user', targetId: createdId('service'), changes: ['name', 'description', 'icon'] },
   run: (_ctx, input) => {
     const created = createServiceIdentity(input.name, input.description)
+    if (input.icon) updateServiceIdentity(created.id, { icon: input.icon })
     return { service: requireAgent(created.id) }
   }
 })
@@ -48,12 +51,12 @@ export const serviceCreate = defineOperation({
 export const serviceUpdate = defineOperation({
   name: 'service.update',
   summary: 'Rename an agent or change what it is for',
-  input: z.object({ serviceId: id, name: agentName.optional(), description: agentDescription.optional() }),
+  input: z.object({ serviceId: id, name: agentName.optional(), description: agentDescription.optional(), icon: z.enum(agentIcons).nullable().optional() }),
   requires: { scope: 'instance' },
-  audit: { targetType: 'user', targetId: input => input.serviceId, changes: ['name', 'description'] },
+  audit: { targetType: 'user', targetId: input => input.serviceId, changes: ['name', 'description', 'icon'] },
   run: (_ctx, input) => {
     requireAgent(input.serviceId)
-    updateServiceIdentity(input.serviceId, { name: input.name, description: input.description })
+    updateServiceIdentity(input.serviceId, { name: input.name, description: input.description, icon: input.icon })
     return { service: requireAgent(input.serviceId) }
   }
 })
@@ -69,6 +72,33 @@ export const serviceSetStatus = defineOperation({
     // Disabling the principal is what stops every one of its tokens at once, so this is
     // deliberately the blunt instrument: no token has to be found and revoked individually.
     setPrincipalStatus(input.serviceId, input.status)
+    return { service: requireAgent(input.serviceId) }
+  }
+})
+
+export const serviceSetAccess = defineOperation({
+  name: 'service.setAccess',
+  summary: 'Decide how far an agent reaches: its own boards, whole workspaces, or every board',
+  input: z.object({
+    serviceId: id,
+    mode: z.enum(agentAccessModes),
+    role: z.enum(agentGrantRoles).nullish(),
+    workspaces: z.array(z.object({ workspaceId: id, role: z.enum(agentGrantRoles) })).max(200).default([])
+  }),
+  requires: { scope: 'instance' },
+  audit: { targetType: 'user', targetId: input => input.serviceId, changes: ['mode', 'role', 'workspaces'] },
+  run: (_ctx, input) => {
+    requireAgent(input.serviceId)
+    if (input.mode === 'all' && !input.role) {
+      throw createError({ statusCode: 422, statusMessage: 'Pick the role the agent holds on every board.' })
+    }
+    if (input.mode === 'workspaces') {
+      if (!input.workspaces.length) throw createError({ statusCode: 422, statusMessage: 'Pick at least one workspace.' })
+      for (const grant of input.workspaces) {
+        if (!findWorkspace(grant.workspaceId)) throw createError({ statusCode: 422, statusMessage: 'That workspace does not exist.' })
+      }
+    }
+    setAgentAccess(input.serviceId, { mode: input.mode, role: input.role, workspaces: input.workspaces })
     return { service: requireAgent(input.serviceId) }
   }
 })

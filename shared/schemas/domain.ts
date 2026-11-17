@@ -1,6 +1,7 @@
 import { z } from 'zod'
+import { agentIcons } from '../utils/agent-icons'
 import {
-  activityChannels, activityKinds, boardRoles, categoryColors, integrationProviders, ticketPriorities, ticketSources,
+  activityChannels, activityKinds, boardMemberSources, boardRoles, categoryColors, integrationProviders, ticketPriorities, ticketSources,
   ticketTypeColors, ticketTypeIconNames, userRoles, userStatuses, workspaceRoles
 } from '../types/domain'
 import type {
@@ -19,6 +20,14 @@ import type {
  * two a compile error rather than a surprise in somebody's generated client.
  */
 
+/** How somebody is drawn: an uploaded portrait, or for an agent one of a fixed set of icons. */
+function avatarFields() {
+  return {
+    avatarUrl: z.string().nullable().describe('A square portrait, versioned and fetched with the session; null when there is none.'),
+    icon: z.enum(agentIcons).nullable().describe('An agent\'s chosen icon; null for people.')
+  }
+}
+
 export const personSchema = z.object({
   id: z.string(),
   email: z.string().nullable().describe('null once the person has been anonymized.'),
@@ -27,7 +36,8 @@ export const personSchema = z.object({
   isAccount: z.boolean().describe('Whether this person can sign in.'),
   isService: z.boolean().describe('A machine principal, which holds roles but never signs in.'),
   status: z.enum(userStatuses).nullable(),
-  anonymizedAt: z.string().nullable()
+  anonymizedAt: z.string().nullable(),
+  ...avatarFields()
 }).describe('Somebody a ticket, comment or history entry names.')
 
 export const labelSchema = z.object({ id: z.string(), name: z.string() })
@@ -218,7 +228,9 @@ export const boardMemberSchema = z.object({
   role: z.enum(boardRoles),
   mayAutomate: z.boolean(),
   isService: z.boolean().describe('An agent with an identity of its own rather than a person.'),
-  addedAt: z.string()
+  via: z.enum(boardMemberSources).describe('board: added to this board. workspace or instance: an agent reaching it through a broader grant.'),
+  addedAt: z.string(),
+  ...avatarFields()
 })
 
 export const boardCredentialsSchema = z.object({
@@ -254,7 +266,8 @@ export const workspaceMemberSchema = z.object({
   lastName: z.string(),
   status: z.enum(userStatuses),
   role: z.enum(workspaceRoles),
-  addedAt: z.string()
+  addedAt: z.string(),
+  ...avatarFields()
 })
 
 export const workspaceSummarySchema = workspaceSchema.extend({
@@ -310,7 +323,8 @@ export const userAccountSchema = z.object({
   lastLoginAt: z.string().nullable(),
   anonymizedAt: z.string().nullable(),
   inviteExpiresAt: z.string().nullable(),
-  boards: z.array(z.object({ boardId: z.string(), boardName: z.string(), role: z.enum(boardRoles) }))
+  boards: z.array(z.object({ boardId: z.string(), boardName: z.string(), role: z.enum(boardRoles) })),
+  ...avatarFields()
 })
 
 /**

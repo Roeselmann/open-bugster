@@ -28,9 +28,11 @@ A token from your profile acts *as you*: what the agent does is recorded against
 
 - **No address, no password.** An agent has a name and an optional description of what it is for. It cannot sign in and acts only through the tokens an instance administrator makes for it on its row. The same panel shows the MCP connection details.
 - **Boards like anybody else.** It is added under **Board settings → Users** with a role and reaches only those boards. Its tokens are its only way in, so its **Integration** box is always ticked and cannot be cleared.
-- **Recognisable.** A square avatar and an *Agent* badge in the member list, comments and the history, and "· agent" in the assignee choices.
+- **Or whole workspaces.** Under **Access** on its row, an agent reaches beyond single boards: *only the boards it is added to* (the default), *selected workspaces* with a role each, or *all workspaces* with one role. A grant covers boards created later too. The highest role a grant can carry is editor; administrator stays a per-board decision. Boards it was added to by hand count in every mode, and the higher role wins, so one board can rank above the rest of its workspace. In a board's member list such an agent reads "through its access to this workspace" and cannot be removed there. People get no such grant: for them, membership stays per board.
+- **How it is resolved.** The `board_access` view merges `board_members` with `agent_grants` into one row per board and person, the higher role winning. Every read of "who is on this board" goes through it: the board list, search, assignees, due dates, MCP. Writes still go to `board_members`.
+- **Recognisable.** A square avatar and an *Agent* badge in the member list, comments and the history, and "· agent" in the assignee choices. An administrator picks one of ten icons for it (classic bot, chatterbox, big brain, ghost, rocket, satellite, busy squirrel, bug hunter, wizard, runs on coffee), stored as a key in `users.icon` and drawn in place of its initials; the list lives in `shared/utils/agent-icons.ts`.
 - **Lifecycle.** Rename it or change its description at any time. Disabling it stops every one of its tokens at once. Deleting it removes the tokens too; its tickets and comments stay but lose the name behind them.
-- **Operations:** `service.list`, `service.create`, `service.update`, `service.setStatus`, `service.delete`, all for instance administrators. Over MCP, `whoami` answers `kind: "agent"` with the description, so the agent knows that the tickets assigned to its `principalId` are its own work.
+- **Operations:** `service.list`, `service.create`, `service.update`, `service.setAccess`, `service.setStatus`, `service.delete`, all for instance administrators. Over MCP, `whoami` answers `kind: "agent"` with the description, so the agent knows that the tickets assigned to its `principalId` are its own work.
 
 ### REST v1
 
@@ -62,7 +64,7 @@ Lists are paged with a cursor, errors are `application/problem+json` with a stab
 | File | What lives there |
 |---|---|
 | [server/utils/token.ts](../server/utils/token.ts) | `tokenScopes`, `ceilingFor`, `TOKEN_PREFIX`, `hashToken`, `createApiToken`, `resolveToken`, `tokenExpired`, `revokeApiToken`. |
-| [server/operations/credentials.ts](../server/operations/credentials.ts) | `service.list`, `service.create`, `service.update`, `service.setStatus`, `service.delete` (instance admin); `token.list`, `token.create`, `token.revoke` (authenticated, own tokens). |
+| [server/operations/credentials.ts](../server/operations/credentials.ts) | `service.list`, `service.create`, `service.update`, `service.setAccess`, `service.setStatus`, `service.delete` (instance admin); `token.list`, `token.create`, `token.revoke` (authenticated, own tokens). |
 | [server/utils/access.ts](../server/utils/access.ts) | `effectiveRole`, `requireAutomationAllowed`, `requireInstanceAdmin`. |
 | [server/middleware/auth.ts](../server/middleware/auth.ts) | `acceptsBearer`, the bearer path, the `auth.token` denial audit. |
 | [server/api/v1/routes.ts](../server/api/v1/routes.ts) | `v1Routes`, `compiledRoutes`, `matchRoute`. |
@@ -77,20 +79,20 @@ Lists are paged with a cursor, errors are `application/problem+json` with a stab
 | [server/utils/db.ts](../server/utils/db.ts) | `ensureActorContext`, `ensureAuditLog`, `ensureServiceIdentities`, `ensureApiTokens`, `ensureIdempotencyKeys`, `ensureBoardMemberAutomation`; `findIdempotent`, `saveIdempotent`, `pruneIdempotent`, `boardAutomationAllowed`. |
 | [shared/utils/errors.ts](../shared/utils/errors.ts) | Error shapes shared with the client. |
 | `app/components/ApiTokenManager.vue`, `app/pages/profile/integrations.vue` | Minting and revoking tokens; the **What an agent can do** panel. |
-| `app/pages/admin/users.vue`, `app/components/AdminAgents.vue` | Agents (service identities), with their tokens and MCP connection. |
+| `app/pages/admin/users.vue`, `app/components/AdminAgents.vue`, `app/components/AgentAccessEditor.vue` | Agents (service identities), with their tokens and MCP connection. |
 | `app/components/BoardMemberSettings.vue` | The Integration checkbox per member. |
 | `app/pages/b/[board]/settings/audit.vue` | The audit view. |
 
 ## Surfaces
 
-- **Internal routes:** `server/api/tokens/index.get.ts`, `index.post.ts`, `[id].delete.ts`; `server/api/services/index.get.ts`, `index.post.ts`, `[id].patch.ts`, `[id].delete.ts`; `server/api/boards/[id]/audit.get.ts`; `server/api/mcp-info.get.ts`.
+- **Internal routes:** `server/api/tokens/index.get.ts`, `index.post.ts`, `[id].delete.ts`; `server/api/services/index.get.ts`, `index.post.ts`, `[id].patch.ts`, `[id].delete.ts`, `[id]/access.put.ts`; `server/api/boards/[id]/audit.get.ts`; `server/api/mcp-info.get.ts`.
 - **REST v1:** the full table in `routes.ts`, grouped as workspaces, boards, lanes, members, tickets, attachments, comments, categories and labels, and the imports (`GET`/`POST /boards/{boardId}/import`, TestFlight or Jira by `provider`). Deliberately absent: user administration, tokens, service identities, App Store Connect and Jira credentials, webhooks, and the audit log.
 - **MCP:** `whoami` shows the principal, agent label, and scopes behind a token, and whether that principal is a person (`kind: "person"`) or an agent of its own (`kind: "agent"`).
 - **Webhooks:** none of the operations here emit events.
 
 ## Tests
 
-- `tests/token.test.ts`: agents and service identities (lifecycle, board membership, own tickets and comments), token creation and resolution, the scope ceiling, expiry, revocation.
+- `tests/token.test.ts`: agents and service identities (lifecycle, board membership, workspace and instance grants, own tickets and comments), token creation and resolution, the scope ceiling, expiry, revocation.
 - `tests/api-v1.test.ts`: the route table invariants, the OpenAPI document, problem documents, rate limiting, cursor paging, idempotency.
 - `tests/audit.test.ts`: entries, actor context, denial logging, retention.
 - `tests/operations.test.ts`: audit by construction, and that secrets never reach the log.

@@ -2,8 +2,9 @@ import { createError } from 'h3'
 import { z } from 'zod'
 import {
   AnonymizedAccountError, EmailTakenError, anonymizeUser, clearInviteToken, createUser, deleteUser,
-  findUser, listUsers, setInviteToken, setUserPassword, updateUser, type UserRecord
+  avatarOf, findUser, listUsers, removeUserAvatar, setInviteToken, setUserAvatar, setUserPassword, updateUser, type UserRecord
 } from '../utils/db'
+import { AVATAR_UPLOAD_LIMIT, normaliseAvatar } from '../utils/avatar-image'
 import { createInviteToken, invitePurpose } from '../utils/invite'
 import { hashStoredPassword, verifyStoredPassword } from '../utils/password'
 import { passwordChangeSchema, profileUpdateSchema, userCreateSchema, userUpdateSchema } from '../utils/validation'
@@ -178,6 +179,32 @@ export const profileUpdate = defineOperation({
   requires: { scope: 'authenticated' },
   audit: { targetType: 'user', changes: input => ({ fields: Object.keys(input).sort() }) },
   run: (ctx, input) => ({ user: publicUser(asConflict(() => updateUser(ctx.account.id, input)!)) })
+})
+
+export const profileSetAvatar = defineOperation({
+  name: 'profile.setAvatar',
+  summary: 'Upload your own portrait, already cropped to a square',
+  input: z.object({ image: z.string().max(AVATAR_UPLOAD_LIMIT, 'The picture is too large.') }),
+  requires: { scope: 'authenticated' },
+  audit: { targetType: 'user' },
+  run: async (ctx, input) => {
+    const image = await normaliseAvatar(input.image)
+    if (!image) throw createError({ statusCode: 422, statusMessage: 'This file could not be read as a PNG, JPEG or WebP picture.' })
+    setUserAvatar(ctx.account.id, 'image/jpeg', image)
+    return avatarOf(ctx.account.id)
+  }
+})
+
+export const profileRemoveAvatar = defineOperation({
+  name: 'profile.removeAvatar',
+  summary: 'Remove your own portrait and go back to initials',
+  input: z.object({}),
+  requires: { scope: 'authenticated' },
+  audit: { targetType: 'user' },
+  run: (ctx) => {
+    removeUserAvatar(ctx.account.id)
+    return avatarOf(ctx.account.id)
+  }
 })
 
 /**
