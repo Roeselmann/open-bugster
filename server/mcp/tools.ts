@@ -369,9 +369,9 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       todos: z.array(z.object({
         text: z.string().min(1).max(500),
         completed: z.boolean().default(false),
-        subticketId: z.string().optional().describe('Send back the subticketId get_ticket showed to keep that subticket in the list. Its text and completion follow the subticket itself.')
+        subticketId: z.string().optional().describe('Send back the subticketId get_ticket showed to keep that subticket in the list. The id of another open ticket of the workspace (from search_tickets) links it as a new subticket. Its text and completion follow the subticket itself.')
       })).max(100).optional()
-        .describe('Replaces the whole to-do list — read the ticket first and send every item back, changed and unchanged alike, subtickets with their subticketId. A subticket left out is unlinked; the ticket itself stays. New subtickets are filed with create_subticket. Omit the field to leave the list alone.')
+        .describe('Replaces the whole to-do list — read the ticket first and send every item back, changed and unchanged alike, subtickets with their subticketId. A subticket left out is unlinked; the ticket itself stays. To file a brand-new subticket use create_ticket with parentTicketId. Omit the field to leave the list alone.')
     }
   }, async (input) => {
     const { ticket } = await call<{ ticket: Ticket }>(ops.ticketUpdate, input)

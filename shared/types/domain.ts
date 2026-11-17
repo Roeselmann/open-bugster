@@ -317,8 +317,8 @@ export interface TicketTodoInput {
   completed: boolean
   /**
    * Set when the to-do is a subticket: a ticket of its own, on this board or another of the
-   * workspace. Only a subticket the list already holds can be sent back; new ones are made
-   * with `POST /tickets/{id}/subtickets`. Its text and completion are read from that ticket.
+   * workspace. Naming a ticket the list does not hold yet links it; a new one is filed with
+   * `POST /tickets/{id}/subtickets`. Its text and completion are read from that ticket.
    */
   subticketId?: string | null
 }

@@ -3206,19 +3206,20 @@ export function subticketIdsOf(ticketId: string): Set<string> {
 }
 
 /**
- * Replaces a ticket's to-do list. A subticket in the list keeps its place only if the ticket
- * already held it — new ones come from `createSubticket`, which the caller has checked; any
- * other id is dropped here. Its text and flag are a snapshot for whoever reads the row bare.
+ * Replaces a ticket's to-do list. A to-do naming another ticket makes that ticket a subticket
+ * of this one — the caller has checked that it may (`ticket.update` and `ticket.create` do);
+ * the ticket itself, a ticket that does not exist and a repeat are dropped here. Its text and
+ * flag are a snapshot for whoever reads the row bare; the list always reads them live.
  */
 function setTicketTodos(ticketId: string, todos: TicketTodoInput[]) {
   const db = getDb()
-  const held = subticketIdsOf(ticketId)
-  const subtickets = new Map((db.prepare(`
-    SELECT t.id, t.title, l.is_done FROM ticket_todos td JOIN tickets t ON t.id = td.subticket_id JOIN lanes l ON l.id = t.lane_id
-    WHERE td.ticket_id = ?
-  `).all(ticketId) as Array<{ id: string; title: string; is_done: number }>).map(row => [row.id, row]))
+  const wanted = [...new Set(todos.map(todo => todo.subticketId).filter((id): id is string => Boolean(id) && id !== ticketId))]
+  const subtickets = new Map(wanted.length
+    ? (db.prepare(`SELECT t.id, t.title, l.is_done FROM tickets t JOIN lanes l ON l.id = t.lane_id WHERE t.id IN (${wanted.map(() => '?').join(', ')})`)
+        .all(...wanted) as Array<{ id: string; title: string; is_done: number }>).map(row => [row.id, row])
+    : [])
   const seen = new Set<string>()
-  const kept = todos.filter(todo => !todo.subticketId || (held.has(todo.subticketId) && !seen.has(todo.subticketId) && seen.add(todo.subticketId)))
+  const kept = todos.filter(todo => !todo.subticketId || (subtickets.has(todo.subticketId) && !seen.has(todo.subticketId) && seen.add(todo.subticketId)))
   db.prepare('DELETE FROM ticket_todos WHERE ticket_id = ?').run(ticketId)
   const insert = db.prepare('INSERT INTO ticket_todos (id, ticket_id, text, completed, position, subticket_id) VALUES (?, ?, ?, ?, ?, ?)')
   kept.forEach((todo, position) => {
@@ -3226,6 +3227,36 @@ function setTicketTodos(ticketId: string, todos: TicketTodoInput[]) {
     if (sub) insert.run(randomUUID(), ticketId, sub.title, sub.is_done, position, sub.id)
     else insert.run(randomUUID(), ticketId, todo.text.trim(), todo.completed ? 1 : 0, position, null)
   })
+}
+
+/**
+ * Open tickets on the given boards that could become a subticket: matched by title, or by
+ * number when the query is one ("42", "#42"), the exact number first and the most recently
+ * changed after. Without a query, the most recently changed. `exclude` keeps out the parent
+ * and what its list already holds.
+ */
+export function searchSubticketCandidates(boardIds: string[], query: string, exclude: Iterable<string>, limit = 20): SubticketRef[] {
+  if (!boardIds.length) return []
+  const excluded = [...exclude]
+  const text = query.trim()
+  const number = /^#?\d+$/.test(text) ? Number(text.replace('#', '')) : null
+  const pattern = `%${text.replace(/[\\%_]/g, match => `\\${match}`)}%`
+  const rows = getDb().prepare(`
+    SELECT t.id, t.ticket_number, t.title, t.board_id, t.lane_id, b.name AS board_name, l.name AS lane_name, l.is_done
+    FROM tickets t JOIN boards b ON b.id = t.board_id JOIN lanes l ON l.id = t.lane_id
+    WHERE t.archived_at IS NULL
+      AND t.board_id IN (${boardIds.map(() => '?').join(', ')})
+      ${excluded.length ? `AND t.id NOT IN (${excluded.map(() => '?').join(', ')})` : ''}
+      AND (? = '' OR t.title LIKE ? ESCAPE '\\' OR t.ticket_number = ?)
+    ORDER BY (t.ticket_number = ?) DESC, t.updated_at DESC
+    LIMIT ?
+  `).all(...boardIds, ...excluded, text, pattern, number ?? -1, number ?? -1, limit) as Array<{
+    id: string; ticket_number: number; title: string; board_id: string; lane_id: string; board_name: string; lane_name: string; is_done: number
+  }>
+  return rows.map(row => ({
+    id: row.id, ticketNumber: row.ticket_number, title: row.title, boardId: row.board_id, boardName: row.board_name,
+    laneId: row.lane_id, laneName: row.lane_name, done: Boolean(row.is_done), archived: false
+  }))
 }
 
 export interface SubticketInput {
@@ -3246,7 +3277,9 @@ export function createSubticket(parentId: string, input: SubticketInput, author:
   if (!lane || lane.boardId !== input.boardId) return null
   let childId = ''
   db.transaction(() => {
-    const child = createTicket(input.boardId, { title: input.title, description: input.description || '', laneId: lane.id }, author, actor)
+    // Typed like a ticket filed from the board's own editor: the workspace's "Ticket", where it has one.
+    const typeId = (db.prepare(`SELECT (${DEFAULT_IMPORT_TYPE_SQL}) AS id FROM boards WHERE id = ?`).get(input.boardId) as { id: string | null } | undefined)?.id ?? null
+    const child = createTicket(input.boardId, { title: input.title, description: input.description || '', laneId: lane.id, typeId }, author, actor)
     if (!child) throw new Error('The subticket could not be created.')
     childId = child.id
     const position = (db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS value FROM ticket_todos WHERE ticket_id = ?').get(parentId) as { value: number }).value
@@ -3256,6 +3289,17 @@ export function createSubticket(parentId: string, input: SubticketInput, author:
     recordActivity(parentId, actor, 'subticket', { number: String(child.ticketNumber), title: child.title, board: findBoard(input.boardId)?.name ?? null })
   })()
   return { ticket: findTicket(parentId)!, subticket: findTicket(childId)! }
+}
+
+/** Notes every subticket the list holds now and did not before, the way `createSubticket` does. */
+function recordLinkedSubtickets(ticketId: string, before: Set<string>, actor: Actor | null) {
+  const rows = getDb().prepare(`
+    SELECT t.id, t.ticket_number, t.title, b.name AS board FROM ticket_todos td JOIN tickets t ON t.id = td.subticket_id JOIN boards b ON b.id = t.board_id
+    WHERE td.ticket_id = ? ORDER BY td.position
+  `).all(ticketId) as Array<{ id: string; ticket_number: number; title: string; board: string }>
+  for (const row of rows) {
+    if (!before.has(row.id)) recordActivity(ticketId, actor, 'subticket', { number: String(row.ticket_number), title: row.title, board: row.board })
+  }
 }
 
 /** The tickets whose to-do lists hold this one as a subticket. */
@@ -3400,6 +3444,7 @@ export function createTicket(boardId: string, input: TicketInput, author: Person
     }
     setTicketLabels(id, boardId, input.labels || [])
     setTicketTodos(id, input.todos || [])
+    recordLinkedSubtickets(id, new Set(), actor)
     setTicketLinks(id, input.links ?? linksWithFirst([], input.link ?? null))
     recordActivity(id, actor, 'created', { lane: lane.name })
     if (input.assigneeId) recordActivity(id, actor, 'assigned', { to: input.assigneeId })
@@ -3440,7 +3485,11 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
       getDb().prepare('UPDATE tickets SET card_images = ?, cover_attachment_id = ? WHERE id = ?').run(cardImageIds ? JSON.stringify([...new Set(cardImageIds)]) : null, cover, id)
     }
     if (input.labels) setTicketLabels(id, existing.boardId, input.labels)
-    if (input.todos !== undefined) setTicketTodos(id, input.todos)
+    if (input.todos !== undefined) {
+      const before = subticketIdsOf(id)
+      setTicketTodos(id, input.todos)
+      recordLinkedSubtickets(id, before, actor)
+    }
     const links = input.links ?? (input.link === undefined ? undefined : linksWithFirst(existing.links, input.link))
     if (links) removedThumbnails.push(...setTicketLinks(id, links))
     if (priority !== existing.priority) recordActivity(id, actor, 'priority', { from: existing.priority, to: priority })

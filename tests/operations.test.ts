@@ -147,6 +147,8 @@ describe('the operation registry', () => {
       const created = await ops.run(ops.ticketSubticketCreate, actorOf('editor'), input) as Result
       expect(created.subticket).toMatchObject({ boardId: other.id, laneId: startLane.id })
       expect(db.findTicket(created.subticket.id)!.description).toBe('Two variants')
+      // Typed like a ticket filed from the board: the workspace's "Ticket".
+      expect(db.findTicket(created.subticket.id)!.type?.name).toBe('Ticket')
       expect(created.ticket.todos.map(todo => [todo.text, todo.completed, todo.subticketId])).toEqual([['Plain', true, null], ['Mockups', false, created.subticket.id]])
       expect(created.ticket.todos[1]!.subticket).toMatchObject({ ticketNumber: created.subticket.ticketNumber, boardName: 'Design', laneName: startLane.name, done: false })
 
@@ -158,10 +160,11 @@ describe('the operation registry', () => {
       // Sending the list back keeps it, whatever flag or text the caller claims; leaving it out unlinks it.
       const kept = await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: parent.id, todos: [{ text: 'Whatever', completed: false, subticketId: created.subticket.id }, { text: 'Plain', completed: true }] }) as Result
       expect(kept.ticket.todos.map(todo => [todo.text, todo.completed, todo.subticketId])).toEqual([['Final mockups', true, created.subticket.id], ['Plain', true, null]])
-      // A ticket the list does not hold cannot be smuggled in through an update.
-      const { ticket: stranger } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Unrelated', laneId }) as { ticket: { id: string } }
-      expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: parent.id, todos: [{ text: 'x', subticketId: stranger.id }] }))).toBe(422)
-      expect(await statusOf(ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'New', laneId, todos: [{ text: 'x', subticketId: stranger.id }] }))).toBe(422)
+      // Naming itself or a ticket that already lists it is refused.
+      expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: parent.id, todos: [{ text: 'x', subticketId: parent.id }] }))).toBe(422)
+      const { ticket: grand } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Lists the parent', laneId, todos: [{ text: 'Parent', subticketId: parent.id }] }) as { ticket: { id: string; todos: Todo[] } }
+      expect(grand.todos[0]!.subticketId).toBe(parent.id)
+      expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: parent.id, todos: [{ text: 'x', subticketId: grand.id }] }))).toBe(422)
       const unlinked = await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: parent.id, todos: [{ text: 'Plain', completed: true }] }) as Result
       expect(unlinked.ticket.todos.map(todo => todo.subticketId)).toEqual([null])
       expect(db.findTicket(created.subticket.id)).not.toBeNull()
@@ -174,6 +177,41 @@ describe('the operation registry', () => {
       db.deleteBoard(elsewhere.id)
       db.deleteBoard(other.id)
       expect(db.findTicket(parent.id)!.todos).toHaveLength(1)
+    })
+
+    it('finds existing tickets of the workspace and links one as a subticket', async () => {
+      type Ref = { id: string; ticketNumber: number; boardName: string }
+      const other = db.createBoard('Marketing')
+      const otherLane = db.findBoardSummary(other.id)!.lanes.find(lane => !lane.isImport)!
+      const { ticket: parent } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Campaign', laneId }) as { ticket: { id: string } }
+      const { ticket: here } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Banner 100% done_ish', laneId }) as { ticket: { id: string; ticketNumber: number } }
+      const there = db.createTicket(other.id, { title: 'Banner copy', laneId: otherLane.id })!
+      const search = async (query: string) => (await ops.run(ops.ticketSubticketCandidates, actorOf('editor'), { ticketId: parent.id, query }) as { candidates: Ref[] }).candidates
+
+      // Only boards the caller can read count; the parent itself never shows.
+      expect((await search('banner')).map(ref => ref.id)).toEqual([here.id])
+      db.setBoardMember(other.id, people.editor!, 'viewer', false)
+      expect((await search('banner')).map(ref => ref.id).sort()).toEqual([here.id, there.id].sort())
+      expect((await search('Campaign')).map(ref => ref.id)).toEqual([])
+      // A number finds its ticket, with or without the hash; LIKE wildcards are taken literally.
+      expect((await search(`#${there.ticketNumber}`))[0]).toMatchObject({ id: there.id, boardName: 'Marketing' })
+      expect((await search('100%')).map(ref => ref.id)).toEqual([here.id])
+      expect((await search('_ish')).map(ref => ref.id)).toEqual([here.id])
+      // A viewer of the parent may not link anything to it.
+      expect(await statusOf(ops.run(ops.ticketSubticketCandidates, actorOf('viewer'), { ticketId: parent.id, query: '' }))).toBe(403)
+
+      // Linking is naming it in the list; a read-only membership on its board is enough.
+      const linked = await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: parent.id, todos: [{ text: 'Banner copy', subticketId: there.id }] }) as { ticket: { todos: Array<{ subticketId: string | null; subticket: Ref | null }> } }
+      expect(linked.ticket.todos[0]).toMatchObject({ subticketId: there.id, subticket: { boardName: 'Marketing' } })
+      expect(db.listActivity(parent.id).map(entry => entry.kind)).toContain('subticket')
+      // What is linked drops out of the candidates.
+      expect((await search('banner')).map(ref => ref.id)).toEqual([here.id])
+
+      // A ticket the caller cannot see is a 404, like everywhere else.
+      db.removeBoardMember(other.id, people.editor!)
+      const hidden = db.createTicket(other.id, { title: 'Hidden', laneId: otherLane.id })!
+      expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: parent.id, todos: [{ text: 'x', subticketId: hidden.id }] }))).toBe(404)
+      db.deleteBoard(other.id)
     })
 
     it('checks a ticket number against the ticket it names, not the caller', async () => {

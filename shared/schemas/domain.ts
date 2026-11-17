@@ -94,7 +94,7 @@ export const ticketTodoSchema = z.object({
   text: z.string().describe('For a subticket, its title.'),
   completed: z.boolean().describe('For a subticket, whether it sits in a done lane of its board; it cannot be ticked by hand.'),
   position: z.number().int(),
-  subticketId: z.string().nullable().describe('Set when this to-do is a ticket of its own. Send it back with the list to keep the subticket; leaving it out unlinks it, the ticket itself stays.'),
+  subticketId: z.string().nullable().describe('Set when this to-do is a ticket of its own. Send it back with the list to keep the subticket; leaving it out unlinks it, the ticket itself stays. A to-do naming another open ticket of the workspace links that one.'),
   subticket: subticketRefSchema.nullable()
 })
 

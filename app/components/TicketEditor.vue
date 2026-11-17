@@ -351,6 +351,10 @@ const priorityOptions = Object.entries(PRIORITY_LABELS).map(([value, label]) => 
 const categoryOptions = computed(() => (props.categories || []).map(category => category.name))
 // Same sentinel trick as `UNASSIGNED`: "no type" needs a value the select can hold.
 const NO_TYPE = 'none'
+// A new ticket starts as the workspace's "Ticket" type, the way imports do; untyped where there is none.
+const defaultTypeId = computed(() => (props.ticketTypes || []).find(type => type.name.trim().toLowerCase() === 'ticket')?.id || NO_TYPE)
+// The types may arrive after a new ticket's editor opened; it then still starts as "Ticket".
+watch(defaultTypeId, (id) => { if (!props.ticket && form.typeId === NO_TYPE) form.typeId = id })
 const typeOptions = computed(() => [{ value: NO_TYPE, label: 'No type' }, ...(props.ticketTypes || []).map(type => ({ value: type.id, label: type.name }))])
 const selectedType = computed(() => (props.ticketTypes || []).find(type => type.id === form.typeId) || null)
 // The picker works on names here: an unknown one is created when the ticket is saved.
@@ -387,7 +391,7 @@ watch(() => props.ticket, (ticket, previous) => {
   form.labels = ticket?.labels.map(label => label.name) || []
   form.categoryName = ticket?.category?.name || ''
   categoryInFlight = undefined
-  form.typeId = ticket?.type?.id || NO_TYPE
+  form.typeId = ticket ? ticket.type?.id || NO_TYPE : defaultTypeId.value
   // Only a new ticket picks its lane and position here; an existing one is moved through the lane select.
   form.laneId = ticket ? ticket.laneId : (props.initialLaneId || props.lanes[0]?.id || '')
   form.placement = ticket ? 'bottom' : props.initialPlacement
@@ -431,6 +435,13 @@ const subticketPending = ref(false)
 const canAddSubticket = computed(() => Boolean(props.ticket && props.canEdit && props.subticketBoards.length))
 function subticketHref(subticket: SubticketRef) {
   return `/b/${subticket.boardId}?ticket=${subticket.ticketNumber}`
+}
+// Linking is just naming the ticket in the list: it saves like any other change to it.
+function linkSubticket(subticket: SubticketRef) {
+  if (!props.ticket || todos.value.some(todo => todo.subticketId === subticket.id)) return void (subticketOpen.value = false)
+  todos.value.push({ key: `todo-${++todoSequence}`, text: subticket.title, completed: subticket.done, subticketId: subticket.id, subticket })
+  commitTodos()
+  subticketOpen.value = false
 }
 function createSubticket(input: { boardId: string; laneId: string; title: string; description: string }) {
   if (!props.ticket) return
@@ -1284,10 +1295,12 @@ function focusTitle(event: Event) {
           v-if="ticket"
           :open="subticketOpen"
           :boards="subticketBoards"
+          :ticket-id="ticket.id"
           :default-board-id="ticket.boardId"
           :pending="subticketPending"
           @update:open="open => (subticketOpen = open)"
           @create="createSubticket"
+          @link="linkSubticket"
         />
       </DialogContent>
     </DialogPortal>

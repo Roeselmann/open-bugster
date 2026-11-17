@@ -1,9 +1,10 @@
 import { createError } from 'h3'
 import { z } from 'zod'
-import { boardMemberIds, boardViewer, requireBoardAccess } from '../utils/access'
+import { boardMemberIds, boardViewer, requireBoardAccess, requireTicketAccess } from '../utils/access'
+import type { Actor } from '../utils/actor'
 import {
   archiveTicket, createSubticket, createTicket, listActivity, listDueTickets, listBoardActivity, listTickets, listTicketsPage,
-  findBoard, moveTicket, personById, restoreTicket, subticketIdsOf, ticketIdByNumber, ticketTypeBelongsToBoard, transferTicket, updateTicket
+  findBoard, listBoards, moveTicket, searchSubticketCandidates, personById, restoreTicket, subticketIdsOf, ticketIdByNumber, ticketTypeBelongsToBoard, transferTicket, updateTicket
 } from '../utils/db'
 import { importedTicketUpdateSchema, subticketCreateSchema, ticketCreateSchema, ticketMoveSchema, ticketTransferSchema, ticketUpdateSchema } from '../utils/validation'
 import { deleteLinkThumbnails } from '../utils/link-preview'
@@ -120,7 +121,7 @@ export const ticketCreate = defineOperation({
       throw createError({ statusCode: 422, statusMessage: 'A ticket can only be assigned to a member of this board.' })
     }
     if (rest.typeId && !ticketTypeBelongsToBoard(rest.typeId, boardId)) throw foreignType()
-    if (rest.todos.some(todo => todo.subticketId)) throw foreignSubticket()
+    checkNewSubtickets(ctx.actor, boardId, null, new Set(), rest.todos)
     // The author answers for the ticket, the actor for the write. Identical from the browser,
     // and different the moment a service identity files on somebody's behalf.
     const ticket = createTicket(boardId, rest, personById(ctx.actor.principalId), ctx.actor)
@@ -154,10 +155,7 @@ export const ticketUpdate = defineOperation({
       throw createError({ statusCode: 422, statusMessage: 'A ticket can only be assigned to a member of this board.' })
     }
     if (fields.typeId && fields.typeId !== ticket.type?.id && !ticketTypeBelongsToBoard(fields.typeId, ticket.boardId)) throw foreignType()
-    if (fields.todos?.some(todo => todo.subticketId)) {
-      const held = subticketIdsOf(ticket.id)
-      if (fields.todos.some(todo => todo.subticketId && !held.has(todo.subticketId))) throw foreignSubticket()
-    }
+    if (fields.todos?.some(todo => todo.subticketId)) checkNewSubtickets(ctx.actor, ticket.boardId, ticket.id, subticketIdsOf(ticket.id), fields.todos)
     if (fields.coverAttachmentId && !ticket.attachments.some(file => file.id === fields.coverAttachmentId && file.mimeType.startsWith('image/'))) {
       throw createError({ statusCode: 422, statusMessage: 'The card image has to be one of this ticket’s image attachments.' })
     }
@@ -207,6 +205,43 @@ export const ticketSubticketCreate = defineOperation({
     return result
   }
 })
+
+/**
+ * What could be linked as a subticket: open tickets on the boards of the parent's workspace
+ * that the caller can read, found by title or number. Leaves out the parent and what its
+ * list already holds.
+ */
+export const ticketSubticketCandidates = defineOperation({
+  name: 'ticket.subticket.candidates',
+  summary: 'Find existing tickets of the workspace that could be linked as subtickets of this one',
+  input: z.object({
+    ticketId,
+    // Coerced because a query string turns "42" into a number on the way in.
+    query: z.coerce.string().trim().max(160).default(''),
+    limit: z.number().int().min(1).max(50).default(20)
+  }),
+  requires: { scope: 'ticket', role: 'editor', ticketId: input => input.ticketId },
+  audit: false,
+  run: (ctx, input) => {
+    const parent = ctx.ticket!
+    const workspaceId = orNotFound(findBoard(parent.boardId), 'Board').workspaceId
+    // The boards the caller reaches through this very credential, not merely as a person.
+    const boardIds = listBoards(boardViewer(ctx.account))
+      .filter(board => board.workspaceId === workspaceId && readable(ctx.actor, board.id))
+      .map(board => board.id)
+    const exclude = new Set([parent.id, ...subticketIdsOf(parent.id)])
+    return { candidates: searchSubticketCandidates(boardIds, input.query, exclude, input.limit) }
+  }
+})
+
+function readable(actor: Actor, boardId: string) {
+  try {
+    requireBoardAccess(actor, boardId, 'viewer')
+    return true
+  } catch {
+    return false
+  }
+}
 
 export const ticketMove = defineOperation({
   name: 'ticket.move',
@@ -264,9 +299,26 @@ function foreignType() {
   return createError({ statusCode: 422, statusMessage: 'A ticket type must belong to this board’s workspace.' })
 }
 
-/** New subtickets are filed with `ticket.createSubticket`; a list can only keep the ones it holds. */
-function foreignSubticket() {
-  return createError({ statusCode: 422, statusMessage: 'A to-do can only refer to a subticket this ticket already holds. File new ones as a subticket.' })
+/**
+ * A to-do naming a ticket the list does not hold yet links that ticket as a subticket. It has
+ * to be one the caller can read — anything else is the same 404 a stranger gets — on a board
+ * of the same workspace, and neither the ticket itself nor one that already lists it.
+ */
+function checkNewSubtickets(actor: Actor, boardId: string, parentId: string | null, held: Set<string>, todos: Array<{ subticketId?: string | null }>) {
+  const workspaceId = orNotFound(findBoard(boardId), 'Board').workspaceId
+  for (const todo of todos) {
+    const id = todo.subticketId
+    if (!id || held.has(id)) continue
+    if (id === parentId) throw createError({ statusCode: 422, statusMessage: 'A ticket cannot be its own subticket.' })
+    const { ticket } = requireTicketAccess(actor, id, 'viewer')
+    if (ticket.archivedAt) throw createError({ statusCode: 422, statusMessage: 'An archived ticket cannot become a subticket.' })
+    if (orNotFound(findBoard(ticket.boardId), 'Board').workspaceId !== workspaceId) {
+      throw createError({ statusCode: 422, statusMessage: 'A subticket has to live on a board of the same workspace.' })
+    }
+    if (parentId && subticketIdsOf(id).has(parentId)) {
+      throw createError({ statusCode: 422, statusMessage: `#${ticket.ticketNumber} already lists this ticket as its subticket.` })
+    }
+  }
 }
 
 function omit<T extends Record<string, unknown>>(value: T, key: string): Record<string, unknown> {
