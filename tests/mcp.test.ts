@@ -171,7 +171,7 @@ describe('the MCP tool surface', () => {
       expect(found.total).toBe(1)
       const entry = found.tickets[0]
       expect(Object.keys(entry).sort()).toEqual(
-        ['assignee', 'boardId', 'category', 'commentCount', 'dueDate', 'id', 'labels', 'laneId', 'number', 'priority', 'title', 'type']
+        ['assignee', 'boardId', 'category', 'commentCount', 'dueDate', 'id', 'labels', 'laneId', 'number', 'priority', 'progress', 'title', 'type']
       )
       // The three fields that make a list expensive are exactly the ones left out.
       expect(entry).not.toHaveProperty('description')
@@ -296,11 +296,60 @@ describe('the MCP tool surface', () => {
       let full = await call('get_ticket', { ticketId: parent.id })
       expect(full.todos).toEqual([
         { text: 'Plan', completed: false },
-        { text: 'Press kit', completed: false, subticketId: sub.id, subticket: expect.objectContaining({ ticketNumber: sub.number }) }
+        { text: 'Press kit', completed: false, subticketId: sub.id, subticket: { number: sub.number, boardId, board: expect.any(String), laneId: sub.laneId, lane: expect.any(String), archived: false } }
       ])
       await call('update_ticket', { ticketId: parent.id, todos: full.todos.map(({ subticket: _ref, ...todo }: Record<string, unknown>) => todo).reverse() })
       full = await call('get_ticket', { ticketId: parent.id })
       expect(full.todos.map((todo: { text: string; subticketId?: string }) => [todo.text, todo.subticketId ?? null])).toEqual([['Press kit', sub.id], ['Plan', null]])
+    })
+
+    it('lets an agent trace a subticket both ways and see where it gets done', async () => {
+      // The lanes say which one finishes a ticket, so an agent need not guess from a name.
+      const overview = await call('board_overview', { boardId })
+      const doneLane = overview.lanes.find((lane: { isDone: boolean }) => lane.isDone)
+      expect(doneLane).toMatchObject({ name: 'Done', isDone: true })
+      expect(overview.lanes.filter((lane: { isDone: boolean }) => lane.isDone)).toHaveLength(1)
+      expect((await call('list_lanes', { boardId })).find((lane: { id: string }) => lane.id === doneLane.id).isDone).toBe(true)
+
+      const parent = await call('create_ticket', { boardId, laneId, title: 'Release', todos: [{ text: 'Notes', completed: true }] })
+      const sub = await call('create_ticket', { boardId, title: 'Store listing', parentTicketId: parent.id })
+      // Down: the list says how far it has come; a search says the same in short.
+      let full = await call('get_ticket', { ticketId: parent.id })
+      expect(full.progress).toEqual({ done: 1, total: 2, light: 'orange', openSubtickets: 1, subtickets: 1 })
+      expect(full.parents).toEqual([])
+      const found = await call('search_tickets', { boardId, text: 'Release' })
+      expect(found.tickets.find((ticket: { id: string }) => ticket.id === parent.id).progress).toMatchObject({ light: 'orange' })
+      expect(found.tickets.find((ticket: { id: string }) => ticket.id === parent.id)).not.toHaveProperty('todos')
+
+      // Up: the subticket names the ticket waiting on it.
+      const child = await call('get_ticket', { ticketId: sub.id })
+      expect(child.parents).toEqual([{ id: parent.id, number: parent.number, title: 'Release', boardId, laneId, progress: expect.objectContaining({ openSubtickets: 1 }) }])
+      expect(child.progress).toBeNull()
+
+      // Moving it into the done lane ticks it off on the parent, which the light shows.
+      await call('move_ticket', { ticketId: sub.id, laneId: doneLane.id })
+      full = await call('get_ticket', { ticketId: parent.id })
+      expect(full.todos[1]).toMatchObject({ completed: true, subticket: { laneId: doneLane.id } })
+      expect(full.progress).toEqual({ done: 2, total: 2, light: 'green', openSubtickets: 0, subtickets: 1 })
+    })
+
+    it('names only the parents the token can read', async () => {
+      const { registerTools } = await import('../server/mcp/tools')
+      const hidden = db.createBoard('Hidden parent board')
+      const hiddenLane = db.findBoardSummary(hidden.id)!.lanes.find(lane => !lane.isImport)!
+      const parent = db.createTicket(hidden.id, { title: 'Secret plan', laneId: hiddenLane.id })!
+      const sub = await call('create_ticket', { boardId, laneId, title: 'Visible part' })
+      db.updateTicket(parent.id, { todos: [{ text: 'Visible part', completed: false, subticketId: sub.id }] })
+      expect((await call('get_ticket', { ticketId: sub.id })).parents.map((item: { id: string }) => item.id)).toEqual([parent.id])
+
+      const pinned = new Map<string, RegisteredTool>()
+      const server = { registerTool(name: string, config: RegisteredTool['config'], handler: RegisteredTool['handler']) { pinned.set(name, { name, config, handler }) } }
+      registerTools(server as never, actorModule.actorFor(db.findUser(ownerId)!, { channel: 'mcp', tokenId: 'tok_5', scopes: ['read'], boardScope: boardId }))
+      const result = await pinned.get('get_ticket')!.handler({ ticketId: sub.id }) as { content: Array<{ text: string }> }
+      const seen = JSON.parse(result.content[0]!.text)
+      expect(seen.parents).toEqual([])
+      expect(JSON.stringify(seen)).not.toContain('Secret plan')
+      db.deleteBoard(hidden.id)
     })
   })
 

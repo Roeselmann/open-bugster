@@ -52,6 +52,16 @@ unrelated jobs and two sets of annotations.
 | `add_attachment` | Download a URL server-side and attach it | **open-world** |
 | `create_upload_url` | A one-time address to `curl` a local file to | additive |
 
+### Subtickets
+
+A to-do can be a ticket of its own, and an agent can follow it both ways without a tool of its own:
+
+- **Which lane finishes a ticket.** Every lane in `list_boards`, `board_overview` and `list_lanes` carries `isDone`. A subticket counts as done once it sits in such a lane of its own board; its `completed` is never set by hand.
+- **Down, from the parent.** In `get_ticket`, a to-do with `subticketId` carries `subticket: { number, boardId, board, laneId, lane, archived }`, enough to move it without a second read.
+- **Up, from the subticket.** `get_ticket` lists `parents`: the tickets whose lists hold this one, each with its own `progress`. Only parents this token can read appear; others are left out without a trace.
+- **Progress at a glance.** `search_tickets` and the replies of the write tools carry `progress: { done, total, light, openSubtickets, subtickets }`, or null without to-dos. `light` is the card's traffic light: `green` when everything is done, `orange` from half, `red` below. The list itself stays in `get_ticket`, so a search stays cheap.
+- **Writing.** `create_ticket` with `parentTicketId` files a new subticket on any board of the workspace; `update_ticket` links an existing ticket by naming its id as `subticketId` in the to-dos, and unlinks one by leaving it out.
+
 The `description` of `create_ticket` and `update_ticket` and the `body` of `comment_on_ticket`
 are Markdown; their field descriptions say so, so an agent formats with headings, lists and
 fenced code blocks on its own. Raw HTML is escaped when rendered.

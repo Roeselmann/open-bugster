@@ -6,7 +6,9 @@ import * as ops from '~~/server/operations'
 import type { Actor } from '~~/server/utils/actor'
 import { resolveAttachmentFile } from '~~/server/utils/attachment-file'
 import { DEFAULT_PREVIEW_DIMENSION, imagePreview } from '~~/server/utils/image-preview'
-import type { BoardSummary, LaneSummary, Ticket, TicketActivityEntry, TicketComment, TicketTypeSummary, WorkspaceSummary } from '~~/shared/types/domain'
+import { parentTicketIdsOf } from '~~/server/utils/db'
+import { todoLight } from '~~/shared/utils/todo-progress'
+import type { BoardSummary, LaneSummary, Ticket, TicketTodo, TicketActivityEntry, TicketComment, TicketTypeSummary, WorkspaceSummary } from '~~/shared/types/domain'
 
 /**
  * The agent-facing surface.
@@ -33,8 +35,32 @@ function slim(ticket: Ticket) {
     category: ticket.category?.name ?? null,
     type: ticket.type?.name ?? null,
     dueDate: ticket.dueDate,
-    commentCount: ticket.commentCount
+    commentCount: ticket.commentCount,
+    progress: progressOf(ticket.todos)
   }
+}
+
+/**
+ * How far a ticket's to-do list has come, subtickets included, without the list itself:
+ * enough to scan a board for what is blocked. `light` is the traffic light the UI shows —
+ * green when all is done, orange from half, red below. Null for a ticket without to-dos.
+ */
+function progressOf(todos: TicketTodo[]) {
+  const light = todoLight(todos)
+  if (!light) return null
+  const subtickets = todos.filter(todo => todo.subticket)
+  return {
+    done: todos.filter(todo => todo.completed).length,
+    total: todos.length,
+    light,
+    openSubtickets: subtickets.filter(todo => !todo.completed).length,
+    subtickets: subtickets.length
+  }
+}
+
+/** A lane as every tool shows it; `isDone` is what ticks a subticket off once it lands there. */
+function laneOf(lane: LaneSummary) {
+  return { id: lane.id, name: lane.name, ticketCount: lane.ticketCount, isImport: lane.isImport, isDone: lane.isDone }
 }
 
 function nameOf(person: { firstName: string; lastName: string } | null): string | null {
@@ -77,6 +103,18 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
   // parameter typed `Operation<unknown>` rejects every concrete operation.
   const call = <T>(operation: AnyOperation, input: unknown) => run(operation, actor, input) as Promise<T>
 
+  /**
+   * The parents of a subticket this token may read. Each goes through the same read as
+   * get_ticket, so a parent on a board out of reach is simply not there — not even its number.
+   */
+  const readableParents = async (ticketId: string) => {
+    const parents = await Promise.all(parentTicketIdsOf(ticketId).map(id =>
+      call<{ ticket: Ticket }>(ops.ticketGet, { ticketId: id }).then(result => result.ticket, () => null)))
+    return parents
+      .filter((parent): parent is Ticket => Boolean(parent))
+      .map(parent => ({ id: parent.id, number: parent.ticketNumber, title: parent.title, boardId: parent.boardId, laneId: parent.laneId, progress: progressOf(parent.todos) }))
+  }
+
   server.registerTool('whoami', {
     title: 'Who am I',
     description:
@@ -115,7 +153,7 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
         description: board.description,
         yourRole: board.role,
         ticketCount: board.ticketCount,
-        lanes: board.lanes.map(lane => ({ id: lane.id, name: lane.name, ticketCount: lane.ticketCount, isImport: lane.isImport }))
+        lanes: board.lanes.map(laneOf)
       }))
     })
   })
@@ -143,7 +181,7 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       name: board.name,
       description: board.description,
       yourRole: board.role,
-      lanes: board.lanes.map(lane => ({ id: lane.id, name: lane.name, ticketCount: lane.ticketCount, isImport: lane.isImport })),
+      lanes: board.lanes.map(laneOf),
       members: board.members.map(member => ({ id: member.userId, name: `${member.firstName} ${member.lastName}`.trim(), role: member.role })),
       labels: labels.map(label => label.name),
       categories: categories.map(category => category.name),
@@ -157,6 +195,7 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       'Find tickets on one board — or across every board this token can reach when boardId is '
       + 'omitted. Text matches the title and description. Every filter is optional and they '
       + 'combine. Returns a short form of each ticket — call get_ticket for the whole one. '
+      + 'Each carries `progress` (to-dos and subtickets done of total, and a green/orange/red light) or null without to-dos. '
       + 'Search before creating, so an existing report gets a comment instead of a duplicate.',
     annotations: readsOnly,
     inputSchema: {
@@ -208,7 +247,10 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       'One ticket in full, with its description, to-do list, attachments, comment thread and '
       + 'history. Takes either an id or the number the ticket is known by, so someone asking '
       + 'about "ticket 42" costs one call and no board. The only tool that returns everything, '
-      + 'so prefer search_tickets when scanning.',
+      + 'so prefer search_tickets when scanning. '
+      + 'A to-do with a subticketId is a subticket: a ticket of its own, maybe on another board of '
+      + 'the workspace, whose `completed` follows its lane — it is done once it sits in a lane with '
+      + 'isDone. `parents` lists the tickets that hold this one as a subticket; `progress` sums up the list.',
     annotations: readsOnly,
     inputSchema: {
       ticketId: z.string().optional().describe('From search_tickets. Give this or ticketNumber.'),
@@ -225,9 +267,10 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
     const { ticket } = ticketId
       ? await call<{ ticket: Ticket }>(ops.ticketGet, { ticketId })
       : await call<{ ticket: Ticket }>(ops.ticketGetByNumber, { ticketNumber })
-    const [{ comments }, { activity }] = await Promise.all([
+    const [{ comments }, { activity }, parents] = await Promise.all([
       call<{ comments: TicketComment[] }>(ops.commentList, { ticketId: ticket.id }),
-      call<{ activity: TicketActivityEntry[] }>(ops.ticketActivity, { ticketId: ticket.id })
+      call<{ activity: TicketActivityEntry[] }>(ops.ticketActivity, { ticketId: ticket.id }),
+      readableParents(ticket.id)
     ])
     return reply({
       ...slim(ticket),
@@ -244,8 +287,24 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       archivedAt: ticket.archivedAt,
       // A subticket is a ticket of its own; it counts as done once it reaches a done lane.
       todos: ticket.todos.map(todo => todo.subticket
-        ? { text: todo.text, completed: todo.completed, subticketId: todo.subticket.id, subticket: { ticketNumber: todo.subticket.ticketNumber, board: todo.subticket.boardName, lane: todo.subticket.laneName } }
+        ? {
+            text: todo.text,
+            completed: todo.completed,
+            subticketId: todo.subticket.id,
+            subticket: {
+              number: todo.subticket.ticketNumber,
+              boardId: todo.subticket.boardId,
+              board: todo.subticket.boardName,
+              laneId: todo.subticket.laneId,
+              lane: todo.subticket.laneName,
+              archived: todo.subticket.archived
+            }
+          }
         : { text: todo.text, completed: todo.completed }),
+      progress: progressOf(ticket.todos),
+      // The other way round: the tickets whose to-do lists hold this one, as far as this token
+      // can read them. Moving this ticket into a done lane ticks it off on each of them.
+      parents,
       // The v1 path, not the `url` on the record: that one is the UI's own API and takes a
       // session cookie, so the token this tool holds could see an attachment listed and
       // fetch none of them. This one answers to the same bearer token.
@@ -380,7 +439,7 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
 
   server.registerTool('move_ticket', {
     title: 'Move a ticket',
-    description: 'Move a ticket to a lane, and optionally to a position within it. With a boardId the ticket moves onto that other board of the same workspace instead, into laneId there (its default lane when omitted); labels and category come along by name, an assignee who is no member over there is dropped. Ids come from list_boards and board_overview.',
+    description: 'Move a ticket to a lane, and optionally to a position within it. A lane with isDone finishes the ticket: as a subticket it is then ticked off on every parent. With a boardId the ticket moves onto that other board of the same workspace instead, into laneId there (its default lane when omitted); labels and category come along by name, an assignee who is no member over there is dropped. Ids come from list_boards and board_overview.',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: {
       ticketId: z.string(),
@@ -426,7 +485,7 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
     inputSchema: { boardId: z.string() }
   }, async ({ boardId }) => {
     const { lanes } = await call<{ lanes: LaneSummary[] }>(ops.laneList, { boardId })
-    return reply(lanes.map(lane => ({ id: lane.id, name: lane.name, ticketCount: lane.ticketCount, isImport: lane.isImport })))
+    return reply(lanes.map(laneOf))
   })
 
   server.registerTool('whats_new', {
