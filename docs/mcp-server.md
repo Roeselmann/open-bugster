@@ -43,7 +43,7 @@ unrelated jobs and two sets of annotations.
 | `get_attachment` | Look at an attachment: images as a scaled JPEG, other files as details | read-only |
 | `list_lanes` | Just the lanes, when the overview would be overkill | read-only |
 | `whats_new` | Board-wide activity since a timestamp — the digest | read-only |
-| `create_ticket` | File a ticket, to-dos included, at the top or bottom of its lane | additive |
+| `create_ticket` | File a ticket, to-dos included, at the top or bottom of its lane; with `parentTicketId` as a subticket of another | additive |
 | `update_ticket` | Change given fields | destructive (overwrites) |
 | `move_ticket` | Lane and position, or with `boardId` onto another board of the workspace | idempotent |
 | `comment_on_ticket` | Append to the thread | additive |

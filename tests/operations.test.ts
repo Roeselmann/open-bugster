@@ -126,6 +126,56 @@ describe('the operation registry', () => {
       db.deleteBoard(other.id)
     })
 
+    it('files a subticket on another board of the workspace and ticks it from its lane', async () => {
+      type Todo = { text: string; completed: boolean; subticketId: string | null; subticket: { ticketNumber: number; boardName: string; laneName: string; done: boolean } | null }
+      type Result = { ticket: { id: string; todos: Todo[] }; subticket: { id: string; boardId: string; laneId: string; ticketNumber: number } }
+      const other = db.createBoard('Design')
+      const otherLanes = db.findBoardSummary(other.id)!.lanes
+      const startLane = otherLanes.find(lane => !lane.isImport && !lane.isDone)!
+      const doneLane = otherLanes.find(lane => lane.isDone)!
+      const { ticket: parent } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Parent', laneId, todos: [{ text: 'Plain', completed: true }] }) as { ticket: { id: string } }
+      const input = { ticketId: parent.id, boardId: other.id, laneId: startLane.id, title: 'Mockups', description: 'Two variants' }
+
+      // The destination is checked like a transfer: invisible is 404, read-only is 403.
+      expect(await statusOf(ops.run(ops.ticketSubticketCreate, actorOf('editor'), input))).toBe(404)
+      db.setBoardMember(other.id, people.editor!, 'viewer', false)
+      expect(await statusOf(ops.run(ops.ticketSubticketCreate, actorOf('editor'), input))).toBe(403)
+      db.setBoardMember(other.id, people.editor!, 'editor', false)
+      // A lane of some other board is refused rather than quietly replaced.
+      expect(await statusOf(ops.run(ops.ticketSubticketCreate, actorOf('editor'), { ...input, laneId }))).toBe(422)
+
+      const created = await ops.run(ops.ticketSubticketCreate, actorOf('editor'), input) as Result
+      expect(created.subticket).toMatchObject({ boardId: other.id, laneId: startLane.id })
+      expect(db.findTicket(created.subticket.id)!.description).toBe('Two variants')
+      expect(created.ticket.todos.map(todo => [todo.text, todo.completed, todo.subticketId])).toEqual([['Plain', true, null], ['Mockups', false, created.subticket.id]])
+      expect(created.ticket.todos[1]!.subticket).toMatchObject({ ticketNumber: created.subticket.ticketNumber, boardName: 'Design', laneName: startLane.name, done: false })
+
+      // Reaching a done lane ticks it, and a renamed subticket is renamed in the list.
+      db.moveTicket(created.subticket.id, doneLane.id, 0)
+      db.updateTicket(created.subticket.id, { title: 'Final mockups' })
+      expect(db.findTicket(parent.id)!.todos[1]).toMatchObject({ text: 'Final mockups', completed: true, subticket: { done: true, laneName: doneLane.name } })
+
+      // Sending the list back keeps it, whatever flag or text the caller claims; leaving it out unlinks it.
+      const kept = await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: parent.id, todos: [{ text: 'Whatever', completed: false, subticketId: created.subticket.id }, { text: 'Plain', completed: true }] }) as Result
+      expect(kept.ticket.todos.map(todo => [todo.text, todo.completed, todo.subticketId])).toEqual([['Final mockups', true, created.subticket.id], ['Plain', true, null]])
+      // A ticket the list does not hold cannot be smuggled in through an update.
+      const { ticket: stranger } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Unrelated', laneId }) as { ticket: { id: string } }
+      expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: parent.id, todos: [{ text: 'x', subticketId: stranger.id }] }))).toBe(422)
+      expect(await statusOf(ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'New', laneId, todos: [{ text: 'x', subticketId: stranger.id }] }))).toBe(422)
+      const unlinked = await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: parent.id, todos: [{ text: 'Plain', completed: true }] }) as Result
+      expect(unlinked.ticket.todos.map(todo => todo.subticketId)).toEqual([null])
+      expect(db.findTicket(created.subticket.id)).not.toBeNull()
+
+      // Another workspace is out of reach, even for somebody who may edit there.
+      const elsewhere = db.createBoard('Elsewhere', null, db.createWorkspace('Other company').id)
+      db.setBoardMember(elsewhere.id, people.editor!, 'editor', false)
+      const elsewhereLane = db.findBoardSummary(elsewhere.id)!.lanes.find(lane => !lane.isImport)!
+      expect(await statusOf(ops.run(ops.ticketSubticketCreate, actorOf('editor'), { ...input, boardId: elsewhere.id, laneId: elsewhereLane.id }))).toBe(422)
+      db.deleteBoard(elsewhere.id)
+      db.deleteBoard(other.id)
+      expect(db.findTicket(parent.id)!.todos).toHaveLength(1)
+    })
+
     it('checks a ticket number against the ticket it names, not the caller', async () => {
       const { ticket } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Numbered', laneId }) as { ticket: { id: string; ticketNumber: number } }
       expect(await statusOf(ops.run(ops.ticketGetByNumber, actorOf('viewer'), { ticketNumber: ticket.ticketNumber }))).toBe(200)

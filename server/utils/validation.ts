@@ -9,14 +9,16 @@ const emailSchema = z.email('A valid email address is required.').trim().toLower
 const passwordSchema = z.string().min(12, 'Use at least 12 characters.').max(512)
 
 const labelSchema = z.string().trim().min(1).max(30)
+const idSchema = z.string().trim().min(1).max(64)
+
 const todoSchema = z.object({
   text: z.string().trim().min(1).max(500),
   // Defaulted for API and MCP callers, for whom "a new to-do" is the common case; the UI
   // always sends the flag explicitly.
-  completed: z.boolean().default(false)
+  completed: z.boolean().default(false),
+  /** Keeps a subticket the list already holds; its text and flag are read from that ticket. */
+  subticketId: idSchema.nullable().optional()
 })
-
-const idSchema = z.string().trim().min(1).max(64)
 
 const webAddress = z.string().trim().max(2000).refine(value => /^https?:\/\/\S+$/i.test(value), 'A link has to start with http:// or https://.')
 const linkSchema = z.object({
@@ -61,6 +63,15 @@ export const ticketCreateSchema = z.object({
   todos: ticketShape.todos.default([]),
   /** Where in its lane the ticket lands; the bottom unless asked otherwise. */
   placement: z.enum(['top', 'bottom']).default('bottom')
+})
+
+/** A new ticket filed as a to-do of another: on that board or another one of its workspace. */
+export const subticketCreateSchema = z.object({
+  boardId: idSchema,
+  /** Omitted: the board's first lane that is not the import lane. */
+  laneId: idSchema.optional(),
+  title: ticketShape.title,
+  description: ticketShape.description.default('')
 })
 
 export const ticketUpdateSchema = z.object(ticketShape).partial().extend({

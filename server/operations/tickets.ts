@@ -2,10 +2,10 @@ import { createError } from 'h3'
 import { z } from 'zod'
 import { boardMemberIds, boardViewer, requireBoardAccess } from '../utils/access'
 import {
-  archiveTicket, createTicket, listActivity, listDueTickets, listBoardActivity, listTickets, listTicketsPage,
-  findBoard, moveTicket, personById, restoreTicket, ticketIdByNumber, ticketTypeBelongsToBoard, transferTicket, updateTicket
+  archiveTicket, createSubticket, createTicket, listActivity, listDueTickets, listBoardActivity, listTickets, listTicketsPage,
+  findBoard, moveTicket, personById, restoreTicket, subticketIdsOf, ticketIdByNumber, ticketTypeBelongsToBoard, transferTicket, updateTicket
 } from '../utils/db'
-import { importedTicketUpdateSchema, ticketCreateSchema, ticketMoveSchema, ticketTransferSchema, ticketUpdateSchema } from '../utils/validation'
+import { importedTicketUpdateSchema, subticketCreateSchema, ticketCreateSchema, ticketMoveSchema, ticketTransferSchema, ticketUpdateSchema } from '../utils/validation'
 import { deleteLinkThumbnails } from '../utils/link-preview'
 import { cardImageCandidates } from '../../shared/utils/card-images'
 import { createdId, defineOperation } from './types'
@@ -120,6 +120,7 @@ export const ticketCreate = defineOperation({
       throw createError({ statusCode: 422, statusMessage: 'A ticket can only be assigned to a member of this board.' })
     }
     if (rest.typeId && !ticketTypeBelongsToBoard(rest.typeId, boardId)) throw foreignType()
+    if (rest.todos.some(todo => todo.subticketId)) throw foreignSubticket()
     // The author answers for the ticket, the actor for the write. Identical from the browser,
     // and different the moment a service identity files on somebody's behalf.
     const ticket = createTicket(boardId, rest, personById(ctx.actor.principalId), ctx.actor)
@@ -153,6 +154,10 @@ export const ticketUpdate = defineOperation({
       throw createError({ statusCode: 422, statusMessage: 'A ticket can only be assigned to a member of this board.' })
     }
     if (fields.typeId && fields.typeId !== ticket.type?.id && !ticketTypeBelongsToBoard(fields.typeId, ticket.boardId)) throw foreignType()
+    if (fields.todos?.some(todo => todo.subticketId)) {
+      const held = subticketIdsOf(ticket.id)
+      if (fields.todos.some(todo => todo.subticketId && !held.has(todo.subticketId))) throw foreignSubticket()
+    }
     if (fields.coverAttachmentId && !ticket.attachments.some(file => file.id === fields.coverAttachmentId && file.mimeType.startsWith('image/'))) {
       throw createError({ statusCode: 422, statusMessage: 'The card image has to be one of this ticket’s image attachments.' })
     }
@@ -175,6 +180,31 @@ export const ticketUpdate = defineOperation({
     const updated = orNotFound(updateTicket(input.ticketId, fields, ctx.actor, removedThumbnails), 'Ticket')
     await deleteLinkThumbnails(removedThumbnails)
     return { ticket: updated }
+  }
+})
+
+/**
+ * A to-do that is a ticket of its own. It is filed on the board and lane given — this board
+ * or another of the workspace — and ticks itself once it reaches a done lane there.
+ */
+export const ticketSubticketCreate = defineOperation({
+  name: 'ticket.createSubticket',
+  summary: 'File a new ticket as a to-do of this one, on this board or another of its workspace',
+  input: subticketCreateSchema.extend({ ticketId }),
+  requires: { scope: 'ticket', role: 'editor', ticketId: input => input.ticketId },
+  audit: { targetType: 'ticket', targetId: input => input.ticketId, changes: ['boardId', 'laneId', 'title'] },
+  run: (ctx, input) => {
+    const parent = ctx.ticket!
+    // Filing on the destination asks for an editor there too, and stays a 404 to anyone who cannot see it.
+    if (input.boardId !== parent.boardId) requireBoardAccess(ctx.actor, input.boardId, 'editor')
+    const target = orNotFound(findBoard(input.boardId), 'Board')
+    if (target.workspaceId !== orNotFound(findBoard(parent.boardId), 'Board').workspaceId) {
+      throw createError({ statusCode: 422, statusMessage: 'A subticket has to live on a board of the same workspace.' })
+    }
+    if (parent.todos.length >= 100) throw createError({ statusCode: 422, statusMessage: 'A ticket holds at most 100 to-dos and subtickets.' })
+    const result = createSubticket(parent.id, input, personById(ctx.actor.principalId), ctx.actor)
+    if (!result) throw createError({ statusCode: 422, statusMessage: 'The lane does not belong to the chosen board.' })
+    return result
   }
 })
 
@@ -232,6 +262,11 @@ export const ticketRestore = defineOperation({
 /** Types are a workspace's vocabulary; a ticket only speaks the one its board is in. */
 function foreignType() {
   return createError({ statusCode: 422, statusMessage: 'A ticket type must belong to this board’s workspace.' })
+}
+
+/** New subtickets are filed with `ticket.createSubticket`; a list can only keep the ones it holds. */
+function foreignSubticket() {
+  return createError({ statusCode: 422, statusMessage: 'A to-do can only refer to a subticket this ticket already holds. File new ones as a subticket.' })
 }
 
 function omit<T extends Record<string, unknown>>(value: T, key: string): Record<string, unknown> {

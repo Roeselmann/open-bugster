@@ -242,7 +242,10 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       author: nameOf(ticket.author),
       createdAt: ticket.createdAt,
       archivedAt: ticket.archivedAt,
-      todos: ticket.todos.map(todo => ({ text: todo.text, completed: todo.completed })),
+      // A subticket is a ticket of its own; it counts as done once it reaches a done lane.
+      todos: ticket.todos.map(todo => todo.subticket
+        ? { text: todo.text, completed: todo.completed, subticketId: todo.subticket.id, subticket: { ticketNumber: todo.subticket.ticketNumber, board: todo.subticket.boardName, lane: todo.subticket.laneName } }
+        : { text: todo.text, completed: todo.completed }),
       // The v1 path, not the `url` on the record: that one is the UI's own API and takes a
       // session cookie, so the token this tool holds could see an attachment listed and
       // fetch none of them. This one answers to the same bearer token.
@@ -324,11 +327,23 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       todos: z.array(z.object({ text: z.string().min(1).max(500), completed: z.boolean().default(false) })).max(100).optional()
         .describe('The ticket’s initial to-do list, in order.'),
       placement: z.enum(['top', 'bottom']).optional()
-        .describe('Where the ticket lands in its lane. Defaults to the bottom; "top" pushes the lane’s other tickets down one.')
+        .describe('Where the ticket lands in its lane. Defaults to the bottom; "top" pushes the lane’s other tickets down one.'),
+      parentTicketId: z.string().optional()
+        .describe('File the ticket as a subticket of this one: it is added to the end of the parent’s to-do list and ticks itself there once it reaches a done lane of its own board. boardId may then be the parent’s board or another board of the same workspace.')
     }
-  }, async (input) => {
-    const { ticket } = await call<{ ticket: Ticket }>(ops.ticketCreate, input)
-    return reply(slim(ticket))
+  }, async ({ parentTicketId, ...input }) => {
+    if (!parentTicketId) {
+      const { ticket } = await call<{ ticket: Ticket }>(ops.ticketCreate, input)
+      return reply(slim(ticket))
+    }
+    const { boardId, laneId, title, description, placement: _placement, ...fields } = input
+    const created = await call<{ ticket: Ticket; subticket: Ticket }>(ops.ticketSubticketCreate, { ticketId: parentTicketId, boardId, laneId, title, description })
+    // Everything beyond what a subticket is filed with is set on it right after, in one write.
+    const rest = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined))
+    const subticket = Object.keys(rest).length
+      ? (await call<{ ticket: Ticket }>(ops.ticketUpdate, { ticketId: created.subticket.id, ...rest })).ticket
+      : created.subticket
+    return reply({ ...slim(subticket), parentTicketId })
   })
 
   server.registerTool('update_ticket', {
@@ -351,8 +366,12 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       labels: z.array(z.string()).max(12).optional(),
       categoryName: z.string().nullable().optional(),
       typeId: z.string().nullable().optional().describe('A ticket type id from board_overview.ticketTypes; null removes the type.'),
-      todos: z.array(z.object({ text: z.string().min(1).max(500), completed: z.boolean().default(false) })).max(100).optional()
-        .describe('Replaces the whole to-do list — read the ticket first and send every item back, changed and unchanged alike. Omit the field to leave the list alone.')
+      todos: z.array(z.object({
+        text: z.string().min(1).max(500),
+        completed: z.boolean().default(false),
+        subticketId: z.string().optional().describe('Send back the subticketId get_ticket showed to keep that subticket in the list. Its text and completion follow the subticket itself.')
+      })).max(100).optional()
+        .describe('Replaces the whole to-do list — read the ticket first and send every item back, changed and unchanged alike, subtickets with their subticketId. A subticket left out is unlinked; the ticket itself stays. New subtickets are filed with create_subticket. Omit the field to leave the list alone.')
     }
   }, async (input) => {
     const { ticket } = await call<{ ticket: Ticket }>(ops.ticketUpdate, input)

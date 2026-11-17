@@ -33,6 +33,11 @@ watchEffect(() => {
 const workspaceBoards = computed(() => boards.value.filter(item => item.workspaceId === board.value?.workspaceId))
 // Where a ticket may be moved to: the workspace's other boards the user can edit.
 const transferableBoards = computed(() => workspaceBoards.value.filter(item => item.id !== board.value?.id && item.role !== 'viewer'))
+// Where a subticket may be filed: this board first, then the workspace's others the user can edit.
+const subticketBoards = computed(() => [
+  ...workspaceBoards.value.filter(item => item.id === board.value?.id && item.role !== 'viewer'),
+  ...transferableBoards.value,
+])
 
 const lanes = computed(() => board.value?.lanes || [])
 
@@ -397,6 +402,8 @@ async function moveTicket(id: string, laneId: string, index: number): Promise<bo
   targetTickets.forEach((item, itemIndex) => { item.laneId = laneId; item.position = itemIndex })
   try {
     await $fetch(`/api/tickets/${id}/position`, { method: 'PATCH', body: { laneId, index } })
+    // Into or out of a done lane ticks or unticks it on any parent on this board.
+    if (source !== laneId) refreshParentsOf(id)
     return true
   } catch (error) {
     const previousById = new Map(snapshot.map(item => [item.id, item]))
@@ -442,6 +449,33 @@ function replaceTicket(ticket: Ticket) {
   if (selected.value?.id === ticket.id) selected.value = ticket
   const index = tickets.value.findIndex(item => item.id === ticket.id)
   if (index >= 0) tickets.value[index] = ticket
+  refreshParentsOf(ticket.id)
+}
+
+/**
+ * A subticket's lane and title show on every ticket that lists it, so a change to one here
+ * reloads the board when one of its parents is on it too. Subtickets elsewhere are read fresh
+ * whenever their parent's board is opened.
+ */
+function refreshParentsOf(ticketId: string) {
+  if (tickets.value.some(item => item.todos.some(todo => todo.subticketId === ticketId))) void refresh()
+}
+
+async function createSubticketFromEditor(parent: Ticket, input: { boardId: string; laneId: string; title: string; description: string }, done: (ok: boolean) => void) {
+  // After any to-do save still in flight, so the server appends to the list the user sees.
+  await patchQueue
+  try {
+    const response = await $fetch<{ ticket: Ticket; subticket: Ticket }>(`/api/tickets/${parent.id}/subtickets`, { method: 'POST', body: input })
+    replaceTicket(response.ticket)
+    if (response.subticket.boardId === boardId.value) tickets.value.push(response.subticket)
+    else void refreshBoards()
+    done(true)
+    const target = boards.value.find(item => item.id === response.subticket.boardId)
+    notify('success', `Subticket #${response.subticket.ticketNumber} created${target && target.id !== boardId.value ? ` on ${target.name}` : ''}.`)
+  } catch (error) {
+    done(false)
+    notify('error', errorText(error))
+  }
 }
 
 async function uploadAttachments(ticket: Ticket, files: File[]) {
@@ -649,7 +683,7 @@ async function sync(provider: IntegrationProvider) {
       <div v-else class="scrollbar-thin overflow-x-auto max-md:hidden"><KanbanBoard :board-id="board.id" :testflight="board.credentials.complete" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" @open="openTicket" @move="moveTicket" @create="newTicket" @upload="uploadAttachmentsFromCard" /></div>
     </main>
 
-    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :save-state="saveState" :deleting-attachment-id="deletingAttachmentId" :initial-lane-id="newTicketLaneId" :initial-placement="newTicketPlacement" :lane-ticket-count="selectedLaneTicketCount" :boards="transferableBoards" :testflight="board.credentials.complete" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @reorder="reorderTicketFromEditor" @transfer="transferTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @save-description="saveDescriptionFromEditor" @save-title="saveTitleFromEditor" @patch="patchTicketFromEditor" @upload="uploadAttachmentsFromEditor" @commented="refresh()" @notify="notify" />
+    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :save-state="saveState" :deleting-attachment-id="deletingAttachmentId" :initial-lane-id="newTicketLaneId" :initial-placement="newTicketPlacement" :lane-ticket-count="selectedLaneTicketCount" :boards="transferableBoards" :subticket-boards="subticketBoards" :testflight="board.credentials.complete" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @reorder="reorderTicketFromEditor" @transfer="transferTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @save-description="saveDescriptionFromEditor" @save-title="saveTitleFromEditor" @patch="patchTicketFromEditor" @upload="uploadAttachmentsFromEditor" @create-subticket="createSubticketFromEditor" @commented="refresh()" @notify="notify" />
 
     <UiConfirmDialog
       v-if="confirmation"

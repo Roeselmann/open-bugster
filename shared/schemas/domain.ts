@@ -6,7 +6,7 @@ import {
 import type {
   AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardSummary, Category,
   CategorySummary, JiraIntegration, JiraIssue, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket,
-  TicketActivityEntry, TicketComment, TicketTodo, TicketType, TicketTypeIcon, TicketTypeIconRef, TicketTypeRef, TicketTypeSummary,
+  SubticketRef, TicketActivityEntry, TicketComment, TicketTodo, TicketType, TicketTypeIcon, TicketTypeIconRef, TicketTypeRef, TicketTypeSummary,
   Workspace, WorkspaceMember, WorkspaceSummary
 } from '../types/domain'
 
@@ -77,11 +77,25 @@ export const attachmentSchema = z.object({
   url: z.string().describe('Fetch with the same credentials; not a public link.')
 })
 
+export const subticketRefSchema = z.object({
+  id: z.string(),
+  ticketNumber: z.number().int(),
+  title: z.string(),
+  boardId: z.string(),
+  boardName: z.string(),
+  laneId: z.string(),
+  laneName: z.string(),
+  done: z.boolean().describe('Whether the subticket sits in a done lane of its board.'),
+  archived: z.boolean()
+})
+
 export const ticketTodoSchema = z.object({
   id: z.string(),
-  text: z.string(),
-  completed: z.boolean(),
-  position: z.number().int()
+  text: z.string().describe('For a subticket, its title.'),
+  completed: z.boolean().describe('For a subticket, whether it sits in a done lane of its board; it cannot be ticked by hand.'),
+  position: z.number().int(),
+  subticketId: z.string().nullable().describe('Set when this to-do is a ticket of its own. Send it back with the list to keep the subticket; leaving it out unlinks it, the ticket itself stays.'),
+  subticket: subticketRefSchema.nullable()
 })
 
 export const ticketLinkSchema = z.object({
@@ -320,6 +334,7 @@ const named: Record<string, z.ZodType> = {
   TicketTypeIconRef: ticketTypeIconRefSchema,
   TicketTypeRef: ticketTypeRefSchema,
   Attachment: attachmentSchema,
+  SubticketRef: subticketRefSchema,
   TicketTodo: ticketTodoSchema,
   AppleFeedback: appleFeedbackSchema,
   Ticket: ticketSchema,
@@ -368,6 +383,7 @@ export type SchemasMatchDomain = [
   Expect<Equal<z.infer<typeof ticketTypeIconRefSchema>, TicketTypeIconRef>>,
   Expect<Equal<z.infer<typeof ticketTypeRefSchema>, TicketTypeRef>>,
   Expect<Equal<z.infer<typeof attachmentSchema>, Attachment>>,
+  Expect<Equal<z.infer<typeof subticketRefSchema>, SubticketRef>>,
   Expect<Equal<z.infer<typeof ticketTodoSchema>, TicketTodo>>,
   Expect<Equal<z.infer<typeof appleFeedbackSchema>, AppleFeedback>>,
   Expect<Equal<z.infer<typeof jiraIssueSchema>, JiraIssue>>,

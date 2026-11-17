@@ -144,7 +144,7 @@ export interface TicketComment {
   updatedAt: string
 }
 
-export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'due_date', 'type', 'archived', 'restored', 'commented'] as const
+export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'due_date', 'type', 'archived', 'restored', 'commented', 'subticket'] as const
 export type ActivityKind = typeof activityKinds[number]
 
 /** How a change reached the server. Everything written before agents existed reads `web`. */
@@ -315,6 +315,26 @@ export interface Attachment {
 export interface TicketTodoInput {
   text: string
   completed: boolean
+  /**
+   * Set when the to-do is a subticket: a ticket of its own, on this board or another of the
+   * workspace. Only a subticket the list already holds can be sent back; new ones are made
+   * with `POST /tickets/{id}/subtickets`. Its text and completion are read from that ticket.
+   */
+  subticketId?: string | null
+}
+
+/** The ticket a subticket to-do stands for, as far as the parent needs to show it. */
+export interface SubticketRef {
+  id: string
+  ticketNumber: number
+  title: string
+  boardId: string
+  boardName: string
+  laneId: string
+  laneName: string
+  /** Whether it sits in a done lane of its board — which is what ticks the to-do. */
+  done: boolean
+  archived: boolean
 }
 
 /** How a link shows on its ticket: as a card with a thumbnail, or as the bare address. */
@@ -376,6 +396,9 @@ export interface TicketPatch {
 export interface TicketTodo extends TicketTodoInput {
   id: string
   position: number
+  subticketId: string | null
+  /** The subticket behind this to-do; null for a plain one. */
+  subticket: SubticketRef | null
 }
 
 export interface AppleFeedback {

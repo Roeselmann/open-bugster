@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import type {
   ActivityKind, AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardRole, BoardSummary, Category, CategoryColor,
   CategorySummary, DueTicket, IntegrationProvider, JiraIntegration, JiraIssue, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
-  LinkDisplay, LinkPreview, TicketLink, TicketLinkInput, TicketPriority, TicketSource, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary,
+  LinkDisplay, LinkPreview, TicketLink, TicketLinkInput, TicketPriority, TicketSource, SubticketRef, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary,
   UserAccount, UserBoardMembership, UserRole, UserStatus, Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
 } from '../../shared/types/domain'
 import type { Actor, ActorChannel } from './actor'
@@ -339,6 +339,8 @@ export function getDb() {
   ensureTicketCardImages(database)
   // After every rebuild of `tickets` too, for the same reason.
   ensureUploadSlots(database)
+  // After every rebuild of `tickets` as well: the new column points into that table.
+  ensureTodoSubtickets(database)
   // Not in `boardIndexes`: that block also runs inside `ensureBoards`, before an upgrading
   // database has been given the ticket_activity table. Serves the board-wide digest query.
   database.exec('CREATE INDEX IF NOT EXISTS idx_ticket_activity_created ON ticket_activity(created_at DESC)')
@@ -633,6 +635,20 @@ export function ensureTicketTodos(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_ticket_todos_ticket ON ticket_todos(ticket_id, position);
   `)
   return !existed
+}
+
+/**
+ * Lets a to-do stand for a ticket of its own — a subticket, on this board or another one of
+ * the workspace. Such a row reads its title and whether it is done from that ticket; deleting
+ * the subticket takes the row with it.
+ */
+export function ensureTodoSubtickets(db: Database.Database) {
+  if (tableColumns(db, 'ticket_todos').has('subticket_id')) return false
+  db.transaction(() => {
+    db.exec('ALTER TABLE ticket_todos ADD COLUMN subticket_id TEXT REFERENCES tickets(id) ON DELETE CASCADE')
+    db.exec('CREATE INDEX IF NOT EXISTS idx_ticket_todos_subticket ON ticket_todos(subticket_id) WHERE subticket_id IS NOT NULL')
+  })()
+  return true
 }
 
 export function ensureTicketNumber(db: Database.Database) {
@@ -2385,7 +2401,12 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
       `)
       const labelsOf = db.prepare('SELECT label_id FROM ticket_labels WHERE ticket_id = ?')
       const attachLabel = db.prepare('INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)')
-      const todosOf = db.prepare('SELECT text, completed, position FROM ticket_todos WHERE ticket_id = ? ORDER BY position')
+      // A copied subticket becomes a plain to-do: the ticket it stood for stays where it is.
+      const todosOf = db.prepare(`
+        SELECT COALESCE(st.title, td.text) AS text, CASE WHEN st.id IS NULL THEN td.completed ELSE COALESCE(sl.is_done, 0) END AS completed, td.position
+        FROM ticket_todos td LEFT JOIN tickets st ON st.id = td.subticket_id LEFT JOIN lanes sl ON sl.id = st.lane_id
+        WHERE td.ticket_id = ? ORDER BY td.position
+      `)
       const insertTodo = db.prepare('INSERT INTO ticket_todos (id, ticket_id, text, completed, position) VALUES (?, ?, ?, ?, ?)')
       const feedbackOf = db.prepare('SELECT * FROM apple_feedback WHERE ticket_id = ?')
       const insertFeedback = db.prepare(`
@@ -2784,7 +2805,16 @@ function hydrateTicket(row: TicketRow): Ticket {
   const feedbackRow = db.prepare('SELECT * FROM apple_feedback WHERE ticket_id = ?').get(row.id) as Record<string, string | null> | undefined
   const jiraRow = db.prepare('SELECT * FROM jira_issues WHERE ticket_id = ?').get(row.id) as JiraIssueRow | undefined
   const attachmentRows = db.prepare('SELECT id, kind, filename, mime_type, size FROM attachments WHERE ticket_id = ? ORDER BY created_at').all(row.id) as Array<{ id: string; kind: Attachment['kind']; filename: string; mime_type: string; size: number }>
-  const todoRows = db.prepare('SELECT id, text, completed, position FROM ticket_todos WHERE ticket_id = ? ORDER BY position').all(row.id) as Array<{ id: string; text: string; completed: number; position: number }>
+  const todoRows = db.prepare(`
+    SELECT td.id, td.text, td.completed, td.position, td.subticket_id,
+      st.ticket_number AS sub_number, st.title AS sub_title, st.board_id AS sub_board_id, st.lane_id AS sub_lane_id,
+      st.archived_at AS sub_archived_at, sb.name AS sub_board_name, sl.name AS sub_lane_name, sl.is_done AS sub_done
+    FROM ticket_todos td
+    LEFT JOIN tickets st ON st.id = td.subticket_id
+    LEFT JOIN boards sb ON sb.id = st.board_id
+    LEFT JOIN lanes sl ON sl.id = st.lane_id
+    WHERE td.ticket_id = ? ORDER BY td.position
+  `).all(row.id) as TodoRow[]
   const links = (db.prepare('SELECT * FROM ticket_links WHERE ticket_id = ? ORDER BY position').all(row.id) as TicketLinkRow[]).map(toTicketLink)
   const commentCount = (db.prepare('SELECT COUNT(*) AS value FROM ticket_comments WHERE ticket_id = ?').get(row.id) as { value: number }).value
   const feedback: AppleFeedback | null = feedbackRow ? {
@@ -2808,12 +2838,7 @@ function hydrateTicket(row: TicketRow): Ticket {
     url: `/api/attachments/${item.id}`
   }))
   const author: TicketAuthor | null = personById(row.author_id)
-  const todos: TicketTodo[] = todoRows.map(todo => ({
-    id: todo.id,
-    text: todo.text,
-    completed: Boolean(todo.completed),
-    position: todo.position
-  }))
+  const todos: TicketTodo[] = todoRows.map(toTicketTodo)
   const cardImageIds = pickedCardImages(row.card_images, [...attachments, ...links])
   return {
     id: row.id,
@@ -3145,11 +3170,97 @@ export function listLabels(boardId: string): LabelSummary[] {
   `).all(boardId) as LabelSummary[]
 }
 
+type TodoRow = {
+  id: string; text: string; completed: number; position: number; subticket_id: string | null
+  sub_number: number | null; sub_title: string | null; sub_board_id: string | null; sub_lane_id: string | null
+  sub_archived_at: string | null; sub_board_name: string | null; sub_lane_name: string | null; sub_done: number | null
+}
+
+/** A subticket row reads its title and completion from the ticket it stands for, never from its own columns. */
+function toTicketTodo(todo: TodoRow): TicketTodo {
+  const subticket: SubticketRef | null = todo.subticket_id && todo.sub_number !== null ? {
+    id: todo.subticket_id,
+    ticketNumber: todo.sub_number,
+    title: todo.sub_title ?? '',
+    boardId: todo.sub_board_id ?? '',
+    boardName: todo.sub_board_name ?? '',
+    laneId: todo.sub_lane_id ?? '',
+    laneName: todo.sub_lane_name ?? '',
+    done: Boolean(todo.sub_done),
+    archived: Boolean(todo.sub_archived_at)
+  } : null
+  return {
+    id: todo.id,
+    text: subticket ? subticket.title : todo.text,
+    completed: subticket ? subticket.done : Boolean(todo.completed),
+    position: todo.position,
+    subticketId: subticket?.id ?? null,
+    subticket
+  }
+}
+
+/** The subtickets a ticket's to-do list holds right now, by id. */
+export function subticketIdsOf(ticketId: string): Set<string> {
+  const rows = getDb().prepare('SELECT subticket_id FROM ticket_todos WHERE ticket_id = ? AND subticket_id IS NOT NULL').all(ticketId) as Array<{ subticket_id: string }>
+  return new Set(rows.map(row => row.subticket_id))
+}
+
+/**
+ * Replaces a ticket's to-do list. A subticket in the list keeps its place only if the ticket
+ * already held it — new ones come from `createSubticket`, which the caller has checked; any
+ * other id is dropped here. Its text and flag are a snapshot for whoever reads the row bare.
+ */
 function setTicketTodos(ticketId: string, todos: TicketTodoInput[]) {
   const db = getDb()
+  const held = subticketIdsOf(ticketId)
+  const subtickets = new Map((db.prepare(`
+    SELECT t.id, t.title, l.is_done FROM ticket_todos td JOIN tickets t ON t.id = td.subticket_id JOIN lanes l ON l.id = t.lane_id
+    WHERE td.ticket_id = ?
+  `).all(ticketId) as Array<{ id: string; title: string; is_done: number }>).map(row => [row.id, row]))
+  const seen = new Set<string>()
+  const kept = todos.filter(todo => !todo.subticketId || (held.has(todo.subticketId) && !seen.has(todo.subticketId) && seen.add(todo.subticketId)))
   db.prepare('DELETE FROM ticket_todos WHERE ticket_id = ?').run(ticketId)
-  const insert = db.prepare('INSERT INTO ticket_todos (id, ticket_id, text, completed, position) VALUES (?, ?, ?, ?, ?)')
-  todos.forEach((todo, position) => insert.run(randomUUID(), ticketId, todo.text.trim(), todo.completed ? 1 : 0, position))
+  const insert = db.prepare('INSERT INTO ticket_todos (id, ticket_id, text, completed, position, subticket_id) VALUES (?, ?, ?, ?, ?, ?)')
+  kept.forEach((todo, position) => {
+    const sub = todo.subticketId ? subtickets.get(todo.subticketId) : undefined
+    if (sub) insert.run(randomUUID(), ticketId, sub.title, sub.is_done, position, sub.id)
+    else insert.run(randomUUID(), ticketId, todo.text.trim(), todo.completed ? 1 : 0, position, null)
+  })
+}
+
+export interface SubticketInput {
+  boardId: string
+  laneId?: string
+  title: string
+  description?: string
+}
+
+/**
+ * Files a new ticket on `input.boardId` — this board or another of the workspace, which the
+ * caller has checked — and puts it at the end of the parent's to-do list. Null when the lane
+ * is not one of that board's.
+ */
+export function createSubticket(parentId: string, input: SubticketInput, author: Person | null = null, actor: Actor | null = null): { ticket: Ticket; subticket: Ticket } | null {
+  const db = getDb()
+  const lane = input.laneId ? findLane(input.laneId) : defaultLaneFor(input.boardId)
+  if (!lane || lane.boardId !== input.boardId) return null
+  let childId = ''
+  db.transaction(() => {
+    const child = createTicket(input.boardId, { title: input.title, description: input.description || '', laneId: lane.id }, author, actor)
+    if (!child) throw new Error('The subticket could not be created.')
+    childId = child.id
+    const position = (db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS value FROM ticket_todos WHERE ticket_id = ?').get(parentId) as { value: number }).value
+    db.prepare('INSERT INTO ticket_todos (id, ticket_id, text, completed, position, subticket_id) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(randomUUID(), parentId, child.title, lane.isDone ? 1 : 0, position, child.id)
+    db.prepare('UPDATE tickets SET updated_at = ? WHERE id = ?').run(new Date().toISOString(), parentId)
+    recordActivity(parentId, actor, 'subticket', { number: String(child.ticketNumber), title: child.title, board: findBoard(input.boardId)?.name ?? null })
+  })()
+  return { ticket: findTicket(parentId)!, subticket: findTicket(childId)! }
+}
+
+/** The tickets whose to-do lists hold this one as a subticket. */
+export function parentTicketIdsOf(subticketId: string): string[] {
+  return (getDb().prepare('SELECT DISTINCT ticket_id FROM ticket_todos WHERE subticket_id = ?').all(subticketId) as Array<{ ticket_id: string }>).map(row => row.ticket_id)
 }
 
 type TicketLinkRow = {

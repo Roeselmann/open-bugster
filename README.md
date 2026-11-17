@@ -31,7 +31,7 @@ Open-Bugster is a lightweight, self-hosted Kanban board that is meant to be driv
 - **Attach files directly**  
   Add screenshots, documents, and other files to the relevant ticket.
 - **Manage to-do lists**  
-  Record the next steps within each ticket, reorder them, and work through them systematically.
+  Record the next steps within each ticket, reorder them, and work through them systematically. A step can also be a subticket — a ticket of its own on this board or another of the workspace — that ticks itself once it reaches a done lane, and a traffic light on every card shows how far the list has come.
 - **Archive instead of delete**  
   Archived tickets stay restorable by a board administrator and are never re-imported.
 - **Light and dark**  

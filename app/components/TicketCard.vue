@@ -4,6 +4,7 @@ import type { Lane, Ticket } from '~~/shared/types/domain'
 import { CATEGORY_TONE_CLASSES } from '~~/shared/utils/constants'
 import { boardToday, daysUntil, dueDescription, dueLevel } from '~~/shared/utils/due-date'
 import { cardImages } from '~~/shared/utils/card-images'
+import { TODO_LIGHT_LABELS, todoLight } from '~~/shared/utils/todo-progress'
 
 const props = withDefaults(defineProps<{
   ticket: Ticket
@@ -99,6 +100,8 @@ const authorText = computed(() => {
 })
 const authorTitle = computed(() => props.ticket.author?.email || props.ticket.feedback?.tester?.email || props.ticket.jira?.reporter?.email || '')
 const completedTodoCount = computed(() => props.ticket.todos.filter(todo => todo.completed).length)
+// Green once everything — subtickets included — is done, orange from half, red below.
+const light = computed(() => todoLight(props.ticket.todos))
 // The card shows the first three to-dos; "+ N more" unfolds the rest right on the card.
 const COLLAPSED_TODOS = 3
 const todosExpanded = ref(false)
@@ -197,14 +200,17 @@ const reorderButtons = computed(() => [
           <div class="muted mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[.06em]">
             <ListTodo :size="12" />
             <span>To-dos</span>
-            <span class="ml-auto tabular-nums">{{ completedTodoCount }}/{{ ticket.todos.length }}</span>
+            <span class="ml-auto flex items-center gap-1.5 tabular-nums" :title="light ? TODO_LIGHT_LABELS[light] : undefined">
+              <TodoLight v-if="light" :light="light" size="sm" />
+              {{ completedTodoCount }}/{{ ticket.todos.length }}
+            </span>
           </div>
           <div class="space-y-1">
             <div v-for="todo in visibleTodos" :key="todo.id" class="flex min-w-0 items-center gap-1.5 text-[11px] leading-tight" :class="todo.completed ? 'muted' : ''">
               <span class="grid size-3 shrink-0 place-items-center rounded-[3px] border" :class="todo.completed ? 'border-[var(--accent)] bg-[var(--accent)] text-white' : 'border-[var(--line)]'">
                 <Check v-if="todo.completed" :size="9" :stroke-width="3" />
               </span>
-              <span class="truncate" :class="todo.completed ? 'line-through' : ''">{{ todo.text }}</span>
+              <span class="truncate" :class="todo.completed ? 'line-through' : ''"><span v-if="todo.subticket" class="font-semibold tabular-nums" :title="`Subticket on ${todo.subticket.boardName} · ${todo.subticket.laneName}`">#{{ todo.subticket.ticketNumber }} </span>{{ todo.text }}</span>
             </div>
           </div>
           <!-- Inside the card's own button, so a span acting as one; the click stays off the card. -->

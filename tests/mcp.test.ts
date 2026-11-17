@@ -288,6 +288,20 @@ describe('the MCP tool surface', () => {
       full = await call('get_ticket', { ticketId: created.id })
       expect(full.todos.map((todo: { text: string }) => todo.text)).toEqual(['Two'])
     })
+
+    it('files a subticket through create_ticket and keeps it when the list is sent back', async () => {
+      const parent = await call('create_ticket', { boardId, laneId, title: 'Launch', todos: [{ text: 'Plan' }] })
+      const sub = await call('create_ticket', { boardId, title: 'Press kit', priority: 'high', parentTicketId: parent.id })
+      expect(sub).toMatchObject({ title: 'Press kit', priority: 'high', parentTicketId: parent.id })
+      let full = await call('get_ticket', { ticketId: parent.id })
+      expect(full.todos).toEqual([
+        { text: 'Plan', completed: false },
+        { text: 'Press kit', completed: false, subticketId: sub.id, subticket: expect.objectContaining({ ticketNumber: sub.number }) }
+      ])
+      await call('update_ticket', { ticketId: parent.id, todos: full.todos.map(({ subticket: _ref, ...todo }: Record<string, unknown>) => todo).reverse() })
+      full = await call('get_ticket', { ticketId: parent.id })
+      expect(full.todos.map((todo: { text: string; subticketId?: string }) => [todo.text, todo.subticketId ?? null])).toEqual([['Press kit', sub.id], ['Plan', null]])
+    })
   })
 
   describe('the digest and the undo', () => {

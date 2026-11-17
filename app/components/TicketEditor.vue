@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, CircleAlert, Download, ExternalLink, FileText, GripVertical, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, CircleAlert, CircleCheck, Circle, CornerDownRight, Download, ExternalLink, FileText, GripVertical, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogContent,
   DialogDescription,
@@ -9,12 +9,13 @@ import {
   DialogTitle,
   VisuallyHidden,
 } from 'reka-ui'
-import type { Attachment, BoardMember, Category, LabelSummary, Lane, Ticket, TicketLinkInput, TicketPatch, TicketPriority, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
+import type { Attachment, BoardMember, Category, LabelSummary, Lane, SubticketRef, Ticket, TicketLinkInput, TicketPatch, TicketPriority, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
+import { TODO_LIGHT_LABELS, todoLight } from '~~/shared/utils/todo-progress'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 import { boardToday, dueDescription, dueLevel } from '~~/shared/utils/due-date'
 import { cardImageCandidates, cardImages } from '~~/shared/utils/card-images'
 
-const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; /** How the last field-by-field save went; shown in the footer of an existing ticket. */ saveState?: 'idle' | 'saving' | 'saved' | 'error'; deletingAttachmentId?: string | null; initialLaneId?: string | null; initialPlacement?: 'top' | 'bottom'; laneTicketCount?: number; /** Other boards of the workspace the ticket may be moved onto. */ boards?: BoardSummary[]; /** Whether the board has TestFlight connected; without it a build number has nothing to refer to. */ testflight?: boolean; /** The board's lead times for the due date warning, as on the card. */ dueWarningDays?: number; dueAlertDays?: number }>(), { canEdit: true, testflight: true, dueWarningDays: 7, dueAlertDays: 1, saveState: 'idle', initialLaneId: null, initialPlacement: 'bottom', laneTicketCount: 0, boards: () => [] })
+const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; /** How the last field-by-field save went; shown in the footer of an existing ticket. */ saveState?: 'idle' | 'saving' | 'saved' | 'error'; deletingAttachmentId?: string | null; initialLaneId?: string | null; initialPlacement?: 'top' | 'bottom'; laneTicketCount?: number; /** Other boards of the workspace the ticket may be moved onto. */ boards?: BoardSummary[]; /** Boards of the workspace a subticket may be filed on, this one included. */ subticketBoards?: BoardSummary[]; /** Whether the board has TestFlight connected; without it a build number has nothing to refer to. */ testflight?: boolean; /** The board's lead times for the due date warning, as on the card. */ dueWarningDays?: number; dueAlertDays?: number }>(), { canEdit: true, testflight: true, dueWarningDays: 7, dueAlertDays: 1, saveState: 'idle', initialLaneId: null, initialPlacement: 'bottom', laneTicketCount: 0, boards: () => [], subticketBoards: () => [] })
 const emit = defineEmits<{
   close: []
   /** Creates a new ticket. An existing one never comes through here: its fields save themselves via `patch`. */
@@ -32,6 +33,8 @@ const emit = defineEmits<{
   removeAttachment: [attachment: Attachment]
   saveDescription: [ticket: Ticket, description: string]
   saveTitle: [ticket: Ticket, title: string]
+  /** A new ticket filed as a to-do of this one; `done` says whether it worked, so the dialog can close. */
+  createSubticket: [ticket: Ticket, input: { boardId: string; laneId: string; title: string; description: string }, done: (ok: boolean) => void]
 }>()
 
 const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '', typeId: 'none', laneId: '', placement: 'bottom' as 'top' | 'bottom' })
@@ -43,7 +46,7 @@ const inDoneLane = computed(() => {
 })
 const dueState = computed(() => (inDoneLane.value ? 'none' : dueLevel(form.dueDate || null, today, { warningDays: props.dueWarningDays, alertDays: props.dueAlertDays })))
 const dueText = computed(() => (dueState.value === 'none' ? null : dueDescription(form.dueDate, today)))
-interface EditableTodo extends TicketTodoInput { key: string }
+interface EditableTodo extends TicketTodoInput { key: string; subticket?: SubticketRef | null }
 const todos = ref<EditableTodo[]>([])
 const links = ref<TicketLinkInput[]>([])
 // The category value whose save is still on its way, see `commitCategory`.
@@ -388,9 +391,13 @@ watch(() => props.ticket, (ticket, previous) => {
   // Only a new ticket picks its lane and position here; an existing one is moved through the lane select.
   form.laneId = ticket ? ticket.laneId : (props.initialLaneId || props.lanes[0]?.id || '')
   form.placement = ticket ? 'bottom' : props.initialPlacement
-  const savedTodos = (ticket?.todos || []).map(todo => ({ text: todo.text, completed: todo.completed }))
+  const savedTodos = savedTodoList(ticket)
   if (!sameTicket || JSON.stringify(savedTodos) !== JSON.stringify(payload.todos())) {
-    todos.value = savedTodos.map(todo => ({ key: `todo-${++todoSequence}`, ...todo }))
+    todos.value = (ticket?.todos || []).map(todo => ({ key: `todo-${++todoSequence}`, text: todo.text, completed: todo.completed, subticketId: todo.subticketId, subticket: todo.subticket }))
+  } else {
+    // Same list, but a subticket may have moved lanes or been renamed meanwhile.
+    const refs = new Map((ticket?.todos || []).filter(todo => todo.subticket).map(todo => [todo.subticketId, todo.subticket]))
+    for (const todo of todos.value) if (todo.subticketId) todo.subticket = refs.get(todo.subticketId) ?? todo.subticket
   }
 }, { immediate: true })
 
@@ -404,7 +411,36 @@ const payload = {
   buildNumber: () => form.buildNumber.trim() || null,
   categoryName: () => form.categoryName.trim() || null,
   labels: () => [...form.labels],
-  todos: () => todos.value.map(todo => ({ text: todo.text.trim(), completed: todo.completed })).filter(todo => todo.text),
+  todos: () => todos.value.map(todoInput).filter(todo => todo.text),
+}
+
+// A subticket goes back with its id, which is all that keeps it in the list; its text and
+// flag are the server's to say. Plain to-dos carry no id at all, as they always did.
+function todoInput(todo: TicketTodoInput): TicketTodoInput {
+  return todo.subticketId
+    ? { text: todo.text.trim(), completed: todo.completed, subticketId: todo.subticketId }
+    : { text: todo.text.trim(), completed: todo.completed }
+}
+function savedTodoList(ticket: Ticket | null | undefined): TicketTodoInput[] {
+  return (ticket?.todos || []).map(todoInput)
+}
+const light = computed(() => todoLight(todos.value))
+
+const subticketOpen = ref(false)
+const subticketPending = ref(false)
+const canAddSubticket = computed(() => Boolean(props.ticket && props.canEdit && props.subticketBoards.length))
+function subticketHref(subticket: SubticketRef) {
+  return `/b/${subticket.boardId}?ticket=${subticket.ticketNumber}`
+}
+function createSubticket(input: { boardId: string; laneId: string; title: string; description: string }) {
+  if (!props.ticket) return
+  // Whatever is typed into the list goes first, so the server appends to what the user sees.
+  commitTodos()
+  subticketPending.value = true
+  emit('createSubticket', props.ticket, input, (ok) => {
+    subticketPending.value = false
+    if (ok) subticketOpen.value = false
+  })
 }
 
 /**
@@ -442,8 +478,7 @@ function leaveCategory(event: FocusEvent) {
 }
 function commitTodos() {
   const next = payload.todos()
-  const saved = (props.ticket?.todos || []).map(todo => ({ text: todo.text, completed: todo.completed }))
-  if (JSON.stringify(next) !== JSON.stringify(saved)) commit({ todos: next })
+  if (JSON.stringify(next) !== JSON.stringify(savedTodoList(props.ticket))) commit({ todos: next })
 }
 
 // Escape (or anything else that unmounts the drawer) takes the focus away without a blur,
@@ -872,7 +907,10 @@ function focusTitle(event: Event) {
             <section class="space-y-3">
               <div class="flex items-center gap-2">
                 <h3 class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><ListTodo :size="15" /> To-dos</h3>
-                <span v-if="todos.length" class="muted ml-auto text-[11px] font-semibold">{{ todos.filter(todo => todo.completed).length }}/{{ todos.length }} completed</span>
+                <span v-if="light" class="ml-auto flex items-center gap-1.5 text-[11px] font-semibold" :title="TODO_LIGHT_LABELS[light]">
+                  <TodoLight :light="light" />
+                  <span class="muted">{{ todos.filter(todo => todo.completed).length }}/{{ todos.length }} completed</span>
+                </span>
               </div>
               <div v-if="todos.length" ref="todoListElement">
                 <TransitionGroup name="todo-sort" tag="div" data-todo-stack class="relative flex flex-col gap-2">
@@ -892,6 +930,27 @@ function focusTitle(event: Event) {
                         @keydown.alt.up.prevent="moveTodo(todoIndexOf(item.key), -1)"
                         @keydown.alt.down.prevent="moveTodo(todoIndexOf(item.key), 1)"
                       ><GripVertical :size="17" /></button>
+                      <template v-if="item.subticketId">
+                        <span class="grid size-4 shrink-0 place-items-center" :class="item.completed ? 'text-[var(--accent)]' : 'muted'" :title="item.completed ? 'Done: the subticket is in a done lane' : 'Open until the subticket reaches a done lane'">
+                          <CircleCheck v-if="item.completed" :size="16" aria-label="Done" />
+                          <Circle v-else :size="16" aria-label="Open" />
+                        </span>
+                        <NuxtLink
+                          :to="item.subticket ? subticketHref(item.subticket) : undefined"
+                          class="focus-ring group/sub flex min-w-0 flex-1 flex-col rounded-md px-1 py-0.5 hover:bg-[var(--panel)]"
+                          :title="item.subticket ? `Open subticket #${item.subticket.ticketNumber}` : undefined"
+                        >
+                          <span class="flex min-w-0 items-center gap-1.5 text-sm">
+                            <span v-if="item.subticket" class="muted shrink-0 tabular-nums text-xs font-semibold">#{{ item.subticket.ticketNumber }}</span>
+                            <span class="truncate group-hover/sub:underline" :class="item.completed ? 'muted line-through' : ''">{{ item.text }}</span>
+                          </span>
+                          <span v-if="item.subticket" class="muted flex min-w-0 items-center gap-1 text-[11px]">
+                            <CornerDownRight :size="11" class="shrink-0" aria-hidden="true" />
+                            <span class="truncate">Subticket · {{ item.subticket.boardName }} · {{ item.subticket.laneName }}{{ item.subticket.archived ? ' · archived' : '' }}</span>
+                          </span>
+                        </NuxtLink>
+                      </template>
+                      <template v-else>
                       <input v-model="item.completed" type="checkbox" class="focus-ring size-4 shrink-0 cursor-pointer accent-[var(--accent)]" :aria-label="`Mark to-do “${item.text || todoIndexOf(item.key) + 1}” as completed`" @change="commitTodos()">
                       <input
                         v-model="item.text"
@@ -903,7 +962,14 @@ function focusTitle(event: Event) {
                         @keydown.enter.prevent="addTodo(todoIndexOf(item.key) + 1)"
                         @blur="commitTodos()"
                       >
-                      <button type="button" class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10" :aria-label="`Delete to-do ${todoIndexOf(item.key) + 1}`" @click="removeTodo(todoIndexOf(item.key))"><Trash2 :size="15" /></button>
+                      </template>
+                      <button
+                        type="button"
+                        class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10"
+                        :aria-label="item.subticketId ? `Remove subticket ${todoIndexOf(item.key) + 1} from the list` : `Delete to-do ${todoIndexOf(item.key) + 1}`"
+                        :title="item.subticketId ? 'Remove from the list — the subticket itself stays' : undefined"
+                        @click="removeTodo(todoIndexOf(item.key))"
+                      ><Trash2 :size="15" /></button>
                     </div>
                     <div
                       v-else
@@ -917,6 +983,7 @@ function focusTitle(event: Event) {
               </div>
               <div class="flex flex-wrap gap-2">
                 <button type="button" :disabled="todos.length >= 100" class="focus-ring flex h-10 items-center gap-2 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50" @click="addTodo()"><Plus :size="16" /> Add to-do</button>
+                <button v-if="canAddSubticket" type="button" :disabled="todos.length >= 100" class="focus-ring flex h-10 items-center gap-2 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50" @click="subticketOpen = true"><CornerDownRight :size="16" /> Add subticket</button>
                 <button v-if="ticket && !commentsOpen" type="button" class="focus-ring flex h-10 items-center gap-2 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]" @click="openComments"><MessageSquare :size="16" /> {{ commentCount ? 'Show comments' : 'Add comment' }} <span v-if="commentCount" class="muted tabular-nums">{{ commentCount }}</span></button>
               </div>
             </section>
@@ -1213,6 +1280,15 @@ function focusTitle(event: Event) {
           @update:open="open => !open && (discardOpen = false)"
           @confirm="discard"
         />
+        <SubticketDialog
+          v-if="ticket"
+          :open="subticketOpen"
+          :boards="subticketBoards"
+          :default-board-id="ticket.boardId"
+          :pending="subticketPending"
+          @update:open="open => (subticketOpen = open)"
+          @create="createSubticket"
+        />
       </DialogContent>
     </DialogPortal>
   </DialogRoot>
@@ -1233,7 +1309,7 @@ function focusTitle(event: Event) {
         <span class="grid size-4 shrink-0 place-items-center rounded-[4px] border" :class="draggedTodo.completed ? 'border-[var(--accent)] bg-[var(--accent)] text-white' : 'border-[var(--line)]'">
           <Check v-if="draggedTodo.completed" :size="11" :stroke-width="3" />
         </span>
-        <span class="min-w-0 flex-1 truncate px-1 py-1.5 text-sm" :class="draggedTodo.completed ? 'muted line-through' : ''">{{ draggedTodo.text || 'Empty to-do' }}</span>
+        <span class="min-w-0 flex-1 truncate px-1 py-1.5 text-sm" :class="draggedTodo.completed ? 'muted line-through' : ''"><span v-if="draggedTodo.subticket" class="muted mr-1.5 text-xs font-semibold tabular-nums">#{{ draggedTodo.subticket.ticketNumber }}</span>{{ draggedTodo.text || 'Empty to-do' }}</span>
         <span class="grid size-8 shrink-0 place-items-center rounded-lg text-rose-600"><Trash2 :size="15" /></span>
       </div>
     </div>
