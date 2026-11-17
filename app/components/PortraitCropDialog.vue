@@ -102,6 +102,10 @@ function confirm() {
         <DialogTitle class="text-lg font-bold tracking-[-.025em]">Choose your portrait</DialogTitle>
         <DialogDescription class="muted mt-1 text-sm">
           <template v-if="travel">Drag the circle {{ landscape ? 'left or right' : 'up or down' }} until your face sits in it.</template>
+          <template v-else-if="canReplace">
+            This picture is square, so the circle already covers all of it. For a different cut,
+            choose another photo.
+          </template>
           <template v-else>The whole picture fits the circle.</template>
         </DialogDescription>
 

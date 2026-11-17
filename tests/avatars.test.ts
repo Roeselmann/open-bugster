@@ -88,6 +88,15 @@ describe('portraits and agent icons', () => {
     expect((await ops.run(ops.profileGetAvatar, actorOf(memberId), {}) as { position: number }).position).toBe(1)
   })
 
+  it('treats a portrait from before originals were kept as its own original', async () => {
+    const square = await sharp({ create: { width: 256, height: 256, channels: 3, background: { r: 10, g: 120, b: 60 } } }).jpeg().toBuffer()
+    db.setUserAvatar(ownerId, 'image/jpeg', square)
+    expect(db.getUserAvatarSource(ownerId)).toBeNull()
+    db.ensureUserAvatars(db.getDb())
+    expect(db.getUserAvatarSource(ownerId)).toMatchObject({ position: 0.5 })
+    expect((await ops.run(ops.profileGetAvatar, actorOf(ownerId), {}) as { originalUrl: string | null }).originalUrl).toBeTruthy()
+  })
+
   it('cannot move the cut when there is no photo to move it on', async () => {
     await ops.run(ops.profileRemoveAvatar, actorOf(ownerId), {})
     expect(await statusOf(ops.run(ops.profileSetAvatar, actorOf(ownerId), { position: 0.3 }))).toBe(409)

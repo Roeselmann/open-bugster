@@ -725,6 +725,9 @@ export function ensureUserAvatars(db: Database.Database) {
   const columns = tableColumns(db, 'user_avatars')
   if (!columns.has('original')) db.exec('ALTER TABLE user_avatars ADD COLUMN original BLOB')
   if (!columns.has('position')) db.exec('ALTER TABLE user_avatars ADD COLUMN position REAL')
+  // A portrait from before the original was kept is its own original: the editor then opens
+  // on it rather than on a file picker, and says why there is nothing to move.
+  db.exec('UPDATE user_avatars SET original = data, position = 0.5 WHERE original IS NULL')
 }
 
 /**

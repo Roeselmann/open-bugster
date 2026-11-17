@@ -32,7 +32,7 @@ const cropSource = ref<string | null>(null)
 const pickedImage = ref<string | null>(null)
 const avatarPending = ref(false)
 
-/** A click on the portrait: move the cut if there is a photo to move it on, else pick one. */
+/** A click on the portrait or its pencil: the cut, never the file picker — unless there is no portrait yet. */
 function editPortrait() {
   if (avatar.value?.originalUrl) {
     pickedImage.value = null
@@ -128,8 +128,8 @@ async function saveProfile() {
         type="button"
         :disabled="avatarPending"
         class="focus-ring group relative size-20 shrink-0 rounded-full"
-        :aria-label="avatar?.originalUrl ? 'Move the cut of your portrait' : 'Upload a photo'"
-        :title="avatar?.originalUrl ? 'Move the cut' : 'Upload a photo'"
+        :aria-label="avatar?.originalUrl ? 'Change the cut of your portrait' : 'Upload a photo'"
+        :title="avatar?.originalUrl ? 'Change the cut' : 'Upload a photo'"
         @click="editPortrait"
       >
         <span class="grid size-20 place-items-center overflow-hidden rounded-full transition group-hover:brightness-95">
