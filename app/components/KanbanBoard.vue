@@ -9,11 +9,9 @@ const props = withDefaults(defineProps<{
   canEdit?: boolean
   /** Phone layout: only this lane, full width, without the lane's own frame and scroll box — and no drag, the card's buttons reorder. */
   laneId?: string | null
-  /** Whether the board has TestFlight connected, handed on to the cards. */
-  testflight?: boolean
   dueWarningDays?: number
   dueAlertDays?: number
-}>(), { canEdit: true, laneId: null, testflight: true, dueWarningDays: 7, dueAlertDays: 1 })
+}>(), { canEdit: true, laneId: null, dueWarningDays: 7, dueAlertDays: 1 })
 const emit = defineEmits<{ open: [ticket: Ticket]; move: [id: string, laneId: string, index: number]; create: [laneId: string, placement: 'top' | 'bottom']; upload: [ticket: Ticket, files: File[]] }>()
 
 const showScreenshotByLane = reactive<Record<string, boolean>>({})
@@ -381,7 +379,6 @@ onBeforeUnmount(cleanupPointerDrag)
                 :lane-count="ticketsFor(lane.id).length"
                 :draggable="!compact"
                 :droppable="canEdit"
-                :testflight="testflight"
                 :due-warning-days="dueWarningDays"
                 :due-alert-days="dueAlertDays"
                 @open="emit('open', $event)"
@@ -432,7 +429,7 @@ onBeforeUnmount(cleanupPointerDrag)
       }"
       aria-hidden="true"
     >
-      <TicketCard :ticket="draggedTicket" :index="0" :lanes="lanes" :show-screenshot="showScreenshotByLane[draggedTicket.laneId]" :testflight="testflight" :due-warning-days="dueWarningDays" :due-alert-days="dueAlertDays" preview />
+      <TicketCard :ticket="draggedTicket" :index="0" :lanes="lanes" :show-screenshot="showScreenshotByLane[draggedTicket.laneId]" :due-warning-days="dueWarningDays" :due-alert-days="dueAlertDays" preview />
     </div>
   </Teleport>
 </template>
