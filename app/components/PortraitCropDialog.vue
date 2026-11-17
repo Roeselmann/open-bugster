@@ -7,23 +7,23 @@ import { DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogRo
  *
  * The circle always spans the photo's shorter side, so the only choice left is where along
  * the longer side it sits: left to right for a landscape photo, top to bottom for a portrait
- * one. What is cut out is a square — the rounding is CSS — so the stored image works for any
- * shape the interface may draw later.
+ * one. Only that position leaves the dialog: the server keeps the original and cuts the
+ * square from it, so the cut can be moved again later. The rounding is CSS.
  */
 const props = defineProps<{
-  /** The chosen file as a data URL; null closes the dialog. */
+  /** The photo: a data URL for a new file, or the stored original's address. Null closes the dialog. */
   source: string | null
+  /** Where the circle sat last time, 0–1 along the long side; centred when null. */
+  initialPosition?: number | null
+  /** Offers to pick a different photo, for an existing portrait. */
+  canReplace?: boolean
   pending: boolean
 }>()
-const emit = defineEmits<{ cancel: []; confirm: [dataUrl: string] }>()
-
-/** The square that is rendered out. The server scales it down to the stored size. */
-const OUTPUT = 512
+const emit = defineEmits<{ cancel: []; replace: []; confirm: [position: number] }>()
 /** Longest side of the photo on screen, narrower on a phone so the dialog never scrolls sideways. */
 const STAGE = 420
 const stage = ref(STAGE)
 
-const image = ref<HTMLImageElement | null>(null)
 const natural = reactive({ width: 0, height: 0 })
 const failed = ref(false)
 /** Where the circle starts along the long axis, in screen pixels. */
@@ -49,11 +49,10 @@ watch(() => props.source, (source) => {
   stage.value = Math.min(STAGE, window.innerWidth - 72)
   const loader = new Image()
   loader.onload = () => {
-    image.value = loader
     natural.width = loader.naturalWidth
     natural.height = loader.naturalHeight
-    // Centred to begin with: usually where the face is.
-    offset.value = travel.value / 2
+    // Where it was left, or centred: usually where the face is.
+    offset.value = travel.value * (props.initialPosition ?? 0.5)
   }
   loader.onerror = () => { failed.value = true }
   loader.src = source
@@ -86,20 +85,8 @@ function nudge(event: KeyboardEvent) {
 }
 
 function confirm() {
-  const source = image.value
-  if (!source || !diameter.value) return
-  // Back from screen pixels to the photo's own, so the cut-out keeps the original's detail.
-  const ratio = 1 / scale.value
-  const size = diameter.value * ratio
-  const x = landscape.value ? offset.value * ratio : 0
-  const y = landscape.value ? 0 : offset.value * ratio
-  const canvas = document.createElement('canvas')
-  canvas.width = OUTPUT
-  canvas.height = OUTPUT
-  const context = canvas.getContext('2d')!
-  context.imageSmoothingQuality = 'high'
-  context.drawImage(source, x, y, size, size, 0, 0, OUTPUT, OUTPUT)
-  emit('confirm', canvas.toDataURL('image/jpeg', 0.92))
+  if (!diameter.value) return
+  emit('confirm', travel.value ? offset.value / travel.value : 0.5)
 }
 </script>
 
@@ -146,7 +133,16 @@ function confirm() {
         </div>
         <div v-else class="mt-5 grid h-40 place-items-center"><LoaderCircle class="muted animate-spin" :size="20" aria-hidden="true" /></div>
 
-        <div class="mt-6 flex justify-end gap-2.5">
+        <div class="mt-6 flex items-center justify-end gap-2.5">
+          <button
+            v-if="canReplace"
+            type="button"
+            :disabled="pending"
+            class="focus-ring mr-auto h-10 rounded-xl px-3 text-sm font-semibold hover:bg-[var(--panel-strong)] disabled:opacity-50"
+            @click="emit('replace')"
+          >
+            Choose another photo
+          </button>
           <button type="button" :disabled="pending" class="focus-ring h-10 rounded-xl px-4 text-sm font-semibold hover:bg-[var(--panel-strong)] disabled:opacity-50" @click="emit('cancel')">Cancel</button>
           <button
             type="button"

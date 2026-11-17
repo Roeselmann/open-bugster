@@ -471,11 +471,18 @@ export function getUserAvatar(id: string): { mime: string; data: Buffer; updated
   return row || null
 }
 
-export function setUserAvatar(id: string, mime: string, data: Buffer): void {
+/** The photo a portrait was cut from and where the cut sits, for moving it later. */
+export function getUserAvatarSource(id: string): { original: Buffer; position: number } | null {
+  const row = getDb().prepare('SELECT original, position FROM user_avatars WHERE user_id = ? AND original IS NOT NULL').get(id) as { original: Buffer; position: number | null } | undefined
+  return row ? { original: row.original, position: row.position ?? 0.5 } : null
+}
+
+export function setUserAvatar(id: string, mime: string, data: Buffer, source?: { original: Buffer; position: number }): void {
   getDb().prepare(`
-    INSERT INTO user_avatars (user_id, mime, data, updated_at) VALUES (?, ?, ?, ?)
-    ON CONFLICT (user_id) DO UPDATE SET mime = excluded.mime, data = excluded.data, updated_at = excluded.updated_at
-  `).run(id, mime, data, new Date().toISOString())
+    INSERT INTO user_avatars (user_id, mime, data, updated_at, original, position) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT (user_id) DO UPDATE SET mime = excluded.mime, data = excluded.data, updated_at = excluded.updated_at,
+      original = excluded.original, position = excluded.position
+  `).run(id, mime, data, new Date().toISOString(), source?.original ?? null, source?.position ?? null)
   invalidateUserDirectory()
 }
 
@@ -713,6 +720,11 @@ export function ensureUserAvatars(db: Database.Database) {
       updated_at TEXT NOT NULL
     )
   `)
+  // The photo the portrait was cut from, and where along its long side the circle sits, so
+  // the cut can be moved later without uploading again. Null for portraits from before this.
+  const columns = tableColumns(db, 'user_avatars')
+  if (!columns.has('original')) db.exec('ALTER TABLE user_avatars ADD COLUMN original BLOB')
+  if (!columns.has('position')) db.exec('ALTER TABLE user_avatars ADD COLUMN position REAL')
 }
 
 /**

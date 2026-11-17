@@ -2,9 +2,9 @@ import { createError } from 'h3'
 import { z } from 'zod'
 import {
   AnonymizedAccountError, EmailTakenError, anonymizeUser, clearInviteToken, createUser, deleteUser,
-  avatarOf, findUser, listUsers, removeUserAvatar, setInviteToken, setUserAvatar, setUserPassword, updateUser, type UserRecord
+  avatarOf, findUser, getUserAvatar, getUserAvatarSource, listUsers, removeUserAvatar, setInviteToken, setUserAvatar, setUserPassword, updateUser, type UserRecord
 } from '../utils/db'
-import { AVATAR_UPLOAD_LIMIT, normaliseAvatar } from '../utils/avatar-image'
+import { AVATAR_UPLOAD_LIMIT, cutPortrait, normaliseOriginal } from '../utils/avatar-image'
 import { createInviteToken, invitePurpose } from '../utils/invite'
 import { hashStoredPassword, verifyStoredPassword } from '../utils/password'
 import { passwordChangeSchema, profileUpdateSchema, userCreateSchema, userUpdateSchema } from '../utils/validation'
@@ -183,16 +183,49 @@ export const profileUpdate = defineOperation({
 
 export const profileSetAvatar = defineOperation({
   name: 'profile.setAvatar',
-  summary: 'Upload your own portrait, already cropped to a square',
-  input: z.object({ image: z.string().max(AVATAR_UPLOAD_LIMIT, 'The picture is too large.') }),
+  summary: 'Upload your own portrait, or move the cut on the photo you uploaded before',
+  input: z.object({
+    /** A new photo as a data URL. Left out, the photo already stored is cut again. */
+    image: z.string().max(AVATAR_UPLOAD_LIMIT, 'The picture is too large.').optional(),
+    /** Where the circle sits along the photo's longer side: 0 at the left or top, 1 at the right or bottom. */
+    position: z.number().min(0).max(1).default(0.5)
+  }),
   requires: { scope: 'authenticated' },
-  audit: { targetType: 'user' },
+  audit: { targetType: 'user', changes: input => ({ newPhoto: Boolean(input.image) }) },
   run: async (ctx, input) => {
-    const image = await normaliseAvatar(input.image)
-    if (!image) throw createError({ statusCode: 422, statusMessage: 'This file could not be read as a PNG, JPEG or WebP picture.' })
-    setUserAvatar(ctx.account.id, 'image/jpeg', image)
-    return avatarOf(ctx.account.id)
+    let original: Buffer | null
+    if (input.image) {
+      original = await normaliseOriginal(input.image)
+      if (!original) throw createError({ statusCode: 422, statusMessage: 'This file could not be read as a PNG, JPEG or WebP picture.' })
+    } else {
+      original = getUserAvatarSource(ctx.account.id)?.original ?? null
+      if (!original) throw createError({ statusCode: 409, statusMessage: 'There is no photo to move the cut on. Upload one first.' })
+    }
+    const portrait = await cutPortrait(original, input.position)
+    setUserAvatar(ctx.account.id, 'image/jpeg', portrait, { original, position: input.position })
+    return profileAvatar(ctx.account.id)
   }
+})
+
+/** What the profile needs to show the portrait and reopen its cut. */
+function profileAvatar(id: string) {
+  const source = getUserAvatarSource(id)
+  const updatedAt = getUserAvatar(id)?.updatedAt ?? ''
+  return {
+    ...avatarOf(id),
+    // Versioned like the portrait, so the editor never shows a cached older photo.
+    originalUrl: source ? `/api/profile/avatar/original?v=${encodeURIComponent(updatedAt)}` : null,
+    position: source?.position ?? null
+  }
+}
+
+export const profileGetAvatar = defineOperation({
+  name: 'profile.getAvatar',
+  summary: 'Your own portrait, and the photo and position it was cut from',
+  input: z.object({}),
+  requires: { scope: 'authenticated' },
+  audit: false,
+  run: ctx => profileAvatar(ctx.account.id)
 })
 
 export const profileRemoveAvatar = defineOperation({
@@ -203,7 +236,7 @@ export const profileRemoveAvatar = defineOperation({
   audit: { targetType: 'user' },
   run: (ctx) => {
     removeUserAvatar(ctx.account.id)
-    return avatarOf(ctx.account.id)
+    return profileAvatar(ctx.account.id)
   }
 })
 

@@ -56,7 +56,9 @@ The account exists from the moment you create it, so it can already be added to 
 
 Name, email address, and password live under **Your profile** in the account menu. Changing your address moves everything you have filed, written, or been assigned along with you, and the old address becomes free again. If the new address is one Open-Bugster already knew, that history is folded into your account. An address another account holds is refused. Changing your password signs out every other device.
 
-**Portrait.** A photo of yourself replaces your initials wherever you appear: cards, comments, member lists, the header. After picking a file, a circle as large as the photo's shorter side sits on it; you drag it left and right on a landscape photo, or up and down on a portrait one, and **OK** cuts out that square. The rounding is CSS. The server re-encodes the square as a 256 px JPEG, which drops every bit of metadata a phone photo carries, location included, and serves it only to signed-in users under an address that changes with each upload, so browsers may cache it for good. **Remove** brings the initials back. Anonymizing an account deletes its portrait too.
+**Portrait.** A photo of yourself replaces your initials wherever you appear: cards, comments, member lists, the header. After picking a file, a circle as large as the photo's shorter side sits on it; you drag it left and right on a landscape photo, or up and down on a portrait one (arrow keys work too). **OK** sends the photo and that position; the server cuts the square out and the rounding is CSS. A click on the portrait, or the pencil beside it, reopens the photo with the circle where it was left, so the cut can be moved later without uploading again.
+
+The server keeps the photo re-encoded as JPEG at no more than 2048 px, and the portrait as a 256 px JPEG cut from it. Re-encoding drops every bit of metadata a phone photo carries, location included. The portrait is served only to signed-in users under an address that changes with each save, so browsers may cache it for good; the photo it was cut from only to its owner. **Remove** deletes both and brings the initials back, and so does anonymizing the account.
 
 ## Erasure without losing the work
 
@@ -81,7 +83,7 @@ So Open-Bugster separates the two. **Anonymize** clears the email, the name, the
 
 | File | What lives there |
 |---|---|
-| [server/operations/accounts.ts](../server/operations/accounts.ts) | `user.list`, `user.create`, `user.update`, `user.delete`, `user.anonymize`, `user.invite`, `user.revokeInvite` (instance admin); `profile.update`, `profile.changePassword`, `profile.setAvatar`, `profile.removeAvatar` (authenticated). |
+| [server/operations/accounts.ts](../server/operations/accounts.ts) | `user.list`, `user.create`, `user.update`, `user.delete`, `user.anonymize`, `user.invite`, `user.revokeInvite` (instance admin); `profile.update`, `profile.changePassword`, `profile.getAvatar`, `profile.setAvatar` (a new photo, or only a new position), `profile.removeAvatar` (authenticated). |
 | [server/operations/board-domain.ts](../server/operations/board-domain.ts) | `member.list`, `member.candidates`, `member.set`, `member.remove`. |
 | [server/middleware/auth.ts](../server/middleware/auth.ts) | Cookie and bearer authentication, the public paths, the session version check. |
 | [server/utils/access.ts](../server/utils/access.ts) | The guards and role ranks. See [architecture.md](architecture.md#access-rules). |
@@ -94,13 +96,13 @@ So Open-Bugster separates the two. **Anonymize** clears the email, the name, the
 | `app/pages/login.vue`, `invite/[token].vue` | Sign-in; accepting an invitation or a reset. |
 | `app/pages/admin/users.vue` | The **Users** page: create, invite, reset, disable, anonymize, delete; agents (`AdminAgents.vue`). |
 | `app/pages/profile/index.vue`, `security.vue`, `boards.vue` | Your profile and portrait, password, and board memberships. |
-| `app/components/PortraitCropDialog.vue`, `server/utils/avatar-image.ts` | Choosing the circle on a photo, and re-encoding the square on the server. |
+| `app/components/PortraitCropDialog.vue`, `server/utils/avatar-image.ts` | Choosing the circle on a photo; keeping the original and cutting the square from it on the server. |
 | `app/components/UiAvatar.vue` | Portrait, agent icon or initials, wherever somebody is drawn. |
 | `app/components/BoardMemberSettings.vue`, `UiAvatar.vue` | The board roster; avatars and initials. |
 
 ## Surfaces
 
-- **Internal routes:** `server/api/auth/login.post.ts`, `logout.post.ts`; `server/api/users/index.get.ts`, `index.post.ts`, `[id].patch.ts`, `[id].delete.ts`, `[id]/anonymize.post.ts`, `[id]/invite.post.ts`, `[id]/invite.delete.ts`; `server/api/invite/[token].get.ts`, `[token].post.ts`; `server/api/profile/index.patch.ts`, `password.post.ts`, `avatar.put.ts`, `avatar.delete.ts`; `server/api/avatars/[id].get.ts`; `server/api/boards/[id]/members/*`.
+- **Internal routes:** `server/api/auth/login.post.ts`, `logout.post.ts`; `server/api/users/index.get.ts`, `index.post.ts`, `[id].patch.ts`, `[id].delete.ts`, `[id]/anonymize.post.ts`, `[id]/invite.post.ts`, `[id]/invite.delete.ts`; `server/api/invite/[token].get.ts`, `[token].post.ts`; `server/api/profile/index.patch.ts`, `password.post.ts`, `avatar.get.ts`, `avatar.put.ts`, `avatar.delete.ts`, `avatar/original.get.ts`; `server/api/avatars/[id].get.ts`; `server/api/boards/[id]/members/*`.
 - **REST v1:** board membership only (`/boards/{boardId}/members`, `/member-candidates`). User administration is deliberately absent, and a test keeps it that way.
 - **MCP:** `whoami` reports the principal behind the token. No user tools.
 - **Webhooks:** none.
@@ -108,7 +110,7 @@ So Open-Bugster separates the two. **Anonymize** clears the email, the name, the
 ## Tests
 
 - `tests/accounts.test.ts`: accounts, invitations, resets, disable, anonymize, delete, board membership.
-- `tests/avatars.test.ts`: portrait upload and re-encoding, cache-busting addresses, removal and anonymizing, agent icons.
+- `tests/avatars.test.ts`: portrait upload and re-encoding, the kept original and moving the cut, cache-busting addresses, removal and anonymizing, agent icons.
 - `tests/person-identity.test.ts`: the email-to-id migration against a legacy snapshot.
 - `tests/owner-seed.test.ts`: first-start seeding from the environment.
 - `tests/password.test.ts`: scrypt hashing.

@@ -65,6 +65,35 @@ describe('portraits and agent icons', () => {
     expect(db.listUsers().find(user => user.id === memberId)?.avatarUrl).toBe(result.avatarUrl)
   })
 
+  it('keeps the original, so the cut can be moved later without uploading again', async () => {
+    // Left half red, right half blue: which side the cut lands on shows in its colour.
+    const halves = await sharp({ create: { width: 3000, height: 1000, channels: 3, background: { r: 220, g: 0, b: 0 } } })
+      .composite([{ input: { create: { width: 1500, height: 1000, channels: 3, background: { r: 0, g: 0, b: 220 } } }, left: 1500, top: 0 }])
+      .jpeg().toBuffer()
+    const colourOf = async () => {
+      const { data } = await sharp(db.getUserAvatar(memberId)!.data).resize(1, 1).raw().toBuffer({ resolveWithObject: true })
+      return data[0]! > data[2]! ? 'red' : 'blue'
+    }
+
+    const first = await ops.run(ops.profileSetAvatar, actorOf(memberId), { image: `data:image/jpeg;base64,${halves.toString('base64')}`, position: 0 }) as { position: number; originalUrl: string }
+    expect(first).toMatchObject({ position: 0, originalUrl: expect.stringMatching(/^\/api\/profile\/avatar\/original\?v=/) })
+    expect(await colourOf()).toBe('red')
+    // Kept no larger than it needs to be, and still without its metadata.
+    const kept = await sharp(db.getUserAvatarSource(memberId)!.original).metadata()
+    expect([kept.width, kept.height, kept.exif]).toEqual([2048, 683, undefined])
+
+    const moved = await ops.run(ops.profileSetAvatar, actorOf(memberId), { position: 1 }) as { position: number }
+    expect(moved.position).toBe(1)
+    expect(await colourOf()).toBe('blue')
+    expect((await ops.run(ops.profileGetAvatar, actorOf(memberId), {}) as { position: number }).position).toBe(1)
+  })
+
+  it('cannot move the cut when there is no photo to move it on', async () => {
+    await ops.run(ops.profileRemoveAvatar, actorOf(ownerId), {})
+    expect(await statusOf(ops.run(ops.profileSetAvatar, actorOf(ownerId), { position: 0.3 }))).toBe(409)
+    expect(await statusOf(ops.run(ops.profileSetAvatar, actorOf(ownerId), { position: 2 }))).toBe(422)
+  })
+
   it('gives a new upload a new address, so a cached picture is never stale', async () => {
     const before = db.personById(memberId)!.avatarUrl
     await new Promise(resolve => setTimeout(resolve, 5))
@@ -85,6 +114,7 @@ describe('portraits and agent icons', () => {
     await ops.run(ops.profileSetAvatar, actorOf(memberId), { image: await photo(300, 500) })
     await ops.run(ops.userAnonymize, actorOf(ownerId), { userId: memberId })
     expect(db.getUserAvatar(memberId)).toBeNull()
+    expect(db.getUserAvatarSource(memberId)).toBeNull()
     expect(db.personById(memberId)!.avatarUrl).toBeNull()
   })
 

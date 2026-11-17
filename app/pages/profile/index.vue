@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Camera, Trash2, UserRound } from '@lucide/vue'
+import { Camera, Pencil, Trash2, UserRound } from '@lucide/vue'
 
 const { user } = useAuth()
 const { notify } = useNotify()
@@ -14,13 +14,33 @@ watchEffect(() => {
 
 /* ── portrait ── */
 
+interface ProfileAvatar { avatarUrl: string | null; originalUrl: string | null; position: number | null }
+
+/**
+ * Read from its own endpoint rather than the session, so what this section shows is what is
+ * stored. The header still reads the session, which is refreshed after every change.
+ */
+const { data: avatar, refresh: refreshAvatar } = await useFetch<ProfileAvatar>('/api/profile/avatar')
+
 const fileInput = ref<HTMLInputElement | null>(null)
 /**
- * The picked file as a data URL while the crop dialog is open. Not an object URL: the content
- * security policy admits `data:` images and not `blob:` ones, and widening it for this is not worth it.
+ * The photo in the crop dialog: a new file as a data URL, or the stored original's address.
+ * Not an object URL: the content security policy admits `data:` images and not `blob:` ones.
  */
 const cropSource = ref<string | null>(null)
+/** The new photo, when one was picked; null while moving the cut on the stored one. */
+const pickedImage = ref<string | null>(null)
 const avatarPending = ref(false)
+
+/** A click on the portrait: move the cut if there is a photo to move it on, else pick one. */
+function editPortrait() {
+  if (avatar.value?.originalUrl) {
+    pickedImage.value = null
+    cropSource.value = avatar.value.originalUrl
+  } else {
+    fileInput.value?.click()
+  }
+}
 
 function pickPhoto(event: Event) {
   const input = event.target as HTMLInputElement
@@ -32,21 +52,29 @@ function pickPhoto(event: Event) {
     return
   }
   const reader = new FileReader()
-  reader.onload = () => { cropSource.value = typeof reader.result === 'string' ? reader.result : null }
+  reader.onload = () => {
+    if (typeof reader.result !== 'string') return
+    pickedImage.value = reader.result
+    cropSource.value = reader.result
+  }
   reader.onerror = () => notify('error', 'The file could not be read.')
   reader.readAsDataURL(file)
 }
 
 function closeCrop() {
   cropSource.value = null
+  pickedImage.value = null
 }
 
-async function saveAvatar(image: string) {
+async function saveAvatar(position: number) {
   avatarPending.value = true
   try {
-    await $fetch('/api/profile/avatar', { method: 'PUT', body: { image } })
+    await $fetch('/api/profile/avatar', {
+      method: 'PUT',
+      body: pickedImage.value ? { image: pickedImage.value, position } : { position },
+    })
     // The header draws the picture from the session, which adds it on every fetch.
-    await session.fetch()
+    await Promise.all([refreshAvatar(), session.fetch()])
     closeCrop()
     notify('success', 'Your portrait was saved.')
   } catch (error) {
@@ -60,7 +88,7 @@ async function removeAvatar() {
   avatarPending.value = true
   try {
     await $fetch('/api/profile/avatar', { method: 'DELETE' })
-    await session.fetch()
+    await Promise.all([refreshAvatar(), session.fetch()])
     notify('success', 'Your portrait was removed. Your initials are back.')
   } catch (error) {
     notify('error', errorText(error))
@@ -94,11 +122,24 @@ async function saveProfile() {
       <h2 class="mt-0.5 flex items-center gap-2 text-lg font-bold"><Camera :size="18" aria-hidden="true" /> Portrait</h2>
       <p class="muted mt-1 text-sm">Shown in a circle next to your name on cards, comments and member lists.</p>
     </header>
-    <div class="flex flex-wrap items-center gap-4 px-5 py-5">
-      <span class="grid size-20 shrink-0 place-items-center overflow-hidden rounded-full">
-        <img v-if="user?.avatarUrl" :src="user.avatarUrl" alt="Your portrait" class="size-full object-cover">
-        <UiAvatar v-else :person="user" size="lg" class="!size-20 !text-xl" />
-      </span>
+    <div class="flex flex-wrap items-center gap-5 px-5 py-5">
+      <!-- The portrait itself is the way in: a click moves the cut, or picks a photo when there is none. -->
+      <button
+        type="button"
+        :disabled="avatarPending"
+        class="focus-ring group relative size-20 shrink-0 rounded-full"
+        :aria-label="avatar?.originalUrl ? 'Move the cut of your portrait' : 'Upload a photo'"
+        :title="avatar?.originalUrl ? 'Move the cut' : 'Upload a photo'"
+        @click="editPortrait"
+      >
+        <span class="grid size-20 place-items-center overflow-hidden rounded-full transition group-hover:brightness-95">
+          <img v-if="avatar?.avatarUrl" :src="avatar.avatarUrl" alt="" class="size-full object-cover">
+          <UiAvatar v-else :person="user" size="lg" class="!size-20 !text-xl" />
+        </span>
+        <span class="absolute -bottom-0.5 -right-0.5 grid size-7 place-items-center rounded-full border-2 border-[var(--canvas)] bg-[var(--ink)] text-[var(--canvas)] shadow-sm transition group-hover:scale-110" aria-hidden="true">
+          <Pencil :size="13" />
+        </span>
+      </button>
       <div class="flex flex-wrap gap-2">
         <button
           type="button"
@@ -106,10 +147,10 @@ async function saveProfile() {
           class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50"
           @click="fileInput?.click()"
         >
-          <Camera :size="15" aria-hidden="true" /> {{ user?.avatarUrl ? 'Choose another photo' : 'Upload a photo' }}
+          <Camera :size="15" aria-hidden="true" /> {{ avatar?.avatarUrl ? 'Choose another photo' : 'Upload a photo' }}
         </button>
         <button
-          v-if="user?.avatarUrl"
+          v-if="avatar?.avatarUrl"
           type="button"
           :disabled="avatarPending"
           class="focus-ring flex h-10 items-center gap-2 rounded-xl border border-[var(--line)] px-4 text-sm font-semibold transition hover:bg-[var(--panel-strong)] disabled:opacity-50"
@@ -120,7 +161,15 @@ async function saveProfile() {
         <input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp" class="sr-only" tabindex="-1" aria-hidden="true" @change="pickPhoto">
       </div>
     </div>
-    <PortraitCropDialog :source="cropSource" :pending="avatarPending" @cancel="closeCrop" @confirm="saveAvatar" />
+    <PortraitCropDialog
+      :source="cropSource"
+      :initial-position="pickedImage ? null : avatar?.position"
+      :can-replace="!pickedImage"
+      :pending="avatarPending"
+      @cancel="closeCrop"
+      @replace="closeCrop(); fileInput?.click()"
+      @confirm="saveAvatar"
+    />
   </section>
 
   <section class="surface rounded-2xl">

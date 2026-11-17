@@ -154,14 +154,22 @@ const live = computed(() => tokens.value.filter(token => !token.revokedAt))
     <form class="space-y-4" @submit.prevent="create">
       <div class="grid gap-4 sm:grid-cols-2">
         <label class="block">
-          <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Name</span>
-          <input v-model="form.name" required maxlength="80" placeholder="n8n production" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none">
-          <span class="muted mt-1.5 block text-xs">For you, so you can tell them apart later.</span>
+          <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">{{ holderName ? 'Token name' : 'Name' }}</span>
+          <input v-model="form.name" required maxlength="80" :placeholder="holderName ? 'MacBook · Claude Desktop' : 'n8n production'" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none">
+          <span class="muted mt-1.5 block text-xs">
+            {{ holderName
+              ? `Where this token is used, so you can tell ${holderName}’s tokens apart and revoke the right one. Only administrators see it.`
+              : 'For you, so you can tell them apart later.' }}
+          </span>
         </label>
         <label class="block">
-          <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Shown in history as</span>
+          <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">{{ holderName ? 'Client' : 'Shown in history as' }}</span>
           <input v-model="form.agentLabel" maxlength="80" placeholder="Claude Desktop" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none">
-          <span class="muted mt-1.5 block text-xs">Optional. Appears as “via …” on everything this token does.</span>
+          <span class="muted mt-1.5 block text-xs">
+            {{ holderName
+              ? `Optional. Which app connects with it, shown in the history as “${holderName} via …”.`
+              : 'Optional. Appears as “via …” on everything this token does.' }}
+          </span>
         </label>
       </div>
 

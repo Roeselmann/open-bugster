@@ -1,5 +1,6 @@
 node_modules
 .nuxt
+.nuxt-scratch
 .output
 .env
 .env.replaced-*
