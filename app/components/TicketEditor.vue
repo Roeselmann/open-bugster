@@ -973,13 +973,12 @@ function focusTitle(event: Event) {
                           class="focus-ring group/sub flex min-w-0 flex-1 flex-col rounded-md px-1 py-0.5 hover:bg-[var(--panel)]"
                           :title="item.subticket ? `Open subticket #${item.subticket.ticketNumber}` : undefined"
                         >
-                          <span class="flex min-w-0 items-center gap-1.5 text-sm">
-                            <span v-if="item.subticket" class="muted shrink-0 tabular-nums text-xs font-semibold">#{{ item.subticket.ticketNumber }}</span>
-                            <span class="truncate group-hover/sub:underline" :class="item.completed ? 'muted line-through' : ''">{{ item.text }}</span>
-                          </span>
+                          <!-- The title alone on the first line; the number leads the second, where "Subticket" used to say what the arrow already does. -->
+                          <span class="truncate text-sm group-hover/sub:underline" :class="item.completed ? 'muted line-through' : ''">{{ item.text }}</span>
                           <span v-if="item.subticket" class="muted flex min-w-0 items-center gap-1 text-[11px]">
                             <CornerDownRight :size="11" class="shrink-0" aria-hidden="true" />
-                            <span class="truncate">Subticket · {{ item.subticket.boardName }} · {{ item.subticket.laneName }}{{ item.subticket.archived ? ' · archived' : '' }}</span>
+                            <span class="shrink-0 font-semibold tabular-nums">#{{ item.subticket.ticketNumber }}</span>
+                            <span class="truncate">· {{ item.subticket.boardName }} · {{ item.subticket.laneName }}{{ item.subticket.archived ? ' · archived' : '' }}</span>
                           </span>
                         </NuxtLink>
                       </template>

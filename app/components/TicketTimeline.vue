@@ -1,20 +1,24 @@
 <script setup lang="ts">
-import { ChevronDown, ChevronRight, ChartGantt, Diamond, EyeOff, LoaderCircle, TriangleAlert } from '@lucide/vue'
+import { ChartGantt, LoaderCircle, Maximize2, Minimize2, TriangleAlert } from '@lucide/vue'
+import { DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui'
 import type { TimelineNode } from '~~/shared/types/domain'
-import { boardToday, daysUntil } from '~~/shared/utils/due-date'
-import { flattenTimeline, isMilestone, spanOf, timelineBounds, timelineWarnings } from '~~/shared/utils/timeline'
+import { boardToday } from '~~/shared/utils/due-date'
+import { timelineBounds, timelineWarnings } from '~~/shared/utils/timeline'
 
 /**
  * The plan below a ticket: it and its subtickets, down through theirs, as bars across their
  * days. Read fresh from the server whenever `refreshKey` changes, because a subticket on
- * another board can move without this ticket knowing.
+ * another board can move without this ticket knowing. It opens full screen in a dialog of its
+ * own, nested in the editor's, so Escape and a click beside it close the chart, not the ticket.
  */
 const props = defineProps<{ ticketId: string; refreshKey?: string }>()
 
 const timeline = ref<TimelineNode | null>(null)
 const loading = ref(false)
 const failed = ref(false)
+// Shared by both views: a branch folded in the editor stays folded full screen, and back.
 const collapsed = ref(new Set<string>())
+const expanded = ref(false)
 const today = boardToday()
 
 async function load() {
@@ -29,52 +33,22 @@ async function load() {
   }
 }
 watch(() => [props.ticketId, props.refreshKey], load, { immediate: true })
+// Another ticket in the same editor starts folded open and on the small view.
+watch(() => props.ticketId, () => {
+  collapsed.value = new Set()
+  expanded.value = false
+})
 
-const rows = computed(() => (timeline.value ? flattenTimeline(timeline.value, collapsed.value) : []))
 const warnings = computed(() => (timeline.value ? timelineWarnings(timeline.value, today) : []))
 const warned = computed(() => new Set(warnings.value.map(warning => warning.ticketId)))
+const bounds = computed(() => (timeline.value ? timelineBounds(timeline.value) : null))
 
-// The visible range: everything dated, plus today when it is close, padded by a day each side.
-const range = computed(() => {
-  const bounds = timeline.value ? timelineBounds(timeline.value) : null
-  if (!bounds) return null
-  let start = bounds.start
-  let end = bounds.end
-  if (today < start && (daysUntil(start, today) ?? 0) <= 14) start = today
-  if (today > end && (daysUntil(today, end) ?? 0) <= 14) end = today
-  return { start: shift(start, -1), end: shift(end, 1) }
+const dayFormatter = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
+const rangeText = computed(() => {
+  if (!bounds.value) return null
+  const format = (date: string) => dayFormatter.format(new Date(`${date}T00:00:00Z`))
+  return `${format(bounds.value.start)} – ${format(bounds.value.end)}`
 })
-const totalDays = computed(() => (range.value ? (daysUntil(range.value.end, range.value.start) ?? 0) + 1 : 0))
-
-function shift(date: string, days: number) {
-  const value = new Date(`${date}T00:00:00Z`)
-  value.setUTCDate(value.getUTCDate() + days)
-  return value.toISOString().slice(0, 10)
-}
-/** Where a day sits across the chart, in percent; `end` puts it at the close of that day. */
-function offset(date: string, end = false) {
-  if (!range.value || !totalDays.value) return 0
-  const days = (daysUntil(date, range.value.start) ?? 0) + (end ? 1 : 0)
-  return Math.min(100, Math.max(0, (days / totalDays.value) * 100))
-}
-
-const monthFormatter = new Intl.DateTimeFormat('en', { month: 'short', timeZone: 'UTC' })
-const dayFormatter = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', timeZone: 'UTC' })
-const dayOf = (date: string) => dayFormatter.format(new Date(`${date}T00:00:00Z`))
-
-// Month starts as gridlines; with less than two months on screen, weeks (Mondays) as well.
-const ticks = computed(() => {
-  if (!range.value) return []
-  const result: Array<{ date: string; label: string | null; major: boolean }> = []
-  const weekly = totalDays.value <= 62
-  for (let date = range.value.start; date <= range.value.end; date = shift(date, 1)) {
-    const value = new Date(`${date}T00:00:00Z`)
-    if (value.getUTCDate() === 1) result.push({ date, label: monthFormatter.format(value), major: true })
-    else if (weekly && value.getUTCDay() === 1) result.push({ date, label: String(value.getUTCDate()), major: false })
-  }
-  return result
-})
-const todayVisible = computed(() => Boolean(range.value && today >= range.value.start && today <= range.value.end))
 
 function toggle(path: string) {
   const next = new Set(collapsed.value)
@@ -82,20 +56,6 @@ function toggle(path: string) {
   else next.add(path)
   collapsed.value = next
 }
-
-function barClass(node: TimelineNode) {
-  if (!node.readable) return 'border border-dashed border-[var(--muted)] bg-transparent'
-  if (node.done) return 'bg-emerald-500/70'
-  if (warned.value.has(node.id) && node.dueDate && node.dueDate < today) return 'bg-rose-600'
-  if (warned.value.has(node.id)) return 'bg-orange-400'
-  return 'bg-[var(--accent)]'
-}
-function spanLabel(node: TimelineNode) {
-  const span = spanOf(node)
-  if (!span) return 'No dates'
-  return span.start === span.end ? dayOf(span.start) : `${dayOf(span.start)} – ${dayOf(span.end)}`
-}
-const hrefOf = (node: TimelineNode) => `/b/${node.boardId}?ticket=${node.ticketNumber}`
 </script>
 
 <template>
@@ -103,7 +63,18 @@ const hrefOf = (node: TimelineNode) => `/b/${node.boardId}?ticket=${node.ticketN
     <div class="flex items-center gap-2">
       <h3 id="ticket-timeline-heading" class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><ChartGantt :size="15" /> Timeline</h3>
       <LoaderCircle v-if="loading" :size="13" class="muted animate-spin" aria-label="Loading" />
-      <span v-if="range" class="muted ml-auto text-[11px] font-semibold tabular-nums">{{ dayOf(shift(range.start, 1)) }} – {{ dayOf(shift(range.end, -1)) }}</span>
+      <span v-if="rangeText" class="muted ml-auto text-[11px] font-semibold tabular-nums">{{ rangeText }}</span>
+      <button
+        v-if="timeline && bounds"
+        type="button"
+        class="focus-ring muted grid size-7 shrink-0 place-items-center rounded-lg hover:bg-[var(--panel)] hover:text-[var(--ink)]"
+        :class="rangeText ? '' : 'ml-auto'"
+        aria-label="Open the timeline full screen"
+        title="Full screen"
+        @click="expanded = true"
+      >
+        <Maximize2 :size="14" />
+      </button>
     </div>
 
     <p v-if="failed" class="muted text-sm">The timeline could not be loaded.</p>
@@ -113,89 +84,46 @@ const hrefOf = (node: TimelineNode) => `/b/${node.boardId}?ticket=${node.ticketN
           <TriangleAlert :size="13" class="mt-px shrink-0" aria-hidden="true" /> <span>{{ warning.message }}</span>
         </li>
       </ul>
-
-      <p v-if="!range" class="muted text-sm">Nothing here has a start or due date yet. Give the subtickets dates to see them on a timeline.</p>
-      <div v-else class="surface-strong overflow-hidden rounded-xl">
-        <!-- The scale: month starts, and weeks when the range is short. -->
-        <div class="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] border-b border-[var(--line)] text-[10px] font-semibold uppercase tracking-wider">
-          <div class="muted px-3 py-1.5">Ticket</div>
-          <div class="relative h-6">
-            <span
-              v-for="tick in ticks"
-              :key="tick.date"
-              class="absolute top-1.5 -translate-x-1/2 whitespace-nowrap"
-              :class="tick.major ? '' : 'muted font-medium normal-case tracking-normal'"
-              :style="{ left: `${offset(tick.date)}%` }"
-            >{{ tick.label }}</span>
-          </div>
-        </div>
-
-        <div class="relative">
-          <!-- Gridlines and today behind every row, drawn once for the whole chart. -->
-          <div class="pointer-events-none absolute inset-y-0 right-0 w-1/2" aria-hidden="true">
-            <span v-for="tick in ticks" :key="tick.date" class="absolute inset-y-0 w-px" :class="tick.major ? 'bg-[var(--line)]' : 'bg-[color-mix(in_srgb,var(--line)_45%,transparent)]'" :style="{ left: `${offset(tick.date)}%` }" />
-            <span v-if="todayVisible" class="absolute inset-y-0 w-0.5 bg-rose-500/70" :style="{ left: `${offset(today)}%` }" title="Today" />
-          </div>
-
-          <div
-            v-for="{ node, depth, path } in rows"
-            :key="path"
-            class="relative grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center border-b border-[var(--line)] last:border-b-0"
-            :class="depth === 0 ? 'bg-[color-mix(in_srgb,var(--accent)_6%,transparent)]' : ''"
-          >
-            <div class="flex min-w-0 items-center gap-1 py-1.5 pr-2" :style="{ paddingLeft: `${6 + depth * 12}px` }">
-              <button
-                v-if="node.children.length"
-                type="button"
-                class="focus-ring muted grid size-5 shrink-0 place-items-center rounded hover:bg-[var(--panel)]"
-                :aria-label="collapsed.has(path) ? `Show subtickets of #${node.ticketNumber}` : `Hide subtickets of #${node.ticketNumber}`"
-                :aria-expanded="!collapsed.has(path)"
-                @click="toggle(path)"
-              >
-                <component :is="collapsed.has(path) ? ChevronRight : ChevronDown" :size="13" />
-              </button>
-              <span v-else class="size-5 shrink-0" />
-              <TicketTypeBadge v-if="node.type" :type="node.type" size="sm" />
-              <div class="min-w-0 flex-1">
-                <NuxtLink
-                  v-if="node.readable && depth > 0"
-                  :to="hrefOf(node)"
-                  class="focus-ring flex min-w-0 items-baseline gap-1.5 rounded text-xs font-semibold hover:text-[var(--accent)]"
-                  :title="`Open #${node.ticketNumber}`"
-                >
-                  <span class="muted shrink-0 tabular-nums">#{{ node.ticketNumber }}</span>
-                  <span class="truncate" :class="node.done ? 'muted line-through' : ''">{{ node.title }}</span>
-                </NuxtLink>
-                <span v-else class="flex min-w-0 items-baseline gap-1.5 text-xs font-semibold">
-                  <span class="muted shrink-0 tabular-nums">#{{ node.ticketNumber }}</span>
-                  <span class="truncate">{{ node.title }}</span>
-                  <EyeOff v-if="!node.readable" :size="11" class="muted shrink-0 self-center" aria-label="On a board you cannot open" />
-                </span>
-                <span class="muted block truncate text-[10px]">{{ node.boardName }} · {{ node.laneName }}</span>
-              </div>
-            </div>
-
-            <div class="relative h-9" :title="`#${node.ticketNumber} · ${spanLabel(node)} · ${node.laneName}`">
-              <template v-if="spanOf(node)">
-                <Diamond
-                  v-if="isMilestone(node)"
-                  :size="14"
-                  class="absolute top-1/2 -translate-x-1/2 -translate-y-1/2"
-                  :class="node.done ? 'fill-emerald-500 text-emerald-500' : 'fill-[var(--accent)] text-[var(--accent)]'"
-                  :style="{ left: `${(offset(spanOf(node)!.start) + offset(spanOf(node)!.end, true)) / 2}%` }"
-                />
-                <span
-                  v-else
-                  class="absolute top-1/2 h-3.5 -translate-y-1/2 rounded-full"
-                  :class="barClass(node)"
-                  :style="{ left: `${offset(spanOf(node)!.start)}%`, width: `${Math.max(0.8, offset(spanOf(node)!.end, true) - offset(spanOf(node)!.start))}%` }"
-                />
-              </template>
-              <span v-else class="muted absolute inset-0 flex items-center px-2 text-[10px] italic">No dates</span>
-            </div>
-          </div>
-        </div>
-      </div>
+      <TimelineChart :timeline="timeline" :warned="warned" :collapsed="collapsed" @toggle="toggle" />
     </template>
+
+    <DialogRoot v-model:open="expanded">
+      <DialogPortal>
+        <DialogOverlay class="ui-dialog-overlay fixed inset-0 z-[60] bg-black/40 backdrop-blur-[2px]" />
+        <DialogContent
+          v-if="timeline"
+          class="ui-dialog-content surface fixed inset-2 z-[61] flex flex-col overflow-hidden rounded-2xl shadow-2xl sm:inset-4"
+        >
+          <header class="flex items-center gap-3 border-b border-[var(--line)] px-4 py-3 sm:px-6">
+            <ChartGantt :size="18" class="shrink-0 text-[var(--accent)]" aria-hidden="true" />
+            <div class="min-w-0 flex-1">
+              <DialogTitle class="truncate text-base font-bold">
+                <span class="muted tabular-nums">#{{ timeline.ticketNumber }}</span> {{ timeline.title }}
+              </DialogTitle>
+              <DialogDescription class="muted truncate text-xs">
+                Timeline<template v-if="rangeText"> · {{ rangeText }}</template> · {{ timeline.boardName }} · {{ timeline.laneName }}
+              </DialogDescription>
+            </div>
+            <LoaderCircle v-if="loading" :size="15" class="muted animate-spin" aria-label="Loading" />
+            <button
+              type="button"
+              class="focus-ring flex h-9 shrink-0 items-center gap-2 rounded-xl border border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]"
+              title="Back to the ticket · Esc"
+              @click="expanded = false"
+            >
+              <Minimize2 :size="15" /> <span class="hidden sm:inline">Close full screen</span>
+            </button>
+          </header>
+          <div class="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 sm:p-6">
+            <ul v-if="warnings.length" class="space-y-1 rounded-xl bg-orange-400/10 p-3 text-sm text-orange-800 dark:text-orange-200">
+              <li v-for="warning in warnings" :key="`${warning.kind}-${warning.ticketId}`" class="flex items-start gap-2">
+                <TriangleAlert :size="15" class="mt-0.5 shrink-0" aria-hidden="true" /> <span>{{ warning.message }}</span>
+              </li>
+            </ul>
+            <TimelineChart :timeline="timeline" :warned="warned" :collapsed="collapsed" size="full" @toggle="toggle" />
+          </div>
+        </DialogContent>
+      </DialogPortal>
+    </DialogRoot>
   </section>
 </template>
