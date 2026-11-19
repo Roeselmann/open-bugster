@@ -189,7 +189,7 @@ describe('the MCP tool surface', () => {
       expect(found.total).toBe(1)
       const entry = found.tickets[0]
       expect(Object.keys(entry).sort()).toEqual(
-        ['assignee', 'boardId', 'category', 'commentCount', 'dueDate', 'id', 'labels', 'laneId', 'number', 'priority', 'progress', 'title', 'type']
+        ['assignee', 'boardId', 'category', 'commentCount', 'dueDate', 'id', 'labels', 'laneId', 'number', 'priority', 'progress', 'startDate', 'title', 'type']
       )
       // The three fields that make a list expensive are exactly the ones left out.
       expect(entry).not.toHaveProperty('description')

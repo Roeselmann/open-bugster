@@ -4,7 +4,7 @@ import { boardMemberIds, boardViewer, requireBoardAccess, requireTicketAccess } 
 import type { Actor } from '../utils/actor'
 import {
   archiveTicket, createSubticket, createTicket, listActivity, listDueTickets, listBoardActivity, listTickets, listTicketsPage,
-  findBoard, listBoards, moveTicket, searchSubticketCandidates, personById, restoreTicket, subticketIdsOf, ticketIdByNumber, ticketTypeBelongsToBoard, transferTicket, updateTicket
+  findBoard, listBoards, moveTicket, searchSubticketCandidates, personById, restoreTicket, subticketIdsOf, ticketIdByNumber, ticketTimeline, ticketTypeBelongsToBoard, transferTicket, updateTicket
 } from '../utils/db'
 import { importedTicketUpdateSchema, subticketCreateSchema, ticketCreateSchema, ticketMoveSchema, ticketTransferSchema, ticketUpdateSchema } from '../utils/validation'
 import { deleteLinkThumbnails } from '../utils/link-preview'
@@ -121,6 +121,7 @@ export const ticketCreate = defineOperation({
       throw createError({ statusCode: 422, statusMessage: 'A ticket can only be assigned to a member of this board.' })
     }
     if (rest.typeId && !ticketTypeBelongsToBoard(rest.typeId, boardId)) throw foreignType()
+    checkSpan(rest.startDate ?? null, rest.dueDate ?? null)
     checkNewSubtickets(ctx.actor, boardId, null, new Set(), rest.todos)
     // The author answers for the ticket, the actor for the write. Identical from the browser,
     // and different the moment a service identity files on somebody's behalf.
@@ -129,6 +130,13 @@ export const ticketCreate = defineOperation({
     return { ticket }
   }
 })
+
+/** A start after the due date would draw a bar backwards; either one alone is fine. Both are YYYY-MM-DD, so they compare as text. */
+function checkSpan(startDate: string | null, dueDate: string | null) {
+  if (startDate && dueDate && startDate > dueDate) {
+    throw createError({ statusCode: 422, statusMessage: 'The start date cannot be after the due date.' })
+  }
+}
 
 export const ticketUpdate = defineOperation({
   name: 'ticket.update',
@@ -150,6 +158,10 @@ export const ticketUpdate = defineOperation({
     // Both checks only bite when the value actually moves. A ticket may well already name
     // somebody who has since been removed from the board — or anonymized — and editing its
     // title should not be blocked on that.
+    // The span is checked as it will stand: a new start against the due date already set, and so on.
+    if ('startDate' in fields || 'dueDate' in fields) {
+      checkSpan(fields.startDate === undefined ? ticket.startDate : fields.startDate, fields.dueDate === undefined ? ticket.dueDate : fields.dueDate)
+    }
     const members = boardMemberIds(ticket.boardId)
     if (fields.assigneeId && fields.assigneeId !== ticket.assignee?.id && !members.has(fields.assigneeId)) {
       throw createError({ statusCode: 422, statusMessage: 'A ticket can only be assigned to a member of this board.' })
@@ -232,6 +244,20 @@ export const ticketSubticketCandidates = defineOperation({
     const exclude = new Set([parent.id, ...subticketIdsOf(parent.id)])
     return { candidates: searchSubticketCandidates(boardIds, input.query, exclude, input.limit) }
   }
+})
+
+/**
+ * The ticket and its open subtickets as a tree, with each one's span and status: what a
+ * timeline draws. A subticket on a board the caller cannot read is listed, as the to-do list
+ * already shows it, but not opened up.
+ */
+export const ticketTimelineGet = defineOperation({
+  name: 'ticket.timeline.get',
+  summary: 'Read a ticket and its subtickets as a timeline',
+  input: z.object({ ticketId }),
+  requires: { scope: 'ticket', role: 'viewer', ticketId: input => input.ticketId },
+  audit: false,
+  run: ctx => ({ timeline: orNotFound(ticketTimeline(ctx.ticket!.id, boardId => readable(ctx.actor, boardId)), 'Ticket') })
 })
 
 function readable(actor: Actor, boardId: string) {

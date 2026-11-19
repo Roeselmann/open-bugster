@@ -126,6 +126,56 @@ describe('the operation registry', () => {
       db.deleteBoard(other.id)
     })
 
+    it('keeps a start date beside the due date, never after it', async () => {
+      type Result = { ticket: { id: string; startDate: string | null; dueDate: string | null } }
+      const { ticket } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Spans days', laneId, startDate: '2026-03-03', dueDate: '2026-03-14' }) as Result
+      expect(ticket).toMatchObject({ startDate: '2026-03-03', dueDate: '2026-03-14' })
+      expect(await statusOf(ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Backwards', laneId, startDate: '2026-03-15', dueDate: '2026-03-14' }))).toBe(422)
+      // Checked as the span will stand: a new start against the due date already set.
+      expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, startDate: '2026-03-20' }))).toBe(422)
+      expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, dueDate: '2026-03-01' }))).toBe(422)
+      // Moving both together is fine, and so is a milestone: start and due on the same day.
+      const moved = await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, startDate: '2026-03-20', dueDate: '2026-03-20' }) as Result
+      expect(moved.ticket).toMatchObject({ startDate: '2026-03-20', dueDate: '2026-03-20' })
+      const cleared = await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, startDate: null }) as Result
+      expect(cleared.ticket.startDate).toBeNull()
+      expect(db.listActivity(ticket.id).filter(entry => entry.kind === 'start_date').map(entry => entry.payload.to)).toEqual([null, '2026-03-20'])
+    })
+
+    it('reads a ticket and its subtickets down through theirs as a timeline', async () => {
+      type Node = { ticketNumber: number; title: string; startDate: string | null; readable: boolean; children: Node[] }
+      const design = db.createBoard('Production')
+      const review = db.createBoard('Review')
+      db.setBoardMember(design.id, people.editor!, 'editor', false)
+      db.setBoardMember(review.id, people.editor!, 'editor', false)
+      const firstLane = (id: string) => db.findBoardSummary(id)!.lanes.find(lane => !lane.isImport)!.id
+      const plan = db.createTicket(boardId, { title: 'Launch plan', startDate: '2026-03-01', dueDate: '2026-04-30' })!
+      const asset = db.createSubticket(plan.id, { boardId: design.id, laneId: firstLane(design.id), title: 'Email' }, null)!.subticket
+      const fragment = db.createSubticket(asset.id, { boardId: design.id, laneId: firstLane(design.id), title: 'Fragment' }, null)!.subticket
+      const check = db.createSubticket(fragment.id, { boardId: review.id, laneId: firstLane(review.id), title: 'MLR' }, null)!.subticket
+      db.createSubticket(check.id, { boardId: review.id, laneId: firstLane(review.id), title: 'Second round' }, null)
+      db.updateTicket(asset.id, { startDate: '2026-03-10', dueDate: '2026-05-04' })
+      const archived = db.createSubticket(plan.id, { boardId, laneId, title: 'Dropped' }, null)!.subticket
+      db.archiveTicket(archived.id)
+
+      const read = async () => (await ops.run(ops.ticketTimelineGet, actorOf('editor'), { ticketId: plan.id }) as { timeline: Node }).timeline
+      const tree = await read()
+      expect(tree.title).toBe('Launch plan')
+      expect(tree.children.map(node => node.title)).toEqual(['Email'])
+      expect(tree.children[0]!.children[0]!.children[0]!.children[0]!.title).toBe('Second round')
+
+      // A board out of reach still shows its ticket, as the to-do list does, but not below it.
+      db.removeBoardMember(review.id, people.editor!)
+      const partial = await read()
+      const hidden = partial.children[0]!.children[0]!.children[0]!
+      expect(hidden).toMatchObject({ title: 'MLR', readable: false, children: [] })
+
+      const { timelineWarnings } = await import('../shared/utils/timeline')
+      expect(timelineWarnings(tree as never, '2026-03-05').map(warning => warning.kind)).toEqual(['ends_after_plan'])
+      db.deleteBoard(design.id)
+      db.deleteBoard(review.id)
+    })
+
     it('files a subticket on another board of the workspace and ticks it from its lane', async () => {
       type Todo = { text: string; completed: boolean; subticketId: string | null; subticket: { ticketNumber: number; boardName: string; laneName: string; done: boolean } | null }
       type Result = { ticket: { id: string; todos: Todo[] }; subticket: { id: string; boardId: string; laneId: string; ticketNumber: number } }

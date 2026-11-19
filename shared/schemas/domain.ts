@@ -7,7 +7,7 @@ import {
 import type {
   AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardSummary, Category,
   CategorySummary, JiraIntegration, JiraIssue, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket,
-  SubticketRef, TicketActivityEntry, TicketComment, TicketTodo, TicketType, TicketTypeIcon, TicketTypeIconRef, TicketTypeRef, TicketTypeSummary,
+  SubticketRef, TimelineNode, TicketActivityEntry, TicketComment, TicketTodo, TicketType, TicketTypeIcon, TicketTypeIconRef, TicketTypeRef, TicketTypeSummary,
   Workspace, WorkspaceMember, WorkspaceSummary
 } from '../types/domain'
 
@@ -99,6 +99,23 @@ export const subticketRefSchema = z.object({
   archived: z.boolean()
 })
 
+export const timelineNodeSchema = z.object({
+  id: z.string(),
+  ticketNumber: z.number().int(),
+  title: z.string(),
+  boardId: z.string(),
+  boardName: z.string(),
+  laneName: z.string(),
+  done: z.boolean().describe('Whether it sits in a done lane of its board.'),
+  type: ticketTypeRefSchema.nullable(),
+  startDate: z.string().nullable(),
+  dueDate: z.string().nullable(),
+  readable: z.boolean().describe('False for a ticket on a board the caller cannot read: listed, but its own subtickets are left out.'),
+  get children(): z.ZodArray<typeof timelineNodeSchema> {
+    return z.array(timelineNodeSchema)
+  }
+}).describe('A ticket on a timeline, with the open subtickets below it.')
+
 export const ticketTodoSchema = z.object({
   id: z.string(),
   text: z.string().describe('For a subticket, its title.'),
@@ -161,6 +178,7 @@ export const ticketSchema = z.object({
   description: z.string(),
   position: z.number().int(),
   priority: z.enum(ticketPriorities),
+  startDate: z.string().nullable().describe('The day work starts, YYYY-MM-DD. With `dueDate` it spans the ticket on a timeline; never after it.'),
   dueDate: z.string().nullable(),
   buildNumber: z.string().nullable(),
   link: z.string().nullable().describe('The first of `links`, kept for callers from the time a ticket had only one.'),
@@ -395,6 +413,7 @@ export type SchemasMatchDomain = [
   Expect<Equal<z.infer<typeof ticketTypeIconSchema>, TicketTypeIcon>>,
   Expect<Equal<z.infer<typeof ticketTypeSchema>, TicketType>>,
   Expect<Equal<z.infer<typeof ticketTypeSummarySchema>, TicketTypeSummary>>,
+  Expect<Equal<z.infer<typeof timelineNodeSchema>, TimelineNode>>,
   Expect<Equal<z.infer<typeof ticketTypeIconRefSchema>, TicketTypeIconRef>>,
   Expect<Equal<z.infer<typeof ticketTypeRefSchema>, TicketTypeRef>>,
   Expect<Equal<z.infer<typeof attachmentSchema>, Attachment>>,

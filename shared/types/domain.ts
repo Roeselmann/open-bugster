@@ -207,7 +207,7 @@ export interface TicketComment {
   updatedAt: string
 }
 
-export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'due_date', 'type', 'archived', 'restored', 'commented', 'subticket'] as const
+export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'start_date', 'due_date', 'type', 'archived', 'restored', 'commented', 'subticket'] as const
 export type ActivityKind = typeof activityKinds[number]
 
 /** How a change reached the server. Everything written before agents existed reads `web`. */
@@ -402,6 +402,28 @@ export interface SubticketRef {
   archived: boolean
 }
 
+/**
+ * One ticket on a timeline: its span and status, and the subtickets below it. A ticket on a
+ * board the caller cannot read stays in the tree, as its parent's to-do list already names
+ * it, but is not opened up: its own subtickets are left out.
+ */
+export interface TimelineNode {
+  id: string
+  ticketNumber: number
+  title: string
+  boardId: string
+  boardName: string
+  laneName: string
+  /** Whether it sits in a done lane of its board. */
+  done: boolean
+  type: TicketTypeRef | null
+  startDate: string | null
+  dueDate: string | null
+  readable: boolean
+  /** Its open subtickets, in to-do order. A subticket held by two parents shows under both. */
+  children: TimelineNode[]
+}
+
 /** How a link shows on its ticket: as a card with a thumbnail, or as the bare address. */
 export const linkDisplays = ['preview', 'text'] as const
 export type LinkDisplay = typeof linkDisplays[number]
@@ -439,6 +461,8 @@ export interface TicketPatch {
   title?: string
   description?: string
   priority?: TicketPriority
+  /** The day work starts, YYYY-MM-DD; never after `dueDate`. */
+  startDate?: string | null
   dueDate?: string | null
   buildNumber?: string | null
   /** The whole list, in order; it replaces what the ticket had. */
@@ -525,6 +549,8 @@ export interface Ticket {
   description: string
   position: number
   priority: TicketPriority
+  /** The day work starts; with `dueDate` the ticket's span. Equal to it: a milestone. */
+  startDate: string | null
   dueDate: string | null
   buildNumber: string | null
   /** The first of `links`, kept for callers from the time a ticket had only one. */

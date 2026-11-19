@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, Check, CircleAlert, CircleCheck, Circle, CornerDownRight, Download, ExternalLink, FileText, GripVertical, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, CalendarArrowUp, Check, CircleAlert, CircleCheck, Circle, CornerDownRight, Download, ExternalLink, FileText, GripVertical, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogContent,
   DialogDescription,
@@ -37,7 +37,7 @@ const emit = defineEmits<{
   createSubticket: [ticket: Ticket, input: { boardId: string; laneId: string; title: string; description: string }, done: (ok: boolean) => void]
 }>()
 
-const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, dueDate: '', buildNumber: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '', typeId: 'none', laneId: '', placement: 'bottom' as 'top' | 'bottom' })
+const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, startDate: '', dueDate: '', buildNumber: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '', typeId: 'none', laneId: '', placement: 'bottom' as 'top' | 'bottom' })
 // Lit the same way as the card, and follows the field while it is being changed.
 const today = boardToday()
 const inDoneLane = computed(() => {
@@ -100,7 +100,7 @@ const hasUnsavedWork = computed(() => {
   const ticket = props.ticket
   if (ticket) return props.canEdit && (form.title.trim() !== ticket.title.trim() || form.description !== (ticket.description || ''))
   return Boolean(form.title.trim() || form.description.trim() || todos.value.some(todo => todo.text.trim()) || pendingFiles.value.length
-    || form.labels.length || form.categoryName.trim() || links.value.length || form.buildNumber.trim() || form.dueDate)
+    || form.labels.length || form.categoryName.trim() || links.value.length || form.buildNumber.trim() || form.startDate || form.dueDate)
 })
 const discardOpen = ref(false)
 function requestClose() {
@@ -379,6 +379,7 @@ watch(() => props.ticket, (ticket, previous) => {
     editingDescription.value = !savedDescription.trim()
   }
   form.priority = ticket?.priority || 'medium'
+  form.startDate = ticket?.startDate || ''
   form.dueDate = ticket?.dueDate || ''
   form.buildNumber = ticket?.buildNumber || ''
   links.value = (ticket?.links || []).map(link => ({ url: link.url, display: link.display }))
@@ -411,6 +412,7 @@ const payload = {
   assigneeId: () => form.assigneeId === UNASSIGNED ? null : form.assigneeId,
   authorId: () => form.authorId === UNASSIGNED ? null : form.authorId,
   typeId: () => form.typeId === NO_TYPE ? null : form.typeId,
+  startDate: () => form.startDate || null,
   dueDate: () => form.dueDate || null,
   buildNumber: () => form.buildNumber.trim() || null,
   categoryName: () => form.categoryName.trim() || null,
@@ -430,6 +432,13 @@ function savedTodoList(ticket: Ticket | null | undefined): TicketTodoInput[] {
 }
 const light = computed(() => todoLight(todos.value))
 
+const hasSubtickets = computed(() => Boolean(props.ticket?.todos.some(todo => todo.subticketId)))
+// Whatever the editor learns about the ticket and its subtickets asks the timeline to read again.
+const timelineKey = computed(() => {
+  const ticket = props.ticket
+  if (!ticket) return ''
+  return [ticket.updatedAt, ticket.startDate, ticket.dueDate, ...ticket.todos.map(todo => `${todo.subticketId}:${todo.subticket?.laneId}:${todo.subticket?.title}`)].join('|')
+})
 const subticketOpen = ref(false)
 const subticketPending = ref(false)
 const canAddSubticket = computed(() => Boolean(props.ticket && props.canEdit && props.subticketBoards.length))
@@ -460,6 +469,19 @@ function createSubticket(input: { boardId: string; laneId: string; title: string
  */
 function commit(changes: TicketPatch) {
   if (props.ticket && props.canEdit) emit('patch', props.ticket, changes)
+}
+
+/**
+ * A start past the due date (or a due date before the start) drags the other one along
+ * rather than being refused: the span stays whole, and both go out in one save.
+ */
+function commitSpan(changed: 'startDate' | 'dueDate') {
+  if (form.startDate && form.dueDate && form.startDate > form.dueDate) {
+    if (changed === 'startDate') form.dueDate = form.startDate
+    else form.startDate = form.dueDate
+    return commit({ startDate: payload.startDate(), dueDate: payload.dueDate() })
+  }
+  commit(changed === 'startDate' ? { startDate: payload.startDate() } : { dueDate: payload.dueDate() })
 }
 
 // Text inputs save when they are left. Leaving one untouched must not cost a request (and an
@@ -511,7 +533,7 @@ function submit(options: { stayOpen?: boolean } = {}) {
   const manualFields = isManual.value ? { buildNumber: payload.buildNumber() } : {}
   // Sent only by somebody allowed to set it — the API rejects it from anyone else.
   const authorFields = canAttribute.value ? { authorId: payload.authorId() } : {}
-  emit('save', { ...shared, ...manualFields, ...authorFields, laneId: form.laneId || undefined, placement: form.placement, title: form.title.trim(), description: form.description, priority: form.priority, dueDate: payload.dueDate(), links: [...links.value], labels: payload.labels(), categoryName: payload.categoryName(), typeId: payload.typeId(), stayOpen: options.stayOpen === true })
+  emit('save', { ...shared, ...manualFields, ...authorFields, laneId: form.laneId || undefined, placement: form.placement, title: form.title.trim(), description: form.description, priority: form.priority, startDate: payload.startDate(), dueDate: payload.dueDate(), links: [...links.value], labels: payload.labels(), categoryName: payload.categoryName(), typeId: payload.typeId(), stayOpen: options.stayOpen === true })
 }
 
 // Links save as soon as one is added, removed or switched between preview and text.
@@ -999,6 +1021,8 @@ function focusTitle(event: Event) {
               </div>
             </section>
 
+            <!-- Only once there is a plan to draw: a ticket that bundles subtickets. -->
+            <TicketTimeline v-if="ticket && hasSubtickets" :ticket-id="ticket.id" :refresh-key="timelineKey" />
 
             <div class="grid gap-4 border-t border-[var(--line)] pt-6" :class="ticket ? '' : 'sm:grid-cols-2'">
               <div class="block">
@@ -1060,7 +1084,7 @@ function focusTitle(event: Event) {
               </div>
             </div>
 
-            <div class="grid gap-4 sm:grid-cols-2">
+            <div class="grid gap-4 sm:grid-cols-3">
               <div class="block">
                 <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Priority</span>
                 <UiSelect
@@ -1071,6 +1095,18 @@ function focusTitle(event: Event) {
                   @update:model-value="form.priority = $event as TicketPriority; commit({ priority: form.priority })"
                 />
               </div>
+              <label class="block">
+                <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><CalendarArrowUp :size="14" /> Start date</span>
+                <!-- With the due date it spans the ticket on a timeline; the same day makes a milestone. -->
+                <input
+                  v-model="form.startDate"
+                  type="date"
+                  class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
+                  :max="form.dueDate || undefined"
+                  :readonly="!canEdit"
+                  @change="commitSpan('startDate')"
+                >
+              </label>
               <label class="block">
                 <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]">
                   <Calendar :size="14" /> Due date
@@ -1085,8 +1121,9 @@ function focusTitle(event: Event) {
                   type="date"
                   class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
                   :class="dueState === 'alert' ? 'ring-2 ring-rose-600' : dueState === 'warning' ? 'ring-2 ring-orange-400' : ''"
+                  :min="form.startDate || undefined"
                   :readonly="!canEdit"
-                  @change="commit({ dueDate: payload.dueDate() })"
+                  @change="commitSpan('dueDate')"
                 >
               </label>
             </div>

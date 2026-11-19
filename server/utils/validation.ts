@@ -32,6 +32,7 @@ const ticketShape = {
   description: z.string().max(10000),
   priority: z.enum(['low', 'medium', 'high', 'urgent']),
   assigneeId: idSchema.nullable(),
+  startDate: z.iso.date().nullable(),
   dueDate: z.iso.date().nullable(),
   buildNumber: z.string().trim().max(100).nullable(),
   /** The first link, for callers that know only one. A web address or nothing; an empty string reads as nothing. */
@@ -53,6 +54,7 @@ export const ticketCreateSchema = z.object({
   description: ticketShape.description.default(''),
   priority: ticketShape.priority.default('medium'),
   assigneeId: ticketShape.assigneeId.optional(),
+  startDate: ticketShape.startDate.optional(),
   dueDate: ticketShape.dueDate.optional(),
   buildNumber: ticketShape.buildNumber.optional(),
   link: ticketShape.link.optional(),

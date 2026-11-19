@@ -57,13 +57,22 @@ const dueState = computed(() => (inDoneLane.value ? 'none' : dueLevel(props.tick
 // The due date sits in the footer, left of the assignee; its colour follows the border's warning level.
 // Far-off dates and finished work read better as a date than as a count of days.
 const dueDayFormatter = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+const dayOf = (date: string) => dueDayFormatter.format(new Date(`${date}T00:00:00Z`))
+// With a start as well the card reads as a span, "3 Mar – 14 Mar", until the countdown matters more.
 const dueText = computed(() => {
-  const dueDate = props.ticket.dueDate
-  if (!dueDate) return null
+  const { startDate, dueDate } = props.ticket
+  if (!dueDate) return startDate ? `Starts ${dayOf(startDate)}` : null
   const days = daysUntil(dueDate, today)
   if (days === null) return null
-  if (inDoneLane.value || days > 30) return `Due ${dueDayFormatter.format(new Date(`${dueDate}T00:00:00Z`))}`
+  const span = startDate && startDate !== dueDate ? `${dayOf(startDate)} – ${dayOf(dueDate)}` : null
+  if (inDoneLane.value || days > 30) return span ?? `Due ${dayOf(dueDate)}`
+  if (span && dueState.value === 'none') return span
   return dueDescription(dueDate, today)
+})
+const dueTitle = computed(() => {
+  const { startDate, dueDate } = props.ticket
+  if (startDate && dueDate) return startDate === dueDate ? `Milestone ${dueDate}` : `${startDate} to ${dueDate}`
+  return startDate ? `Starts ${startDate}` : `Due ${dueDate}`
 })
 
 // The pictures ticked in the editor, or one picked by default (see `cardImages`). A link
@@ -255,7 +264,7 @@ const reorderButtons = computed(() => [
               :class="dueState === 'alert' ? 'bg-rose-600 text-white'
                 : dueState === 'warning' ? 'bg-orange-400/20 text-orange-700 dark:text-orange-300'
                   : 'bg-[var(--panel)]'"
-              :title="`Due ${ticket.dueDate}`"
+              :title="dueTitle"
             ><AlarmClock :size="12" class="shrink-0" aria-hidden="true" /> <span class="truncate">{{ dueText }}</span></span>
             <span class="ml-auto flex shrink-0 items-center gap-2">
               <UiAvatar v-if="ticket.assignee" :person="ticket.assignee" size="sm" :muted="ticket.assignee.status !== 'active'" />

@@ -4,7 +4,7 @@ import type { AnyOperation } from '~~/server/operations'
 import {
   boardSummarySchema, categorySummarySchema, laneSummarySchema, labelSummarySchema,
   attachmentSchema, boardMemberSchema, personSchema, syncRunSchema, ticketActivitySchema,
-  subticketRefSchema, ticketCommentSchema, ticketSchema, ticketTypeSummarySchema, workspaceSummarySchema
+  subticketRefSchema, ticketCommentSchema, ticketSchema, ticketTypeSummarySchema, timelineNodeSchema, workspaceSummarySchema
 } from '~~/shared/schemas/domain'
 
 export interface V1Route {
@@ -80,6 +80,7 @@ export const v1Routes: readonly V1Route[] = [
   { method: 'PATCH', path: '/tickets/{ticketId}', operation: ops.ticketUpdate, response: z.object({ ticket: ticketSchema }) },
   { method: 'POST', path: '/tickets/{ticketId}/move', operation: ops.ticketMove, response: z.object({ ticket: ticketSchema }) },
   { method: 'POST', path: '/tickets/{ticketId}/transfer', operation: ops.ticketTransfer, response: z.object({ ticket: ticketSchema, assigneeCleared: z.boolean().describe('True when the assignee was no member of the destination board and was dropped.') }) },
+  { method: 'GET', path: '/tickets/{ticketId}/timeline', operation: ops.ticketTimelineGet, response: z.object({ timeline: timelineNodeSchema }) },
   { method: 'GET', path: '/tickets/{ticketId}/subticket-candidates', operation: ops.ticketSubticketCandidates, response: z.object({ candidates: z.array(subticketRefSchema).describe('Open tickets of the workspace that could be linked: send one back in the to-do list with its id as `subticketId`.') }) },
   { method: 'POST', path: '/tickets/{ticketId}/subtickets', operation: ops.ticketSubticketCreate, status: 201, response: z.object({ ticket: ticketSchema.describe('The parent, with the new subticket at the end of its to-do list.'), subticket: ticketSchema }) },
   { method: 'POST', path: '/tickets/{ticketId}/archive', operation: ops.ticketArchive, response: z.object({ ticket: ticketSchema }) },

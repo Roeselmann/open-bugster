@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import type {
   ActivityKind, AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardRole, BoardSummary, Category, CategoryColor,
   CategorySummary, DueTicket, IntegrationProvider, JiraIntegration, JiraIssue, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
-  LinkDisplay, LinkPreview, TicketLink, TicketLinkInput, TicketPriority, TicketSource, SubticketRef, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary,
+  LinkDisplay, LinkPreview, TicketLink, TicketLinkInput, TicketPriority, TicketSource, SubticketRef, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary, TimelineNode,
   AgentAccess, AgentAccessMode, AgentAccount, AgentGrantRole, UserAccount, UserBoardMembership, UserRole, UserStatus, Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
 } from '../../shared/types/domain'
 import type { Actor, ActorChannel } from './actor'
@@ -350,6 +350,8 @@ export function getDb() {
   ensureUserAvatars(database)
   // After every table it reads from: the view joins boards, users and both kinds of grant.
   ensureAgentGrants(database)
+  // After every rebuild of `tickets`: a plain column the rebuilds above do not know about.
+  ensureTicketStartDate(database)
   // Not in `boardIndexes`: that block also runs inside `ensureBoards`, before an upgrading
   // database has been given the ticket_activity table. Serves the board-wide digest query.
   database.exec('CREATE INDEX IF NOT EXISTS idx_ticket_activity_created ON ticket_activity(created_at DESC)')
@@ -2081,6 +2083,16 @@ export function ensureSyncRunProvider(db: Database.Database) {
  * constraint, so the table is rebuilt from its own stored definition — which keeps every
  * column a later migration added — and its indexes are put back afterwards.
  */
+/**
+ * Gives a ticket a start beside its due date, so it spans days on a timeline rather than
+ * marking one. Existing tickets have none and behave exactly as before.
+ */
+export function ensureTicketStartDate(db: Database.Database) {
+  if (tableColumns(db, 'tickets').has('start_date')) return false
+  db.exec('ALTER TABLE tickets ADD COLUMN start_date TEXT')
+  return true
+}
+
 export function ensureTicketSourceJira(db: Database.Database) {
   const definition = db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'tickets'").get() as { sql: string } | undefined
   if (!definition || definition.sql.includes("'jira_issue'")) return false
@@ -2127,7 +2139,7 @@ type LaneRow = { id: string; board_id: string; name: string; position: number; i
 
 type TicketRow = {
   id: string; ticket_number: number; board_id: string; lane_id: string; title: string; description: string
-  position: number; priority: TicketPriority; due_date: string | null; build_number: string | null; link: string | null; cover_attachment_id: string | null; card_images: string | null
+  position: number; priority: TicketPriority; start_date: string | null; due_date: string | null; build_number: string | null; link: string | null; cover_attachment_id: string | null; card_images: string | null
   source: TicketSource; external_id: string | null; created_at: string; updated_at: string; archived_at: string | null
   category_id: string | null; author_id: string | null; assignee_id: string | null; type_id: string | null
 }
@@ -2526,8 +2538,8 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
       // once — the per-row MAX subquery `createTicket` uses would rescan for every ticket.
       let nextNumber = (db.prepare('SELECT COALESCE(MAX(ticket_number), 0) AS value FROM tickets').get() as { value: number }).value
       const insertTicket = db.prepare(`
-        INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, source, external_id, created_at, updated_at, archived_at, author_id, assignee_id, category_id, type_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, start_date, due_date, build_number, source, external_id, created_at, updated_at, archived_at, author_id, assignee_id, category_id, type_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       const labelsOf = db.prepare('SELECT label_id FROM ticket_labels WHERE ticket_id = ?')
       const attachLabel = db.prepare('INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)')
@@ -2555,7 +2567,7 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
         nextNumber += 1
         insertTicket.run(
           ticketId, nextNumber, id, laneIds.get(ticket.lane_id)!, ticket.title, ticket.description,
-          ticket.position, ticket.priority, ticket.due_date, ticket.build_number, ticket.source,
+          ticket.position, ticket.priority, ticket.start_date, ticket.due_date, ticket.build_number, ticket.source,
           ticket.external_id, ticket.created_at, ticket.updated_at, ticket.archived_at,
           ticket.author_id, ticket.assignee_id, ticket.category_id ? categoryIds.get(ticket.category_id) ?? null : null,
           ticket.type_id
@@ -2979,6 +2991,7 @@ function hydrateTicket(row: TicketRow): Ticket {
     description: row.description,
     position: row.position,
     priority: row.priority,
+    startDate: row.start_date ?? null,
     dueDate: row.due_date,
     buildNumber: row.build_number || feedback?.buildVersion || null,
     link: links[0]?.url ?? null,
@@ -3329,6 +3342,75 @@ function toTicketTodo(todo: TodoRow): TicketTodo {
   }
 }
 
+/** At most this many tickets in one timeline; a subticket under two parents counts twice. */
+const TIMELINE_LIMIT = 500
+
+/**
+ * A ticket and its open subtickets, down through theirs, for a timeline. `canRead` says
+ * which boards the caller may open; a ticket elsewhere is listed but not descended into. A
+ * ticket that turns up again among its own ancestors ends the branch there rather than loop.
+ */
+export function ticketTimeline(rootId: string, canRead: (boardId: string) => boolean): TimelineNode | null {
+  const db = getDb()
+  const readNode = db.prepare(`
+    SELECT t.id, t.ticket_number, t.title, t.board_id, t.type_id, t.start_date, t.due_date, t.archived_at,
+      b.name AS board_name, l.name AS lane_name, l.is_done
+    FROM tickets t JOIN boards b ON b.id = t.board_id JOIN lanes l ON l.id = t.lane_id
+    WHERE t.id = ?
+  `)
+  const readChildren = db.prepare('SELECT subticket_id FROM ticket_todos WHERE ticket_id = ? AND subticket_id IS NOT NULL ORDER BY position')
+  const types = new Map<string, TicketTypeRef | null>()
+  const typeOf = (id: string | null) => {
+    if (!id) return null
+    if (!types.has(id)) {
+      const type = findTicketType(id)
+      types.set(id, type ? toTicketTypeRef(type) : null)
+    }
+    return types.get(id)!
+  }
+  const readable = new Map<string, boolean>()
+  const mayRead = (boardId: string) => {
+    if (!readable.has(boardId)) readable.set(boardId, canRead(boardId))
+    return readable.get(boardId)!
+  }
+  let budget = TIMELINE_LIMIT
+  const build = (id: string, ancestors: Set<string>): TimelineNode | null => {
+    const row = readNode.get(id) as {
+      id: string; ticket_number: number; title: string; board_id: string; type_id: string | null
+      start_date: string | null; due_date: string | null; archived_at: string | null
+      board_name: string; lane_name: string; is_done: number
+    } | undefined
+    if (!row || budget <= 0) return null
+    // Archived subtickets are out of the plan, as they are off the board. The root is shown as asked.
+    if (row.archived_at && ancestors.size) return null
+    budget -= 1
+    const open = mayRead(row.board_id)
+    const node: TimelineNode = {
+      id: row.id,
+      ticketNumber: row.ticket_number,
+      title: row.title,
+      boardId: row.board_id,
+      boardName: row.board_name,
+      laneName: row.lane_name,
+      done: Boolean(row.is_done),
+      type: typeOf(row.type_id),
+      startDate: row.start_date,
+      dueDate: row.due_date,
+      readable: open,
+      children: []
+    }
+    if (!open) return node
+    const path = new Set(ancestors).add(row.id)
+    for (const { subticket_id: childId } of readChildren.all(row.id) as Array<{ subticket_id: string }>) {
+      if (path.has(childId)) continue
+      const child = build(childId, path)
+      if (child) node.children.push(child)
+    }
+    return node
+  }
+  return build(rootId, new Set())
+}
+
 /** The subtickets a ticket's to-do list holds right now, by id. */
 export function subticketIdsOf(ticketId: string): Set<string> {
   const rows = getDb().prepare('SELECT subticket_id FROM ticket_todos WHERE ticket_id = ? AND subticket_id IS NOT NULL').all(ticketId) as Array<{ subticket_id: string }>
@@ -3513,6 +3595,7 @@ export interface TicketInput {
   title: string
   description?: string
   priority?: TicketPriority
+  startDate?: string | null
   dueDate?: string | null
   buildNumber?: string | null
   /** The first of the links, for callers that only know one; `links` wins when both are given. */
@@ -3561,10 +3644,10 @@ export function createTicket(boardId: string, input: TicketInput, author: Person
     const categoryId = resolveCategoryId(boardId, input.categoryName)
     // Appended first either way; a ticket asked to the top is then shuffled with the lane.
     const position = nextPosition(lane.id)
-    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, due_date, build_number, source, created_at, updated_at, author_id, assignee_id, category_id, type_id)
-      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?)`).run(
+    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, start_date, due_date, build_number, source, created_at, updated_at, author_id, assignee_id, category_id, type_id)
+      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?)`).run(
       id, boardId, lane.id, input.title, input.description || '', position, input.priority || 'medium',
-      input.dueDate || null, input.buildNumber || null, now, now,
+      input.startDate || null, input.dueDate || null, input.buildNumber || null, now, now,
       author?.id || null, input.assigneeId || null, categoryId, input.typeId || null
     )
     if (input.placement === 'top') {
@@ -3589,16 +3672,18 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
   if (!existing) return null
   const now = new Date().toISOString()
   const priority = input.priority ?? existing.priority
+  const startDate = input.startDate === undefined ? existing.startDate : input.startDate || null
   const dueDate = input.dueDate === undefined ? existing.dueDate : input.dueDate || null
   const assigneeId = input.assigneeId === undefined ? existing.assignee?.id || null : input.assigneeId || null
   const authorId = input.authorId === undefined ? existing.author?.id || null : input.authorId || null
   const typeId = input.typeId === undefined ? existing.type?.id || null : input.typeId || null
   getDb().transaction(() => {
     const categoryId = input.categoryName === undefined ? existing.category?.id || null : resolveCategoryId(existing.boardId, input.categoryName)
-    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, due_date = ?, build_number = ?, assignee_id = ?, author_id = ?, category_id = ?, type_id = ?, updated_at = ? WHERE id = ?`).run(
+    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, start_date = ?, due_date = ?, build_number = ?, assignee_id = ?, author_id = ?, category_id = ?, type_id = ?, updated_at = ? WHERE id = ?`).run(
       input.title ?? existing.title,
       input.description ?? existing.description,
       priority,
+      startDate,
       dueDate,
       input.buildNumber === undefined ? (existing.source === 'manual' ? existing.buildNumber : null) : input.buildNumber || null,
       assigneeId,
@@ -3623,6 +3708,7 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
     const links = input.links ?? (input.link === undefined ? undefined : linksWithFirst(existing.links, input.link))
     if (links) removedThumbnails.push(...setTicketLinks(id, links))
     if (priority !== existing.priority) recordActivity(id, actor, 'priority', { from: existing.priority, to: priority })
+    if (startDate !== existing.startDate) recordActivity(id, actor, 'start_date', { from: existing.startDate, to: startDate })
     if (dueDate !== existing.dueDate) recordActivity(id, actor, 'due_date', { from: existing.dueDate, to: dueDate })
     if (assigneeId !== (existing.assignee?.id || null)) {
       recordActivity(id, actor, assigneeId ? 'assigned' : 'unassigned', { from: existing.assignee?.id || null, to: assigneeId })

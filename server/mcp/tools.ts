@@ -8,7 +8,9 @@ import { resolveAttachmentFile } from '~~/server/utils/attachment-file'
 import { DEFAULT_PREVIEW_DIMENSION, imagePreview } from '~~/server/utils/image-preview'
 import { isServiceIdentity, parentTicketIdsOf, principalDescription } from '~~/server/utils/db'
 import { todoLight } from '~~/shared/utils/todo-progress'
-import type { BoardSummary, LaneSummary, Ticket, TicketTodo, TicketActivityEntry, TicketComment, TicketTypeSummary, WorkspaceSummary } from '~~/shared/types/domain'
+import { boardToday } from '~~/shared/utils/due-date'
+import { timelineBounds, timelineWarnings } from '~~/shared/utils/timeline'
+import type { BoardSummary, LaneSummary, TimelineNode, Ticket, TicketTodo, TicketActivityEntry, TicketComment, TicketTypeSummary, WorkspaceSummary } from '~~/shared/types/domain'
 
 /**
  * The agent-facing surface.
@@ -34,9 +36,30 @@ function slim(ticket: Ticket) {
     labels: ticket.labels.map(label => label.name),
     category: ticket.category?.name ?? null,
     type: ticket.type?.name ?? null,
+    startDate: ticket.startDate,
     dueDate: ticket.dueDate,
     commentCount: ticket.commentCount,
     progress: progressOf(ticket.todos)
+  }
+}
+
+/**
+ * A timeline as an agent reads it: the tree with each ticket's place and dates, nothing more.
+ * `readable` shows up only where it is false, the rare case worth pointing out.
+ */
+function timelineOf(node: TimelineNode): Record<string, unknown> {
+  return {
+    id: node.id,
+    number: node.ticketNumber,
+    title: node.title,
+    type: node.type?.name ?? null,
+    board: node.boardName,
+    lane: node.laneName,
+    done: node.done,
+    startDate: node.startDate,
+    dueDate: node.dueDate,
+    ...(node.readable ? {} : { readable: false }),
+    ...(node.children.length ? { subtickets: node.children.map(timelineOf) } : {})
   }
 }
 
@@ -264,14 +287,20 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       + 'so prefer search_tickets when scanning. '
       + 'A to-do with a subticketId is a subticket: a ticket of its own, maybe on another board of '
       + 'the workspace, whose `completed` follows its lane — it is done once it sits in a lane with '
-      + 'isDone. `parents` lists the tickets that hold this one as a subticket; `progress` sums up the list.',
+      + 'isDone. `parents` lists the tickets that hold this one as a subticket; `progress` sums up the list. '
+      + 'With timeline: true it adds `timeline`, the plan below the ticket: every subticket down through '
+      + 'theirs, with board, lane, start and due date, plus `warnings` for open tickets past their due '
+      + 'date and subtickets that start before or end after this ticket\'s own window. Use it when the question '
+      + 'is how a campaign or any other bundle of work stands, rather than reading each subticket.',
     annotations: readsOnly,
     inputSchema: {
       ticketId: z.string().optional().describe('From search_tickets. Give this or ticketNumber.'),
       ticketNumber: z.number().int().positive().optional()
-        .describe('The number a ticket is referred to by — the `number` field of a search result. Unique across the instance, so it names a ticket on its own.')
+        .describe('The number a ticket is referred to by — the `number` field of a search result. Unique across the instance, so it names a ticket on its own.'),
+      timeline: z.boolean().optional()
+        .describe('Also return the whole subticket tree with dates and the warnings on it. A subticket on a board this token cannot read appears with readable: false and without its own subtickets.')
     }
-  }, async ({ ticketId, ticketNumber }) => {
+  }, async ({ ticketId, ticketNumber, timeline: withTimeline }) => {
     if (!ticketId && ticketNumber === undefined) {
       throw createError({ statusCode: 400, statusMessage: 'Give either ticketId or ticketNumber.' })
     }
@@ -286,6 +315,7 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       call<{ activity: TicketActivityEntry[] }>(ops.ticketActivity, { ticketId: ticket.id }),
       readableParents(ticket.id)
     ])
+    const plan = withTimeline ? (await call<{ timeline: TimelineNode }>(ops.ticketTimelineGet, { ticketId: ticket.id })).timeline : null
     return reply({
       ...slim(ticket),
       boardId: ticket.boardId,
@@ -338,7 +368,8 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
         // The provenance the audit layer records, so a model can see what an agent did before.
         via: entry.agentId,
         at: entry.createdAt
-      }))
+      })),
+      ...(plan ? { timeline: { covers: timelineBounds(plan), warnings: timelineWarnings(plan, boardToday()).map(warning => warning.message), subtickets: plan.children.map(timelineOf) } } : {})
     })
   })
 
@@ -392,7 +423,8 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       laneId: z.string().optional().describe('Defaults to the board’s first non-import lane.'),
       priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
       assigneeId: z.string().optional().describe('Must be a member of this board.'),
-      dueDate: z.string().optional().describe('YYYY-MM-DD.'),
+      startDate: z.string().optional().describe('YYYY-MM-DD: the day work starts. With dueDate it spans the ticket on a timeline; never after dueDate. Equal to dueDate marks a milestone.'),
+      dueDate: z.string().optional().describe('YYYY-MM-DD: the day it has to be done.'),
       links: z.array(LINK_INPUT).max(50).optional().describe('Web addresses the ticket refers to, in order.'),
       labels: z.array(z.string()).max(12).optional(),
       categoryName: z.string().optional(),
@@ -430,7 +462,8 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       description: z.string().max(10000).optional().describe(MARKDOWN_FIELD),
       priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
       assigneeId: z.string().nullable().optional(),
-      dueDate: z.string().nullable().optional(),
+      startDate: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. Never after dueDate.'),
+      dueDate: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it.'),
       links: z.array(LINK_INPUT).max(50).optional()
         .describe('Replaces the whole link list — read the ticket first and send every link back, kept and new alike. Omit the field to leave the list alone.'),
       cardImageIds: z.array(z.string()).max(100).nullable().optional()
