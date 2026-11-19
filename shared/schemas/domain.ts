@@ -95,7 +95,7 @@ export const subticketRefSchema = z.object({
   boardName: z.string(),
   laneId: z.string(),
   laneName: z.string(),
-  done: z.boolean().describe('Whether the subticket sits in a done lane of its board.'),
+  done: z.boolean().describe('Whether the subticket sits in a done or live lane of its board.'),
   archived: z.boolean()
 })
 
@@ -106,10 +106,13 @@ export const timelineNodeSchema = z.object({
   boardId: z.string(),
   boardName: z.string(),
   laneName: z.string(),
-  done: z.boolean().describe('Whether it sits in a done lane of its board.'),
+  done: z.boolean().describe('Whether it sits in a done or live lane of its board.'),
   type: ticketTypeRefSchema.nullable(),
   startDate: z.string().nullable(),
   dueDate: z.string().nullable(),
+  live: z.boolean().describe('Whether it sits in a live lane.'),
+  liveFrom: z.string().nullable(),
+  liveUntil: z.string().nullable(),
   readable: z.boolean().describe('False for a ticket on a board the caller cannot read: listed, but its own subtickets are left out.'),
   get children(): z.ZodArray<typeof timelineNodeSchema> {
     return z.array(timelineNodeSchema)
@@ -180,6 +183,8 @@ export const ticketSchema = z.object({
   priority: z.enum(ticketPriorities),
   startDate: z.string().nullable().describe('The day work starts, YYYY-MM-DD. With `dueDate` it spans the ticket on a timeline; never after it.'),
   dueDate: z.string().nullable(),
+  liveFrom: z.string().nullable().describe('The first day it is out in the world, YYYY-MM-DD: a campaign\'s start in market, an asset\'s release.'),
+  liveUntil: z.string().nullable().describe('The last day it is out, YYYY-MM-DD: a campaign\'s end, an approval\'s expiry. Warns while the ticket sits in a live lane.'),
   buildNumber: z.string().nullable(),
   link: z.string().nullable().describe('The first of `links`, kept for callers from the time a ticket had only one.'),
   links: z.array(ticketLinkSchema).describe('References elsewhere, in order; a Jira import starts with the issue.'),
@@ -230,7 +235,8 @@ export const laneSchema = z.object({
   name: z.string(),
   position: z.number().int(),
   isImport: z.boolean(),
-  isDone: z.boolean().describe('Holds finished work; its tickets no longer warn about their due date.')
+  isDone: z.boolean().describe('Holds finished work; its tickets no longer warn about their due date.'),
+  isLive: z.boolean().describe('Holds finished work that is running: its tickets count as done as subtickets, their due date is quiet, and their live window warns as it ends. Never also isDone.')
 })
 export const laneSummarySchema = laneSchema.extend({
   ticketCount: z.number().int(),

@@ -352,6 +352,8 @@ export function getDb() {
   ensureAgentGrants(database)
   // After every rebuild of `tickets`: a plain column the rebuilds above do not know about.
   ensureTicketStartDate(database)
+  ensureTicketLiveWindow(database)
+  ensureLaneLive(database)
   // Not in `boardIndexes`: that block also runs inside `ensureBoards`, before an upgrading
   // database has been given the ticket_activity table. Serves the board-wide digest query.
   database.exec('CREATE INDEX IF NOT EXISTS idx_ticket_activity_created ON ticket_activity(created_at DESC)')
@@ -2093,6 +2095,28 @@ export function ensureTicketStartDate(db: Database.Database) {
   return true
 }
 
+/**
+ * The days a ticket is out in the world — a campaign's run, an asset until its approval
+ * expires — kept apart from the days it is worked on. Existing tickets have none.
+ */
+export function ensureTicketLiveWindow(db: Database.Database) {
+  const columns = tableColumns(db, 'tickets')
+  if (columns.has('live_from') && columns.has('live_until')) return false
+  if (!columns.has('live_from')) db.exec('ALTER TABLE tickets ADD COLUMN live_from TEXT')
+  if (!columns.has('live_until')) db.exec('ALTER TABLE tickets ADD COLUMN live_until TEXT')
+  return true
+}
+
+/**
+ * A third kind of lane beside open and done: live. Work there is finished, so its due date is
+ * quiet and it ticks off as a subticket, but it is still running, so its live window warns.
+ */
+export function ensureLaneLive(db: Database.Database) {
+  if (tableColumns(db, 'lanes').has('is_live')) return false
+  db.exec('ALTER TABLE lanes ADD COLUMN is_live INTEGER NOT NULL DEFAULT 0 CHECK (is_live IN (0, 1))')
+  return true
+}
+
 export function ensureTicketSourceJira(db: Database.Database) {
   const definition = db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'tickets'").get() as { sql: string } | undefined
   if (!definition || definition.sql.includes("'jira_issue'")) return false
@@ -2135,11 +2159,11 @@ type BoardRow = {
 
 type WorkspaceRow = { id: string; name: string; description: string; position: number; created_at: string }
 
-type LaneRow = { id: string; board_id: string; name: string; position: number; is_import: number; is_done: number }
+type LaneRow = { id: string; board_id: string; name: string; position: number; is_import: number; is_done: number; is_live: number }
 
 type TicketRow = {
   id: string; ticket_number: number; board_id: string; lane_id: string; title: string; description: string
-  position: number; priority: TicketPriority; start_date: string | null; due_date: string | null; build_number: string | null; link: string | null; cover_attachment_id: string | null; card_images: string | null
+  position: number; priority: TicketPriority; start_date: string | null; due_date: string | null; live_from: string | null; live_until: string | null; build_number: string | null; link: string | null; cover_attachment_id: string | null; card_images: string | null
   source: TicketSource; external_id: string | null; created_at: string; updated_at: string; archived_at: string | null
   category_id: string | null; author_id: string | null; assignee_id: string | null; type_id: string | null
 }
@@ -2248,7 +2272,7 @@ function toJiraIntegration(boardId: string): JiraIntegration {
 }
 
 function toLane(row: LaneRow): Lane {
-  return { id: row.id, boardId: row.board_id, name: row.name, position: row.position, isImport: Boolean(row.is_import), isDone: Boolean(row.is_done) }
+  return { id: row.id, boardId: row.board_id, name: row.name, position: row.position, isImport: Boolean(row.is_import), isDone: Boolean(row.is_done), isLive: Boolean(row.is_live) }
 }
 
 /** Who is asking. Omitted for internal callers and tests, which see every board as an admin. */
@@ -2505,7 +2529,7 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
     for (const lane of db.prepare('SELECT * FROM lanes WHERE board_id = ? ORDER BY position').all(sourceId) as LaneRow[]) {
       const laneId = randomUUID()
       laneIds.set(lane.id, laneId)
-      db.prepare('INSERT INTO lanes (id, board_id, name, position, is_import, is_done) VALUES (?, ?, ?, ?, ?, ?)').run(laneId, id, lane.name, lane.position, lane.is_import, lane.is_done)
+      db.prepare('INSERT INTO lanes (id, board_id, name, position, is_import, is_done, is_live) VALUES (?, ?, ?, ?, ?, ?, ?)').run(laneId, id, lane.name, lane.position, lane.is_import, lane.is_done, lane.is_live)
     }
 
     const categoryIds = new Map<string, string>()
@@ -2538,14 +2562,14 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
       // once — the per-row MAX subquery `createTicket` uses would rescan for every ticket.
       let nextNumber = (db.prepare('SELECT COALESCE(MAX(ticket_number), 0) AS value FROM tickets').get() as { value: number }).value
       const insertTicket = db.prepare(`
-        INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, start_date, due_date, build_number, source, external_id, created_at, updated_at, archived_at, author_id, assignee_id, category_id, type_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, start_date, due_date, live_from, live_until, build_number, source, external_id, created_at, updated_at, archived_at, author_id, assignee_id, category_id, type_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       const labelsOf = db.prepare('SELECT label_id FROM ticket_labels WHERE ticket_id = ?')
       const attachLabel = db.prepare('INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)')
       // A copied subticket becomes a plain to-do: the ticket it stood for stays where it is.
       const todosOf = db.prepare(`
-        SELECT COALESCE(st.title, td.text) AS text, CASE WHEN st.id IS NULL THEN td.completed ELSE COALESCE(sl.is_done, 0) END AS completed, td.position
+        SELECT COALESCE(st.title, td.text) AS text, CASE WHEN st.id IS NULL THEN td.completed ELSE COALESCE(MAX(sl.is_done, sl.is_live), 0) END AS completed, td.position
         FROM ticket_todos td LEFT JOIN tickets st ON st.id = td.subticket_id LEFT JOIN lanes sl ON sl.id = st.lane_id
         WHERE td.ticket_id = ? ORDER BY td.position
       `)
@@ -2567,7 +2591,7 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
         nextNumber += 1
         insertTicket.run(
           ticketId, nextNumber, id, laneIds.get(ticket.lane_id)!, ticket.title, ticket.description,
-          ticket.position, ticket.priority, ticket.start_date, ticket.due_date, ticket.build_number, ticket.source,
+          ticket.position, ticket.priority, ticket.start_date, ticket.due_date, ticket.live_from, ticket.live_until, ticket.build_number, ticket.source,
           ticket.external_id, ticket.created_at, ticket.updated_at, ticket.archived_at,
           ticket.author_id, ticket.assignee_id, ticket.category_id ? categoryIds.get(ticket.category_id) ?? null : null,
           ticket.type_id
@@ -2876,11 +2900,18 @@ export function createLane(boardId: string, name: string): Lane | null {
   return findLane(id)
 }
 
-export function updateLane(id: string, input: { name?: string; isDone?: boolean }): Lane | null {
+/** Done and live exclude each other: switching one on switches the other off. */
+export function updateLane(id: string, input: { name?: string; isDone?: boolean; isLive?: boolean }): Lane | null {
   const db = getDb()
   const lane = findLane(id)
   if (!lane) return null
-  db.prepare('UPDATE lanes SET name = ?, is_done = ? WHERE id = ?').run(input.name ?? lane.name, Number(input.isDone ?? lane.isDone), id)
+  let isDone = input.isDone ?? lane.isDone
+  let isLive = input.isLive ?? lane.isLive
+  if (input.isLive) isDone = false
+  else if (input.isDone) isLive = false
+  // The import lane only ever holds new arrivals; it is neither.
+  if (lane.isImport) isDone = isLive = false
+  db.prepare('UPDATE lanes SET name = ?, is_done = ?, is_live = ? WHERE id = ?').run(input.name ?? lane.name, Number(isDone), Number(isLive), id)
   return findLane(id)
 }
 
@@ -2950,7 +2981,7 @@ function hydrateTicket(row: TicketRow): Ticket {
   const todoRows = db.prepare(`
     SELECT td.id, td.text, td.completed, td.position, td.subticket_id,
       st.ticket_number AS sub_number, st.title AS sub_title, st.board_id AS sub_board_id, st.lane_id AS sub_lane_id,
-      st.archived_at AS sub_archived_at, sb.name AS sub_board_name, sl.name AS sub_lane_name, sl.is_done AS sub_done
+      st.archived_at AS sub_archived_at, sb.name AS sub_board_name, sl.name AS sub_lane_name, MAX(sl.is_done, sl.is_live) AS sub_done
     FROM ticket_todos td
     LEFT JOIN tickets st ON st.id = td.subticket_id
     LEFT JOIN boards sb ON sb.id = st.board_id
@@ -2993,6 +3024,8 @@ function hydrateTicket(row: TicketRow): Ticket {
     priority: row.priority,
     startDate: row.start_date ?? null,
     dueDate: row.due_date,
+    liveFrom: row.live_from ?? null,
+    liveUntil: row.live_until ?? null,
     buildNumber: row.build_number || feedback?.buildVersion || null,
     link: links[0]?.url ?? null,
     links,
@@ -3030,7 +3063,7 @@ export function listDueTickets(viewer: BoardViewer, today = boardToday()): DueTi
     JOIN lanes l ON l.id = t.lane_id
     JOIN workspaces w ON w.id = b.workspace_id
     ${scoped ? 'JOIN board_access m ON m.board_id = b.id AND m.user_id = @userId' : ''}
-    WHERE t.archived_at IS NULL AND t.due_date IS NOT NULL AND l.is_done = 0
+    WHERE t.archived_at IS NULL AND t.due_date IS NOT NULL AND l.is_done = 0 AND l.is_live = 0
     ORDER BY w.position, w.created_at, b.position, b.created_at, t.due_date, t.ticket_number
   `).all(scoped ? { userId: viewer.userId } : {}) as Array<{
     id: string; ticket_number: number; title: string; due_date: string; board_id: string; board_name: string
@@ -3353,8 +3386,8 @@ const TIMELINE_LIMIT = 500
 export function ticketTimeline(rootId: string, canRead: (boardId: string) => boolean): TimelineNode | null {
   const db = getDb()
   const readNode = db.prepare(`
-    SELECT t.id, t.ticket_number, t.title, t.board_id, t.type_id, t.start_date, t.due_date, t.archived_at,
-      b.name AS board_name, l.name AS lane_name, l.is_done
+    SELECT t.id, t.ticket_number, t.title, t.board_id, t.type_id, t.start_date, t.due_date, t.live_from, t.live_until, t.archived_at,
+      b.name AS board_name, l.name AS lane_name, MAX(l.is_done, l.is_live) AS is_done, l.is_live
     FROM tickets t JOIN boards b ON b.id = t.board_id JOIN lanes l ON l.id = t.lane_id
     WHERE t.id = ?
   `)
@@ -3377,8 +3410,8 @@ export function ticketTimeline(rootId: string, canRead: (boardId: string) => boo
   const build = (id: string, ancestors: Set<string>): TimelineNode | null => {
     const row = readNode.get(id) as {
       id: string; ticket_number: number; title: string; board_id: string; type_id: string | null
-      start_date: string | null; due_date: string | null; archived_at: string | null
-      board_name: string; lane_name: string; is_done: number
+      start_date: string | null; due_date: string | null; live_from: string | null; live_until: string | null; archived_at: string | null
+      board_name: string; lane_name: string; is_done: number; is_live: number
     } | undefined
     if (!row || budget <= 0) return null
     // Archived subtickets are out of the plan, as they are off the board. The root is shown as asked.
@@ -3396,6 +3429,9 @@ export function ticketTimeline(rootId: string, canRead: (boardId: string) => boo
       type: typeOf(row.type_id),
       startDate: row.start_date,
       dueDate: row.due_date,
+      live: Boolean(row.is_live),
+      liveFrom: row.live_from,
+      liveUntil: row.live_until,
       readable: open,
       children: []
     }
@@ -3427,7 +3463,7 @@ function setTicketTodos(ticketId: string, todos: TicketTodoInput[]) {
   const db = getDb()
   const wanted = [...new Set(todos.map(todo => todo.subticketId).filter((id): id is string => Boolean(id) && id !== ticketId))]
   const subtickets = new Map(wanted.length
-    ? (db.prepare(`SELECT t.id, t.title, l.is_done FROM tickets t JOIN lanes l ON l.id = t.lane_id WHERE t.id IN (${wanted.map(() => '?').join(', ')})`)
+    ? (db.prepare(`SELECT t.id, t.title, MAX(l.is_done, l.is_live) AS is_done FROM tickets t JOIN lanes l ON l.id = t.lane_id WHERE t.id IN (${wanted.map(() => '?').join(', ')})`)
         .all(...wanted) as Array<{ id: string; title: string; is_done: number }>).map(row => [row.id, row])
     : [])
   const seen = new Set<string>()
@@ -3454,7 +3490,7 @@ export function searchSubticketCandidates(boardIds: string[], query: string, exc
   const number = /^#?\d+$/.test(text) ? Number(text.replace('#', '')) : null
   const pattern = `%${text.replace(/[\\%_]/g, match => `\\${match}`)}%`
   const rows = getDb().prepare(`
-    SELECT t.id, t.ticket_number, t.title, t.board_id, t.lane_id, b.name AS board_name, l.name AS lane_name, l.is_done
+    SELECT t.id, t.ticket_number, t.title, t.board_id, t.lane_id, b.name AS board_name, l.name AS lane_name, MAX(l.is_done, l.is_live) AS is_done
     FROM tickets t JOIN boards b ON b.id = t.board_id JOIN lanes l ON l.id = t.lane_id
     WHERE t.archived_at IS NULL
       AND t.board_id IN (${boardIds.map(() => '?').join(', ')})
@@ -3496,7 +3532,7 @@ export function createSubticket(parentId: string, input: SubticketInput, author:
     childId = child.id
     const position = (db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS value FROM ticket_todos WHERE ticket_id = ?').get(parentId) as { value: number }).value
     db.prepare('INSERT INTO ticket_todos (id, ticket_id, text, completed, position, subticket_id) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(randomUUID(), parentId, child.title, lane.isDone ? 1 : 0, position, child.id)
+      .run(randomUUID(), parentId, child.title, lane.isDone || lane.isLive ? 1 : 0, position, child.id)
     db.prepare('UPDATE tickets SET updated_at = ? WHERE id = ?').run(new Date().toISOString(), parentId)
     recordActivity(parentId, actor, 'subticket', { number: String(child.ticketNumber), title: child.title, board: findBoard(input.boardId)?.name ?? null })
   })()
@@ -3517,6 +3553,27 @@ function recordLinkedSubtickets(ticketId: string, before: Set<string>, actor: Ac
 /** The tickets whose to-do lists hold this one as a subticket. */
 export function parentTicketIdsOf(subticketId: string): string[] {
   return (getDb().prepare('SELECT DISTINCT ticket_id FROM ticket_todos WHERE subticket_id = ?').all(subticketId) as Array<{ ticket_id: string }>).map(row => row.ticket_id)
+}
+
+/**
+ * The tickets that hold this one as a subticket, as the editor's "Where used" lists them:
+ * archived ones included and marked, ordered by number. The caller filters out boards its
+ * principal cannot read.
+ */
+export function parentTicketRefsOf(subticketId: string): SubticketRef[] {
+  const rows = getDb().prepare(`
+    SELECT DISTINCT t.id, t.ticket_number, t.title, t.board_id, t.lane_id, t.archived_at, b.name AS board_name, l.name AS lane_name, MAX(l.is_done, l.is_live) AS is_done
+    FROM ticket_todos todo
+    JOIN tickets t ON t.id = todo.ticket_id JOIN boards b ON b.id = t.board_id JOIN lanes l ON l.id = t.lane_id
+    WHERE todo.subticket_id = ?
+    ORDER BY t.ticket_number
+  `).all(subticketId) as Array<{
+    id: string; ticket_number: number; title: string; board_id: string; lane_id: string; archived_at: string | null; board_name: string; lane_name: string; is_done: number
+  }>
+  return rows.map(row => ({
+    id: row.id, ticketNumber: row.ticket_number, title: row.title, boardId: row.board_id, boardName: row.board_name,
+    laneId: row.lane_id, laneName: row.lane_name, done: Boolean(row.is_done), archived: Boolean(row.archived_at)
+  }))
 }
 
 type TicketLinkRow = {
@@ -3597,6 +3654,8 @@ export interface TicketInput {
   priority?: TicketPriority
   startDate?: string | null
   dueDate?: string | null
+  liveFrom?: string | null
+  liveUntil?: string | null
   buildNumber?: string | null
   /** The first of the links, for callers that only know one; `links` wins when both are given. */
   link?: string | null
@@ -3644,10 +3703,10 @@ export function createTicket(boardId: string, input: TicketInput, author: Person
     const categoryId = resolveCategoryId(boardId, input.categoryName)
     // Appended first either way; a ticket asked to the top is then shuffled with the lane.
     const position = nextPosition(lane.id)
-    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, start_date, due_date, build_number, source, created_at, updated_at, author_id, assignee_id, category_id, type_id)
-      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?)`).run(
+    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, start_date, due_date, live_from, live_until, build_number, source, created_at, updated_at, author_id, assignee_id, category_id, type_id)
+      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?)`).run(
       id, boardId, lane.id, input.title, input.description || '', position, input.priority || 'medium',
-      input.startDate || null, input.dueDate || null, input.buildNumber || null, now, now,
+      input.startDate || null, input.dueDate || null, input.liveFrom || null, input.liveUntil || null, input.buildNumber || null, now, now,
       author?.id || null, input.assigneeId || null, categoryId, input.typeId || null
     )
     if (input.placement === 'top') {
@@ -3674,17 +3733,21 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
   const priority = input.priority ?? existing.priority
   const startDate = input.startDate === undefined ? existing.startDate : input.startDate || null
   const dueDate = input.dueDate === undefined ? existing.dueDate : input.dueDate || null
+  const liveFrom = input.liveFrom === undefined ? existing.liveFrom : input.liveFrom || null
+  const liveUntil = input.liveUntil === undefined ? existing.liveUntil : input.liveUntil || null
   const assigneeId = input.assigneeId === undefined ? existing.assignee?.id || null : input.assigneeId || null
   const authorId = input.authorId === undefined ? existing.author?.id || null : input.authorId || null
   const typeId = input.typeId === undefined ? existing.type?.id || null : input.typeId || null
   getDb().transaction(() => {
     const categoryId = input.categoryName === undefined ? existing.category?.id || null : resolveCategoryId(existing.boardId, input.categoryName)
-    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, start_date = ?, due_date = ?, build_number = ?, assignee_id = ?, author_id = ?, category_id = ?, type_id = ?, updated_at = ? WHERE id = ?`).run(
+    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, start_date = ?, due_date = ?, live_from = ?, live_until = ?, build_number = ?, assignee_id = ?, author_id = ?, category_id = ?, type_id = ?, updated_at = ? WHERE id = ?`).run(
       input.title ?? existing.title,
       input.description ?? existing.description,
       priority,
       startDate,
       dueDate,
+      liveFrom,
+      liveUntil,
       input.buildNumber === undefined ? (existing.source === 'manual' ? existing.buildNumber : null) : input.buildNumber || null,
       assigneeId,
       authorId,
@@ -3710,6 +3773,8 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
     if (priority !== existing.priority) recordActivity(id, actor, 'priority', { from: existing.priority, to: priority })
     if (startDate !== existing.startDate) recordActivity(id, actor, 'start_date', { from: existing.startDate, to: startDate })
     if (dueDate !== existing.dueDate) recordActivity(id, actor, 'due_date', { from: existing.dueDate, to: dueDate })
+    if (liveFrom !== existing.liveFrom) recordActivity(id, actor, 'live_from', { from: existing.liveFrom, to: liveFrom })
+    if (liveUntil !== existing.liveUntil) recordActivity(id, actor, 'live_until', { from: existing.liveUntil, to: liveUntil })
     if (assigneeId !== (existing.assignee?.id || null)) {
       recordActivity(id, actor, assigneeId ? 'assigned' : 'unassigned', { from: existing.assignee?.id || null, to: assigneeId })
     }

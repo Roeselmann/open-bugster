@@ -4,7 +4,7 @@ import { boardMemberIds, boardViewer, requireBoardAccess, requireTicketAccess } 
 import type { Actor } from '../utils/actor'
 import {
   archiveTicket, createSubticket, createTicket, listActivity, listDueTickets, listBoardActivity, listTickets, listTicketsPage,
-  findBoard, listBoards, moveTicket, searchSubticketCandidates, personById, restoreTicket, subticketIdsOf, ticketIdByNumber, ticketTimeline, ticketTypeBelongsToBoard, transferTicket, updateTicket
+  findBoard, listBoards, moveTicket, parentTicketRefsOf, searchSubticketCandidates, personById, restoreTicket, subticketIdsOf, ticketIdByNumber, ticketTimeline, ticketTypeBelongsToBoard, transferTicket, updateTicket
 } from '../utils/db'
 import { importedTicketUpdateSchema, subticketCreateSchema, ticketCreateSchema, ticketMoveSchema, ticketTransferSchema, ticketUpdateSchema } from '../utils/validation'
 import { deleteLinkThumbnails } from '../utils/link-preview'
@@ -122,6 +122,7 @@ export const ticketCreate = defineOperation({
     }
     if (rest.typeId && !ticketTypeBelongsToBoard(rest.typeId, boardId)) throw foreignType()
     checkSpan(rest.startDate ?? null, rest.dueDate ?? null)
+    checkLiveWindow(rest.liveFrom ?? null, rest.liveUntil ?? null)
     checkNewSubtickets(ctx.actor, boardId, null, new Set(), rest.todos)
     // The author answers for the ticket, the actor for the write. Identical from the browser,
     // and different the moment a service identity files on somebody's behalf.
@@ -135,6 +136,13 @@ export const ticketCreate = defineOperation({
 function checkSpan(startDate: string | null, dueDate: string | null) {
   if (startDate && dueDate && startDate > dueDate) {
     throw createError({ statusCode: 422, statusMessage: 'The start date cannot be after the due date.' })
+  }
+}
+
+/** The live window runs forwards too. It may start before the work is due, and often does: a soft launch. */
+function checkLiveWindow(liveFrom: string | null, liveUntil: string | null) {
+  if (liveFrom && liveUntil && liveFrom > liveUntil) {
+    throw createError({ statusCode: 422, statusMessage: 'The end of the live window cannot be before its start.' })
   }
 }
 
@@ -161,6 +169,9 @@ export const ticketUpdate = defineOperation({
     // The span is checked as it will stand: a new start against the due date already set, and so on.
     if ('startDate' in fields || 'dueDate' in fields) {
       checkSpan(fields.startDate === undefined ? ticket.startDate : fields.startDate, fields.dueDate === undefined ? ticket.dueDate : fields.dueDate)
+    }
+    if ('liveFrom' in fields || 'liveUntil' in fields) {
+      checkLiveWindow(fields.liveFrom === undefined ? ticket.liveFrom : fields.liveFrom, fields.liveUntil === undefined ? ticket.liveUntil : fields.liveUntil)
     }
     const members = boardMemberIds(ticket.boardId)
     if (fields.assigneeId && fields.assigneeId !== ticket.assignee?.id && !members.has(fields.assigneeId)) {
@@ -258,6 +269,19 @@ export const ticketTimelineGet = defineOperation({
   requires: { scope: 'ticket', role: 'viewer', ticketId: input => input.ticketId },
   audit: false,
   run: ctx => ({ timeline: orNotFound(ticketTimeline(ctx.ticket!.id, boardId => readable(ctx.actor, boardId)), 'Ticket') })
+})
+
+/**
+ * Where a ticket is used: the tickets that hold it as a subticket, the way up its hierarchy.
+ * A parent on a board the caller cannot read is left out, not even its number.
+ */
+export const ticketParentsList = defineOperation({
+  name: 'ticket.parents.list',
+  summary: 'List the tickets that hold this ticket as a subticket',
+  input: z.object({ ticketId }),
+  requires: { scope: 'ticket', role: 'viewer', ticketId: input => input.ticketId },
+  audit: false,
+  run: ctx => ({ parents: parentTicketRefsOf(ctx.ticket!.id).filter(parent => readable(ctx.actor, parent.boardId)) })
 })
 
 function readable(actor: Actor, boardId: string) {

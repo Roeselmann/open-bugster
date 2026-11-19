@@ -80,6 +80,7 @@ export const v1Routes: readonly V1Route[] = [
   { method: 'PATCH', path: '/tickets/{ticketId}', operation: ops.ticketUpdate, response: z.object({ ticket: ticketSchema }) },
   { method: 'POST', path: '/tickets/{ticketId}/move', operation: ops.ticketMove, response: z.object({ ticket: ticketSchema }) },
   { method: 'POST', path: '/tickets/{ticketId}/transfer', operation: ops.ticketTransfer, response: z.object({ ticket: ticketSchema, assigneeCleared: z.boolean().describe('True when the assignee was no member of the destination board and was dropped.') }) },
+  { method: 'GET', path: '/tickets/{ticketId}/parents', operation: ops.ticketParentsList, response: z.object({ parents: z.array(subticketRefSchema).describe('The tickets that hold this one as a subticket, on boards the caller can read.') }) },
   { method: 'GET', path: '/tickets/{ticketId}/timeline', operation: ops.ticketTimelineGet, response: z.object({ timeline: timelineNodeSchema }) },
   { method: 'GET', path: '/tickets/{ticketId}/subticket-candidates', operation: ops.ticketSubticketCandidates, response: z.object({ candidates: z.array(subticketRefSchema).describe('Open tickets of the workspace that could be linked: send one back in the to-do list with its id as `subticketId`.') }) },
   { method: 'POST', path: '/tickets/{ticketId}/subtickets', operation: ops.ticketSubticketCreate, status: 201, response: z.object({ ticket: ticketSchema.describe('The parent, with the new subticket at the end of its to-do list.'), subticket: ticketSchema }) },

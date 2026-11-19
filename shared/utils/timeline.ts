@@ -13,6 +13,13 @@ export function spanOf(node: Pick<TimelineNode, 'startDate' | 'dueDate'>): Span 
   return start && end ? { start, end } : null
 }
 
+/** The days it is out in the world. Only an end is drawn from that end back to the work's own end. */
+export function liveSpanOf(node: Pick<TimelineNode, 'liveFrom' | 'liveUntil' | 'dueDate'>): Span | null {
+  const start = node.liveFrom ?? node.dueDate ?? node.liveUntil
+  const end = node.liveUntil ?? node.liveFrom
+  return start && end && start <= end ? { start, end } : null
+}
+
 /** Whether the ticket is a single day: a start equal to its due date, or only one of the two. */
 export function isMilestone(node: Pick<TimelineNode, 'startDate' | 'dueDate'>): boolean {
   const span = spanOf(node)
@@ -33,7 +40,7 @@ export function flattenTimeline(root: TimelineNode, collapsed: ReadonlySet<strin
 
 /** The days the whole tree covers, from the earliest start to the latest end; null when nothing is dated. */
 export function timelineBounds(root: TimelineNode): Span | null {
-  const spans = flattenTimeline(root).map(({ node }) => spanOf(node)).filter((span): span is Span => Boolean(span))
+  const spans = flattenTimeline(root).flatMap(({ node }) => [spanOf(node), liveSpanOf(node)]).filter((span): span is Span => Boolean(span))
   if (!spans.length) return null
   return {
     start: spans.reduce((earliest, span) => (span.start < earliest ? span.start : earliest), spans[0]!.start),
@@ -41,7 +48,7 @@ export function timelineBounds(root: TimelineNode): Span | null {
   }
 }
 
-export type TimelineWarningKind = 'overdue' | 'ends_after_plan' | 'starts_before_plan'
+export type TimelineWarningKind = 'overdue' | 'ends_after_plan' | 'starts_before_plan' | 'live_ended'
 
 export interface TimelineWarning {
   kind: TimelineWarningKind
@@ -64,8 +71,12 @@ export function timelineWarnings(root: TimelineNode, today: string): TimelineWar
     if (seen.has(node.id)) return
     seen.add(node.id)
     const span = spanOf(node)
+    // Done covers live too: running work is not late, however long ago its go-live was.
     if (!node.done && node.dueDate && node.dueDate < today) {
       warnings.push({ kind: 'overdue', ticketId: node.id, ticketNumber: node.ticketNumber, message: `#${node.ticketNumber} was due ${node.dueDate} and is not done.` })
+    }
+    if (node.live && node.liveUntil && node.liveUntil < today) {
+      warnings.push({ kind: 'live_ended', ticketId: node.id, ticketNumber: node.ticketNumber, message: `#${node.ticketNumber} was live until ${node.liveUntil} and is still in a live lane.` })
     }
     if (node !== root && span) {
       if (root.dueDate && span.end > root.dueDate) {

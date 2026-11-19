@@ -20,6 +20,8 @@ Every board has exactly one **import lane**, which is where imports from TestFli
 
 A lane can be marked **Done** in the same list. Tickets in a done lane count as finished: their card loses its due date border and they drop out of the header's due date list. A new board starts with its Done lane marked; on upgrade, every existing board had its rightmost lane (the import lane aside) marked, since that is where finished work sat until then.
 
+A lane can instead be marked **Live**, for work that is finished and running: a campaign in market, an asset whose approval has not expired. A lane is done or live, never both; switching one on switches the other off, and the import lane is neither. A ticket in a live lane is quiet about its due date and counts as done as a subticket, like one in a done lane, but its card follows the end of its **live window** instead: orange from the board's orange lead time before the last day, red once that day has passed and it is still live.
+
 When a lane is deleted, its tickets are not lost: the dialog asks whether they should move to another lane or go to the archive.
 
 <p align="center">

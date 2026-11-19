@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { AlarmClock, ArrowDownToLine, ArrowUpToLine, Check, ChevronDown, ChevronUp, Image, Link as LinkIcon, ListTodo, MessageSquare, Paperclip, SquareKanban, Tag, TriangleAlert } from '@lucide/vue'
+import { AlarmClock, ArrowDownToLine, ArrowUpToLine, Check, ChevronDown, ChevronUp, CornerDownRight, Image, Link as LinkIcon, ListTodo, MessageSquare, Paperclip, Radio, SquareKanban, Tag, TriangleAlert } from '@lucide/vue'
 import type { Lane, Ticket } from '~~/shared/types/domain'
 import { CATEGORY_TONE_CLASSES } from '~~/shared/utils/constants'
-import { boardToday, daysUntil, dueDescription, dueLevel } from '~~/shared/utils/due-date'
+import { boardToday, daysUntil, dueDescription, dueLevel, liveDescription, liveLevel } from '~~/shared/utils/due-date'
 import { cardImages } from '~~/shared/utils/card-images'
 import { TODO_LIGHT_LABELS, todoLight } from '~~/shared/utils/todo-progress'
 
@@ -51,16 +51,27 @@ function fileDrop(event: DragEvent) {
 }
 
 const today = boardToday()
-// Finished work is done with its deadline too: a done lane silences the warning.
-const inDoneLane = computed(() => props.lanes.some(lane => lane.id === props.ticket.laneId && lane.isDone))
-const dueState = computed(() => (inDoneLane.value ? 'none' : dueLevel(props.ticket.dueDate, today, { warningDays: props.dueWarningDays, alertDays: props.dueAlertDays })))
+// Finished work is done with its deadline too: a done lane silences the warning. A live lane
+// does as well, and lights the card by the end of its live window instead.
+const lane = computed(() => props.lanes.find(item => item.id === props.ticket.laneId))
+const inDoneLane = computed(() => Boolean(lane.value?.isDone))
+const inLiveLane = computed(() => Boolean(lane.value?.isLive))
+const dueState = computed(() => {
+  if (inDoneLane.value) return 'none'
+  if (inLiveLane.value) return liveLevel(props.ticket.liveUntil, today, props.dueWarningDays)
+  return dueLevel(props.ticket.dueDate, today, { warningDays: props.dueWarningDays, alertDays: props.dueAlertDays })
+})
 // The due date sits in the footer, left of the assignee; its colour follows the border's warning level.
 // Far-off dates and finished work read better as a date than as a count of days.
 const dueDayFormatter = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', timeZone: 'UTC' })
 const dayOf = (date: string) => dueDayFormatter.format(new Date(`${date}T00:00:00Z`))
 // With a start as well the card reads as a span, "3 Mar – 14 Mar", until the countdown matters more.
 const dueText = computed(() => {
-  const { startDate, dueDate } = props.ticket
+  const { startDate, dueDate, liveFrom, liveUntil } = props.ticket
+  if (inLiveLane.value) {
+    if (liveUntil) return liveDescription(liveUntil, today, dayOf)
+    return liveFrom ? `Live since ${dayOf(liveFrom)}` : 'Live'
+  }
   if (!dueDate) return startDate ? `Starts ${dayOf(startDate)}` : null
   const days = daysUntil(dueDate, today)
   if (days === null) return null
@@ -70,7 +81,8 @@ const dueText = computed(() => {
   return dueDescription(dueDate, today)
 })
 const dueTitle = computed(() => {
-  const { startDate, dueDate } = props.ticket
+  const { startDate, dueDate, liveFrom, liveUntil } = props.ticket
+  if (inLiveLane.value) return `Live ${liveFrom ?? '…'} to ${liveUntil ?? '…'}`
   if (startDate && dueDate) return startDate === dueDate ? `Milestone ${dueDate}` : `${startDate} to ${dueDate}`
   return startDate ? `Starts ${startDate}` : `Due ${dueDate}`
 })
@@ -185,11 +197,19 @@ const reorderButtons = computed(() => [
             </span>
           </div>
           <div class="space-y-1">
-            <div v-for="todo in visibleTodos" :key="todo.id" class="flex min-w-0 items-center gap-1.5 text-[11px] leading-tight" :class="todo.completed ? 'muted' : ''">
-              <span class="grid size-3 shrink-0 place-items-center rounded-[3px] border" :class="todo.completed ? 'border-[var(--accent)] bg-[var(--accent)] text-white' : 'border-[var(--line)]'">
+            <div v-for="todo in visibleTodos" :key="todo.id" class="flex min-w-0 items-start gap-1.5 text-[11px] leading-tight" :class="todo.completed ? 'muted' : ''">
+              <span class="mt-px grid size-3 shrink-0 place-items-center rounded-[3px] border" :class="todo.completed ? 'border-[var(--accent)] bg-[var(--accent)] text-white' : 'border-[var(--line)]'">
                 <Check v-if="todo.completed" :size="9" :stroke-width="3" />
               </span>
-              <span class="truncate" :class="todo.completed ? 'line-through' : ''"><span v-if="todo.subticket" class="font-semibold tabular-nums" :title="`Subticket on ${todo.subticket.boardName} · ${todo.subticket.laneName}`">#{{ todo.subticket.ticketNumber }} </span>{{ todo.text }}</span>
+              <!-- As in the editor: the title alone, and a subticket's number leading a second line. -->
+              <span class="flex min-w-0 flex-col">
+                <span class="truncate" :class="todo.completed ? 'line-through' : ''">{{ todo.text }}</span>
+                <span v-if="todo.subticket" class="muted flex min-w-0 items-center gap-1 text-[10px]">
+                  <CornerDownRight :size="10" class="shrink-0" aria-hidden="true" />
+                  <span class="shrink-0 font-semibold tabular-nums">#{{ todo.subticket.ticketNumber }}</span>
+                  <span class="truncate">· {{ todo.subticket.boardName }} · {{ todo.subticket.laneName }}</span>
+                </span>
+              </span>
             </div>
           </div>
           <!-- Inside the card's own button, so a span acting as one; the click stays off the card. -->
@@ -265,7 +285,7 @@ const reorderButtons = computed(() => [
                 : dueState === 'warning' ? 'bg-orange-400/20 text-orange-700 dark:text-orange-300'
                   : 'bg-[var(--panel)]'"
               :title="dueTitle"
-            ><AlarmClock :size="12" class="shrink-0" aria-hidden="true" /> <span class="truncate">{{ dueText }}</span></span>
+            ><component :is="inLiveLane ? Radio : AlarmClock" :size="12" class="shrink-0" aria-hidden="true" /> <span class="truncate">{{ dueText }}</span></span>
             <span class="ml-auto flex shrink-0 items-center gap-2">
               <UiAvatar v-if="ticket.assignee" :person="ticket.assignee" size="sm" :muted="ticket.assignee.status !== 'active'" />
               <span class="font-semibold tabular-nums">#{{ ticket.ticketNumber }}</span>

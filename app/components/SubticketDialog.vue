@@ -90,11 +90,11 @@ const form = reactive({ title: '', description: '', boardId: '', laneId: '' })
 
 const boardOptions = computed(() => props.boards.map(board => ({ value: board.id, label: board.name })))
 const lanes = computed(() => props.boards.find(board => board.id === form.boardId)?.lanes || [])
-const laneOptions = computed(() => lanes.value.map(lane => ({ value: lane.id, label: lane.isDone && !/done/i.test(lane.name) ? `${lane.name} · done lane` : lane.name })))
+const laneOptions = computed(() => lanes.value.map(lane => ({ value: lane.id, label: lane.isDone && !/done/i.test(lane.name) ? `${lane.name} · done lane` : lane.isLive && !/live/i.test(lane.name) ? `${lane.name} · live lane` : lane.name })))
 
 // Where a new ticket would usually start: the first lane that is neither the import nor a done lane.
 function defaultLaneId() {
-  return (lanes.value.find(lane => !lane.isImport && !lane.isDone) || lanes.value.find(lane => !lane.isImport) || lanes.value[0])?.id || ''
+  return (lanes.value.find(lane => !lane.isImport && !lane.isDone && !lane.isLive) || lanes.value.find(lane => !lane.isImport) || lanes.value[0])?.id || ''
 }
 
 watch(() => props.open, (open) => {

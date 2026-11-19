@@ -39,3 +39,28 @@ export function dueLevel(dueDate: string | null, today: string, thresholds: { wa
   if (days <= thresholds.warningDays) return 'warning'
   return 'none'
 }
+
+/**
+ * How a ticket in a live lane stands against the end of its live window: orange from
+ * `warningDays` before its last day, red once that day has passed and it is still live —
+ * a campaign that ended or an approval that expired, waiting to be taken down.
+ */
+export function liveLevel(liveUntil: string | null, today: string, warningDays: number): DueLevel {
+  if (!liveUntil) return 'none'
+  const days = daysUntil(liveUntil, today)
+  if (days === null) return 'none'
+  if (days < 0) return 'alert'
+  if (days <= warningDays) return 'warning'
+  return 'none'
+}
+
+/** "Live until 31 Jul", "Ends in 3 days", "Ended 2 days ago": the live window, as a live card says it. */
+export function liveDescription(liveUntil: string, today: string, formatDay: (date: string) => string): string | null {
+  const days = daysUntil(liveUntil, today)
+  if (days === null) return null
+  if (days > 30) return `Live until ${formatDay(liveUntil)}`
+  if (days === 0) return 'Ends today'
+  if (days === 1) return 'Ends tomorrow'
+  if (days > 1) return `Ends in ${days} days`
+  return days === -1 ? 'Ended yesterday' : `Ended ${-days} days ago`
+}

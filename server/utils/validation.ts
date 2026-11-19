@@ -34,6 +34,8 @@ const ticketShape = {
   assigneeId: idSchema.nullable(),
   startDate: z.iso.date().nullable(),
   dueDate: z.iso.date().nullable(),
+  liveFrom: z.iso.date().nullable(),
+  liveUntil: z.iso.date().nullable(),
   buildNumber: z.string().trim().max(100).nullable(),
   /** The first link, for callers that know only one. A web address or nothing; an empty string reads as nothing. */
   link: z.string().trim().max(2000).transform(value => value || null).nullable()
@@ -56,6 +58,8 @@ export const ticketCreateSchema = z.object({
   assigneeId: ticketShape.assigneeId.optional(),
   startDate: ticketShape.startDate.optional(),
   dueDate: ticketShape.dueDate.optional(),
+  liveFrom: ticketShape.liveFrom.optional(),
+  liveUntil: ticketShape.liveUntil.optional(),
   buildNumber: ticketShape.buildNumber.optional(),
   link: ticketShape.link.optional(),
   links: ticketShape.links.optional(),
@@ -197,7 +201,9 @@ export const laneCreateSchema = z.object({
 export const laneUpdateSchema = z.object({
   name: z.string().trim().min(1, 'A lane name is required.').max(30),
   /** Whether the lane holds finished work, which silences its tickets' due date warnings. */
-  isDone: z.boolean()
+  isDone: z.boolean(),
+  /** Whether it holds finished work that is running; switching it on switches isDone off, and back. */
+  isLive: z.boolean()
 }).partial()
 
 export const laneDeleteSchema = z.discriminatedUnion('mode', [

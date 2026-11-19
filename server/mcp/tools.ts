@@ -38,6 +38,8 @@ function slim(ticket: Ticket) {
     type: ticket.type?.name ?? null,
     startDate: ticket.startDate,
     dueDate: ticket.dueDate,
+    liveFrom: ticket.liveFrom,
+    liveUntil: ticket.liveUntil,
     commentCount: ticket.commentCount,
     progress: progressOf(ticket.todos)
   }
@@ -58,6 +60,7 @@ function timelineOf(node: TimelineNode): Record<string, unknown> {
     done: node.done,
     startDate: node.startDate,
     dueDate: node.dueDate,
+    ...(node.liveFrom || node.liveUntil ? { live: node.live, liveFrom: node.liveFrom, liveUntil: node.liveUntil } : {}),
     ...(node.readable ? {} : { readable: false }),
     ...(node.children.length ? { subtickets: node.children.map(timelineOf) } : {})
   }
@@ -81,9 +84,9 @@ function progressOf(todos: TicketTodo[]) {
   }
 }
 
-/** A lane as every tool shows it; `isDone` is what ticks a subticket off once it lands there. */
+/** A lane as every tool shows it; `isDone` or `isLive` is what ticks a subticket off once it lands there. */
 function laneOf(lane: LaneSummary) {
-  return { id: lane.id, name: lane.name, ticketCount: lane.ticketCount, isImport: lane.isImport, isDone: lane.isDone }
+  return { id: lane.id, name: lane.name, ticketCount: lane.ticketCount, isImport: lane.isImport, isDone: lane.isDone, isLive: lane.isLive }
 }
 
 function nameOf(person: { firstName: string; lastName: string } | null): string | null {
@@ -424,7 +427,9 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
       assigneeId: z.string().optional().describe('Must be a member of this board.'),
       startDate: z.string().optional().describe('YYYY-MM-DD: the day work starts. With dueDate it spans the ticket on a timeline; never after dueDate. Equal to dueDate marks a milestone.'),
-      dueDate: z.string().optional().describe('YYYY-MM-DD: the day it has to be done.'),
+      dueDate: z.string().optional().describe('YYYY-MM-DD: the day the work has to be done — for a campaign its go-live, not the end of its run.'),
+      liveFrom: z.string().optional().describe('YYYY-MM-DD: the first day it is out in the world, e.g. a campaign\'s start in market.'),
+      liveUntil: z.string().optional().describe('YYYY-MM-DD: the last day it is out, e.g. the end of a campaign or an approval\'s expiry. Warns while the ticket sits in a lane with isLive.'),
       links: z.array(LINK_INPUT).max(50).optional().describe('Web addresses the ticket refers to, in order.'),
       labels: z.array(z.string()).max(12).optional(),
       categoryName: z.string().optional(),
@@ -463,7 +468,9 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
       assigneeId: z.string().nullable().optional(),
       startDate: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. Never after dueDate.'),
-      dueDate: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it.'),
+      dueDate: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. The deadline of the work, not the end of a run.'),
+      liveFrom: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. First day out in the world.'),
+      liveUntil: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. Last day out; never before liveFrom.'),
       links: z.array(LINK_INPUT).max(50).optional()
         .describe('Replaces the whole link list — read the ticket first and send every link back, kept and new alike. Omit the field to leave the list alone.'),
       cardImageIds: z.array(z.string()).max(100).nullable().optional()
@@ -486,7 +493,7 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
 
   server.registerTool('move_ticket', {
     title: 'Move a ticket',
-    description: 'Move a ticket to a lane, and optionally to a position within it. A lane with isDone finishes the ticket: as a subticket it is then ticked off on every parent. With a boardId the ticket moves onto that other board of the same workspace instead, into laneId there (its default lane when omitted); labels and category come along by name, an assignee who is no member over there is dropped. Ids come from list_boards and board_overview.',
+    description: 'Move a ticket to a lane, and optionally to a position within it. A lane with isDone finishes the ticket: as a subticket it is then ticked off on every parent. A lane with isLive does the same for a ticket that is finished and now running — a campaign in market — whose live window then warns instead of its due date. With a boardId the ticket moves onto that other board of the same workspace instead, into laneId there (its default lane when omitted); labels and category come along by name, an assignee who is no member over there is dropped. Ids come from list_boards and board_overview.',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: {
       ticketId: z.string(),

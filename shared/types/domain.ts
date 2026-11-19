@@ -207,7 +207,7 @@ export interface TicketComment {
   updatedAt: string
 }
 
-export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'start_date', 'due_date', 'type', 'archived', 'restored', 'commented', 'subticket'] as const
+export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'start_date', 'due_date', 'live_from', 'live_until', 'type', 'archived', 'restored', 'commented', 'subticket'] as const
 export type ActivityKind = typeof activityKinds[number]
 
 /** How a change reached the server. Everything written before agents existed reads `web`. */
@@ -238,6 +238,11 @@ export interface Lane {
   isImport: boolean
   /** Holds finished work: its tickets no longer warn about their due date. */
   isDone: boolean
+  /**
+   * Holds work that is finished and running: its tickets count as done as subtickets and no
+   * longer warn about their due date, but warn when their live window ends. Never also done.
+   */
+  isLive: boolean
 }
 
 export interface LaneSummary extends Lane {
@@ -414,11 +419,15 @@ export interface TimelineNode {
   boardId: string
   boardName: string
   laneName: string
-  /** Whether it sits in a done lane of its board. */
+  /** Whether it sits in a done or live lane of its board. */
   done: boolean
   type: TicketTypeRef | null
   startDate: string | null
   dueDate: string | null
+  /** Whether it sits in a live lane: finished, and running. */
+  live: boolean
+  liveFrom: string | null
+  liveUntil: string | null
   readable: boolean
   /** Its open subtickets, in to-do order. A subticket held by two parents shows under both. */
   children: TimelineNode[]
@@ -464,6 +473,9 @@ export interface TicketPatch {
   /** The day work starts, YYYY-MM-DD; never after `dueDate`. */
   startDate?: string | null
   dueDate?: string | null
+  /** The days it is out in the world, YYYY-MM-DD; the until never before the from. */
+  liveFrom?: string | null
+  liveUntil?: string | null
   buildNumber?: string | null
   /** The whole list, in order; it replaces what the ticket had. */
   links?: TicketLinkInput[]
@@ -552,6 +564,12 @@ export interface Ticket {
   /** The day work starts; with `dueDate` the ticket's span. Equal to it: a milestone. */
   startDate: string | null
   dueDate: string | null
+  /**
+   * The days it is out in the world — a campaign's run, an asset until its approval expires —
+   * apart from the days it is worked on. Warns while the ticket sits in a live lane.
+   */
+  liveFrom: string | null
+  liveUntil: string | null
   buildNumber: string | null
   /** The first of `links`, kept for callers from the time a ticket had only one. */
   link: string | null

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, CalendarArrowUp, Check, CircleAlert, CircleCheck, Circle, CornerDownRight, Download, ExternalLink, FileText, GripVertical, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, CalendarArrowUp, CalendarRange, Check, ChevronDown, Circle, CircleAlert, CircleCheck, CornerDownRight, CornerLeftUp, Download, ExternalLink, FileText, GripVertical, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Radio, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogContent,
   DialogDescription,
@@ -7,12 +7,18 @@ import {
   DialogPortal,
   DialogRoot,
   DialogTitle,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuPortal,
+  DropdownMenuRoot,
+  DropdownMenuTrigger,
   VisuallyHidden,
 } from 'reka-ui'
 import type { Attachment, BoardMember, Category, LabelSummary, Lane, SubticketRef, Ticket, TicketLinkInput, TicketPatch, TicketPriority, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
 import { TODO_LIGHT_LABELS, todoLight } from '~~/shared/utils/todo-progress'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
-import { boardToday, dueDescription, dueLevel } from '~~/shared/utils/due-date'
+import { boardToday, dueDescription, dueLevel, liveDescription, liveLevel } from '~~/shared/utils/due-date'
 import { cardImageCandidates, cardImages } from '~~/shared/utils/card-images'
 
 const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; /** How the last field-by-field save went; shown in the footer of an existing ticket. */ saveState?: 'idle' | 'saving' | 'saved' | 'error'; deletingAttachmentId?: string | null; initialLaneId?: string | null; initialPlacement?: 'top' | 'bottom'; laneTicketCount?: number; /** Other boards of the workspace the ticket may be moved onto. */ boards?: BoardSummary[]; /** Boards of the workspace a subticket may be filed on, this one included. */ subticketBoards?: BoardSummary[]; /** Whether the board has TestFlight connected; without it a build number has nothing to refer to. */ testflight?: boolean; /** The board's lead times for the due date warning, as on the card. */ dueWarningDays?: number; dueAlertDays?: number }>(), { canEdit: true, testflight: true, dueWarningDays: 7, dueAlertDays: 1, saveState: 'idle', initialLaneId: null, initialPlacement: 'bottom', laneTicketCount: 0, boards: () => [], subticketBoards: () => [] })
@@ -37,15 +43,26 @@ const emit = defineEmits<{
   createSubticket: [ticket: Ticket, input: { boardId: string; laneId: string; title: string; description: string }, done: (ok: boolean) => void]
 }>()
 
-const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, startDate: '', dueDate: '', buildNumber: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '', typeId: 'none', laneId: '', placement: 'bottom' as 'top' | 'bottom' })
+const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, startDate: '', dueDate: '', liveFrom: '', liveUntil: '', buildNumber: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '', typeId: 'none', laneId: '', placement: 'bottom' as 'top' | 'bottom' })
 // Lit the same way as the card, and follows the field while it is being changed.
 const today = boardToday()
-const inDoneLane = computed(() => {
+const currentLane = computed(() => {
   const laneId = props.ticket ? props.ticket.laneId : form.laneId
-  return props.lanes.some(lane => lane.id === laneId && lane.isDone)
+  return props.lanes.find(lane => lane.id === laneId)
 })
+// A done lane and a live lane both mean the work is finished: the due date goes quiet.
+const inDoneLane = computed(() => Boolean(currentLane.value?.isDone || currentLane.value?.isLive))
+const inLiveLane = computed(() => Boolean(currentLane.value?.isLive))
 const dueState = computed(() => (inDoneLane.value ? 'none' : dueLevel(form.dueDate || null, today, { warningDays: props.dueWarningDays, alertDays: props.dueAlertDays })))
 const dueText = computed(() => (dueState.value === 'none' ? null : dueDescription(form.dueDate, today)))
+// The live window only lights up while the ticket is in a live lane, as on the card.
+const liveState = computed(() => (inLiveLane.value ? liveLevel(form.liveUntil || null, today, props.dueWarningDays) : 'none'))
+const liveText = computed(() => (liveState.value === 'none' || !form.liveUntil ? null : liveDescription(form.liveUntil, today, date => date)))
+// Hidden until asked for or set: most tickets are never out in the world.
+// Lifecycle: a plain ticket has no days at all; switched on, it gets start, due date and live window.
+// Not stored — it is on whenever any of those dates is set, or the ticket sits in a live lane.
+const lifecycleOpen = ref(false)
+const lifecycleOn = computed(() => lifecycleOpen.value || inLiveLane.value || Boolean(form.startDate || form.dueDate || form.liveFrom || form.liveUntil))
 interface EditableTodo extends TicketTodoInput { key: string; subticket?: SubticketRef | null }
 const todos = ref<EditableTodo[]>([])
 const links = ref<TicketLinkInput[]>([])
@@ -100,7 +117,7 @@ const hasUnsavedWork = computed(() => {
   const ticket = props.ticket
   if (ticket) return props.canEdit && (form.title.trim() !== ticket.title.trim() || form.description !== (ticket.description || ''))
   return Boolean(form.title.trim() || form.description.trim() || todos.value.some(todo => todo.text.trim()) || pendingFiles.value.length
-    || form.labels.length || form.categoryName.trim() || links.value.length || form.buildNumber.trim() || form.startDate || form.dueDate)
+    || form.labels.length || form.categoryName.trim() || links.value.length || form.buildNumber.trim() || form.startDate || form.dueDate || form.liveFrom || form.liveUntil)
 })
 const discardOpen = ref(false)
 function requestClose() {
@@ -381,6 +398,9 @@ watch(() => props.ticket, (ticket, previous) => {
   form.priority = ticket?.priority || 'medium'
   form.startDate = ticket?.startDate || ''
   form.dueDate = ticket?.dueDate || ''
+  form.liveFrom = ticket?.liveFrom || ''
+  form.liveUntil = ticket?.liveUntil || ''
+  if (!sameTicket) lifecycleOpen.value = false
   form.buildNumber = ticket?.buildNumber || ''
   links.value = (ticket?.links || []).map(link => ({ url: link.url, display: link.display }))
   form.assigneeId = ticket?.assignee?.id || UNASSIGNED
@@ -414,6 +434,8 @@ const payload = {
   typeId: () => form.typeId === NO_TYPE ? null : form.typeId,
   startDate: () => form.startDate || null,
   dueDate: () => form.dueDate || null,
+  liveFrom: () => form.liveFrom || null,
+  liveUntil: () => form.liveUntil || null,
   buildNumber: () => form.buildNumber.trim() || null,
   categoryName: () => form.categoryName.trim() || null,
   labels: () => [...form.labels],
@@ -445,6 +467,24 @@ const canAddSubticket = computed(() => Boolean(props.ticket && props.canEdit && 
 function subticketHref(subticket: SubticketRef) {
   return `/b/${subticket.boardId}?ticket=${subticket.ticketNumber}`
 }
+
+// Where used: read when the ticket opens, for the count, and again whenever the menu opens,
+// since linking it elsewhere does not touch this ticket.
+const parents = ref<SubticketRef[]>([])
+async function loadParents() {
+  const id = props.ticket?.id
+  if (!id) return
+  try {
+    const result = await $fetch<{ parents: SubticketRef[] }>(`/api/tickets/${id}/parents`)
+    if (props.ticket?.id === id) parents.value = result.parents
+  } catch {
+    // The menu keeps what it had; the ticket itself is unaffected.
+  }
+}
+watch(() => props.ticket?.id, () => {
+  parents.value = []
+  loadParents()
+}, { immediate: true })
 // Linking is just naming the ticket in the list: it saves like any other change to it.
 function linkSubticket(subticket: SubticketRef) {
   if (!props.ticket || todos.value.some(todo => todo.subticketId === subticket.id)) return void (subticketOpen.value = false)
@@ -475,6 +515,36 @@ function commit(changes: TicketPatch) {
  * A start past the due date (or a due date before the start) drags the other one along
  * rather than being refused: the span stays whole, and both go out in one save.
  */
+/** The same for the live window: an end before its start drags the start along, and back. */
+function removeLiveWindow() {
+  const hadDates = Boolean(props.ticket?.liveFrom || props.ticket?.liveUntil)
+  form.liveFrom = ''
+  form.liveUntil = ''
+  if (hadDates) commit({ liveFrom: null, liveUntil: null })
+}
+
+// Switching off clears every date in one save, so the ticket is plain again.
+function toggleLifecycle() {
+  if (!lifecycleOn.value) {
+    lifecycleOpen.value = true
+    return
+  }
+  const saved = props.ticket
+  const hadDates = Boolean(saved?.startDate || saved?.dueDate || saved?.liveFrom || saved?.liveUntil)
+  form.startDate = form.dueDate = form.liveFrom = form.liveUntil = ''
+  lifecycleOpen.value = false
+  if (hadDates) commit({ startDate: null, dueDate: null, liveFrom: null, liveUntil: null })
+}
+
+function commitLiveWindow(changed: 'liveFrom' | 'liveUntil') {
+  if (form.liveFrom && form.liveUntil && form.liveFrom > form.liveUntil) {
+    if (changed === 'liveFrom') form.liveUntil = form.liveFrom
+    else form.liveFrom = form.liveUntil
+    return commit({ liveFrom: payload.liveFrom(), liveUntil: payload.liveUntil() })
+  }
+  commit(changed === 'liveFrom' ? { liveFrom: payload.liveFrom() } : { liveUntil: payload.liveUntil() })
+}
+
 function commitSpan(changed: 'startDate' | 'dueDate') {
   if (form.startDate && form.dueDate && form.startDate > form.dueDate) {
     if (changed === 'startDate') form.dueDate = form.startDate
@@ -533,7 +603,7 @@ function submit(options: { stayOpen?: boolean } = {}) {
   const manualFields = isManual.value ? { buildNumber: payload.buildNumber() } : {}
   // Sent only by somebody allowed to set it — the API rejects it from anyone else.
   const authorFields = canAttribute.value ? { authorId: payload.authorId() } : {}
-  emit('save', { ...shared, ...manualFields, ...authorFields, laneId: form.laneId || undefined, placement: form.placement, title: form.title.trim(), description: form.description, priority: form.priority, startDate: payload.startDate(), dueDate: payload.dueDate(), links: [...links.value], labels: payload.labels(), categoryName: payload.categoryName(), typeId: payload.typeId(), stayOpen: options.stayOpen === true })
+  emit('save', { ...shared, ...manualFields, ...authorFields, laneId: form.laneId || undefined, placement: form.placement, title: form.title.trim(), description: form.description, priority: form.priority, startDate: payload.startDate(), dueDate: payload.dueDate(), liveFrom: payload.liveFrom(), liveUntil: payload.liveUntil(), links: [...links.value], labels: payload.labels(), categoryName: payload.categoryName(), typeId: payload.typeId(), stayOpen: options.stayOpen === true })
 }
 
 // Links save as soon as one is added, removed or switched between preview and text.
@@ -800,6 +870,41 @@ function focusTitle(event: Event) {
                 <template v-else>New ticket</template>
               </h2>
             </DialogTitle>
+            <!-- The way up: the tickets that hold this one as a subticket, as the to-dos are the way down. Only there when there are any. -->
+            <DropdownMenuRoot v-if="ticket && parents.length" @update:open="$event && loadParents()">
+              <DropdownMenuTrigger
+                class="focus-ring group flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-[var(--line)] px-2.5 text-xs font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] data-[state=open]:border-[var(--accent)] data-[state=open]:bg-[var(--accent-soft)]"
+                :aria-label="`Where used: in ${parents.length} ${parents.length === 1 ? 'ticket' : 'tickets'}`"
+              >
+                <CornerLeftUp :size="14" aria-hidden="true" />
+                <span class="hidden sm:inline">Where used</span>
+                <span class="rounded-md bg-[var(--accent-soft)] px-1.5 text-[11px] tabular-nums text-[var(--accent)] group-hover:bg-[var(--panel)] group-data-[state=open]:bg-[var(--panel)]">{{ parents.length }}</span>
+                <ChevronDown :size="14" class="muted shrink-0 transition-transform duration-150 group-data-[state=open]:rotate-180" aria-hidden="true" />
+              </DropdownMenuTrigger>
+              <DropdownMenuPortal>
+                <DropdownMenuContent
+                  align="start"
+                  :side-offset="6"
+                  class="ui-popover z-[100] w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel-strong)] p-1 text-[var(--ink)] shadow-[0_18px_45px_rgba(0,0,0,.16),0_3px_12px_rgba(0,0,0,.08)]"
+                >
+                  <DropdownMenuLabel class="muted flex items-center gap-1.5 px-3 pb-1 pt-2 text-[11px] font-bold uppercase tracking-[.08em]">
+                    <CornerLeftUp :size="12" aria-hidden="true" /> Where used
+                  </DropdownMenuLabel>
+                  <DropdownMenuItem
+                    v-for="parent in parents"
+                    :key="parent.id"
+                    class="flex cursor-default select-none flex-col rounded-lg px-3 py-2 outline-none data-[highlighted]:bg-[var(--accent-soft)]"
+                    @select="navigateTo(subticketHref(parent))"
+                  >
+                    <span class="w-full truncate text-sm font-medium" :class="parent.archived ? 'muted line-through' : ''">{{ parent.title }}</span>
+                    <span class="muted flex w-full min-w-0 items-center gap-1 text-[11px]">
+                      <span class="shrink-0 font-semibold tabular-nums">#{{ parent.ticketNumber }}</span>
+                      <span class="truncate">· {{ parent.boardName }} · {{ parent.laneName }}{{ parent.archived ? ' · archived' : '' }}</span>
+                    </span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenuPortal>
+            </DropdownMenuRoot>
             <!-- The lane, with what moves the ticket within it or off the board, rides in the header. -->
             <div class="ml-auto flex min-w-0 max-w-xs flex-1 items-center gap-1.5">
               <div class="min-w-0 flex-1">
@@ -1083,7 +1188,7 @@ function focusTitle(event: Event) {
               </div>
             </div>
 
-            <div class="grid gap-4 sm:grid-cols-3">
+            <div class="grid gap-4 sm:grid-cols-2">
               <div class="block">
                 <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Priority</span>
                 <UiSelect
@@ -1094,43 +1199,114 @@ function focusTitle(event: Event) {
                   @update:model-value="form.priority = $event as TicketPriority; commit({ priority: form.priority })"
                 />
               </div>
-              <label class="block">
-                <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><CalendarArrowUp :size="14" /> Start date</span>
-                <!-- With the due date it spans the ticket on a timeline; the same day makes a milestone. -->
-                <input
-                  v-model="form.startDate"
-                  type="date"
-                  class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
-                  :max="form.dueDate || undefined"
-                  :readonly="!canEdit"
-                  @change="commitSpan('startDate')"
-                >
-              </label>
-              <label class="block">
-                <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]">
-                  <Calendar :size="14" /> Due date
-                  <span
-                    v-if="dueText"
-                    class="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal"
-                    :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
-                  ><AlarmClock :size="11" /> {{ dueText }}</span>
-                </span>
-                <input
-                  v-model="form.dueDate"
-                  type="date"
-                  class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
-                  :class="dueState === 'alert' ? 'ring-2 ring-rose-600' : dueState === 'warning' ? 'ring-2 ring-orange-400' : ''"
-                  :min="form.startDate || undefined"
-                  :readonly="!canEdit"
-                  @change="commitSpan('dueDate')"
-                >
+              <label v-if="showBuildNumber" class="block">
+                <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><TestTubeDiagonal :size="14" /> Build number</span>
+                <input v-model="form.buildNumber" maxlength="100" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none" placeholder="e.g. 42 or 1.4.0 (42)" :readonly="!canEdit" @blur="commitBuildNumber" @keydown.enter.prevent="commitBuildNumber">
               </label>
             </div>
 
-            <label v-if="showBuildNumber" class="block">
-              <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><TestTubeDiagonal :size="14" /> Build number</span>
-              <input v-model="form.buildNumber" maxlength="100" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none" placeholder="e.g. 42 or 1.4.0 (42)" :readonly="!canEdit" @blur="commitBuildNumber" @keydown.enter.prevent="commitBuildNumber">
-            </label>
+            <!-- The ticket's days, kept apart so a plain ticket stays plain: switched off it has none. -->
+            <section class="rounded-2xl border border-[var(--line)]" :class="lifecycleOn ? 'space-y-4 p-4' : 'px-4 py-3'" aria-labelledby="ticket-lifecycle-heading">
+              <div class="flex items-center gap-3">
+                <div class="min-w-0 flex-1">
+                  <h3 id="ticket-lifecycle-heading" class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><CalendarRange :size="14" /> Lifecycle</h3>
+                  <p v-if="!lifecycleOn" class="muted mt-0.5 text-xs">Start, due date and live window</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  :aria-checked="lifecycleOn"
+                  aria-labelledby="ticket-lifecycle-heading"
+                  :disabled="!canEdit"
+                  class="focus-ring relative h-6 w-11 shrink-0 rounded-full transition disabled:opacity-50"
+                  :class="lifecycleOn ? 'bg-[var(--accent)]' : 'bg-[var(--line)]'"
+                  :title="lifecycleOn ? 'Switch off: removes the start, due date and live window' : 'Give this ticket a start, a due date and a live window'"
+                  @click="toggleLifecycle"
+                >
+                  <span class="absolute left-0.5 top-0.5 size-5 rounded-full bg-white shadow transition" :class="lifecycleOn ? 'translate-x-5' : ''" aria-hidden="true" />
+                </button>
+              </div>
+
+              <template v-if="lifecycleOn">
+                <div class="grid gap-4 sm:grid-cols-2">
+                  <label class="block">
+                    <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><CalendarArrowUp :size="14" /> Start date</span>
+                    <!-- With the due date it spans the ticket on a timeline; the same day makes a milestone. -->
+                    <input
+                      v-model="form.startDate"
+                      type="date"
+                      class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
+                      :max="form.dueDate || undefined"
+                      :readonly="!canEdit"
+                      @change="commitSpan('startDate')"
+                    >
+                  </label>
+                  <label class="block">
+                    <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]">
+                      <Calendar :size="14" /> Due date
+                      <span
+                        v-if="dueText"
+                        class="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal"
+                        :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
+                      ><AlarmClock :size="11" /> {{ dueText }}</span>
+                    </span>
+                    <input
+                      v-model="form.dueDate"
+                      type="date"
+                      class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
+                      :class="dueState === 'alert' ? 'ring-2 ring-rose-600' : dueState === 'warning' ? 'ring-2 ring-orange-400' : ''"
+                      :min="form.startDate || undefined"
+                      :readonly="!canEdit"
+                      @change="commitSpan('dueDate')"
+                    >
+                  </label>
+                </div>
+
+                <!-- The days it is out in the world, apart from the days it is worked on: a campaign's run, an approval until it expires. -->
+                <div class="grid gap-4 sm:grid-cols-2">
+                  <label class="block">
+                    <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]">
+                      <Radio :size="14" /> Live from
+                      <!-- Both dates go in one save. -->
+                      <button
+                        v-if="canEdit && (form.liveFrom || form.liveUntil)"
+                        type="button"
+                        class="focus-ring muted ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal hover:bg-[var(--panel)] hover:text-rose-600"
+                        title="Remove the live window"
+                        @click.prevent="removeLiveWindow"
+                      ><X :size="11" aria-hidden="true" /> Clear</button>
+                    </span>
+                    <input
+                      v-model="form.liveFrom"
+                      type="date"
+                      class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
+                      :max="form.liveUntil || undefined"
+                      :readonly="!canEdit"
+                      @change="commitLiveWindow('liveFrom')"
+                    >
+                  </label>
+                  <label class="block">
+                    <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]">
+                      <Radio :size="14" /> Live until
+                      <span
+                        v-if="liveText"
+                        class="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal"
+                        :class="liveState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
+                      >{{ liveText }}</span>
+                    </span>
+                    <input
+                      v-model="form.liveUntil"
+                      type="date"
+                      class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
+                      :class="liveState === 'alert' ? 'ring-2 ring-rose-600' : liveState === 'warning' ? 'ring-2 ring-orange-400' : ''"
+                      :min="form.liveFrom || undefined"
+                      :readonly="!canEdit"
+                      @change="commitLiveWindow('liveUntil')"
+                    >
+                  </label>
+                </div>
+              </template>
+            </section>
 
             <div class="block">
               <label for="ticket-category" class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Tag :size="14" /> Category</label>

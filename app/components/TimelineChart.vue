@@ -2,7 +2,7 @@
 import { ChevronDown, ChevronRight, Diamond, EyeOff } from '@lucide/vue'
 import type { TimelineNode } from '~~/shared/types/domain'
 import { boardToday, daysUntil } from '~~/shared/utils/due-date'
-import { flattenTimeline, isMilestone, spanOf, timelineBounds } from '~~/shared/utils/timeline'
+import { flattenTimeline, isMilestone, liveSpanOf, spanOf, timelineBounds } from '~~/shared/utils/timeline'
 
 /**
  * The chart of a timeline: one row per ticket, its bar across the days. Drawn the same in the
@@ -72,6 +72,7 @@ function clearOfMonthStart(value: Date) {
   const daysInMonth = new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth() + 1, 0)).getUTCDate()
   return day > 3 && day < daysInMonth - 2
 }
+const hasLiveWindows = computed(() => flattenTimeline(props.timeline).some(({ node }) => liveSpanOf(node)))
 const todayVisible = computed(() => Boolean(range.value && today >= range.value.start && today <= range.value.end))
 
 function barClass(node: TimelineNode) {
@@ -83,8 +84,16 @@ function barClass(node: TimelineNode) {
 }
 function spanLabel(node: TimelineNode) {
   const span = spanOf(node)
-  if (!span) return 'No dates'
-  return span.start === span.end ? dayOf(span.start) : `${dayOf(span.start)} – ${dayOf(span.end)}`
+  const live = liveSpanOf(node)
+  const work = span ? (span.start === span.end ? dayOf(span.start) : `${dayOf(span.start)} – ${dayOf(span.end)}`) : null
+  const out = live ? `live ${dayOf(live.start)} – ${dayOf(live.end)}` : null
+  return [work, out].filter(Boolean).join(' · ') || 'No dates'
+}
+// The live window sits behind the work as a thin, pale band: sky while running or ahead,
+// rose once it has ended and the ticket is still in a live lane.
+function liveClass(node: TimelineNode) {
+  if (node.live && node.liveUntil && node.liveUntil < today) return 'bg-rose-500/40'
+  return node.live ? 'bg-sky-500/55' : 'bg-sky-500/30'
 }
 const hrefOf = (node: TimelineNode) => `/b/${node.boardId}?ticket=${node.ticketNumber}`
 
@@ -141,19 +150,24 @@ const hrefOf = (node: TimelineNode) => `/b/${node.boardId}?ticket=${node.ticketN
               :class="full ? 'text-sm' : 'text-xs'"
               :title="`Open #${node.ticketNumber}`"
             >
-              <span class="muted shrink-0 tabular-nums">#{{ node.ticketNumber }}</span>
               <span class="truncate" :class="node.done ? 'muted line-through' : ''">{{ node.title }}</span>
             </NuxtLink>
             <span v-else class="flex min-w-0 items-baseline gap-1.5 font-semibold" :class="full ? 'text-sm' : 'text-xs'">
-              <span class="muted shrink-0 tabular-nums">#{{ node.ticketNumber }}</span>
               <span class="truncate">{{ node.title }}</span>
               <EyeOff v-if="!node.readable" :size="11" class="muted shrink-0 self-center" aria-label="On a board you cannot open" />
             </span>
-            <span class="muted block truncate" :class="full ? 'text-xs' : 'text-[10px]'">{{ node.boardName }} · {{ node.laneName }}<template v-if="full"> · {{ spanLabel(node) }}</template></span>
+            <!-- The number leads the second line, as in the to-dos, so the titles line up. -->
+            <span class="muted block truncate" :class="full ? 'text-xs' : 'text-[10px]'"><span class="font-semibold tabular-nums">#{{ node.ticketNumber }}</span> · {{ node.boardName }} · {{ node.laneName }}<template v-if="full"> · {{ spanLabel(node) }}</template></span>
           </div>
         </div>
 
         <div class="relative" :class="full ? 'h-11' : 'h-9'" :title="`#${node.ticketNumber} · ${spanLabel(node)} · ${node.laneName}`">
+          <span
+            v-if="liveSpanOf(node)"
+            class="absolute top-1/2 h-2 -translate-y-1/2 rounded-full"
+            :class="liveClass(node)"
+            :style="{ left: `${offset(liveSpanOf(node)!.start)}%`, width: `${Math.max(0.8, offset(liveSpanOf(node)!.end, true) - offset(liveSpanOf(node)!.start))}%` }"
+          />
           <template v-if="spanOf(node)">
             <Diamond
               v-if="isMilestone(node)"
@@ -169,9 +183,15 @@ const hrefOf = (node: TimelineNode) => `/b/${node.boardId}?ticket=${node.ticketN
               :style="{ left: `${offset(spanOf(node)!.start)}%`, width: `${Math.max(0.8, offset(spanOf(node)!.end, true) - offset(spanOf(node)!.start))}%` }"
             />
           </template>
-          <span v-else class="muted absolute inset-0 flex items-center px-2 text-[10px] italic">No dates</span>
+          <span v-else-if="!liveSpanOf(node)" class="muted absolute inset-0 flex items-center px-2 text-[10px] italic">No dates</span>
         </div>
       </div>
+    </div>
+    <!-- Two kinds of bar once any ticket is out in the world; worth saying which is which. -->
+    <div v-if="hasLiveWindows" class="muted flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-[var(--line)] px-3 py-1.5 text-[10px] font-semibold">
+      <span class="flex items-center gap-1.5"><span class="h-2.5 w-5 rounded-full bg-[var(--accent)]" /> Work: start to due date</span>
+      <span class="flex items-center gap-1.5"><span class="h-1.5 w-5 rounded-full bg-sky-500/55" /> Live window</span>
+      <span class="flex items-center gap-1.5"><span class="h-0.5 w-3 bg-rose-500/70" /> Today</span>
     </div>
   </div>
 </template>

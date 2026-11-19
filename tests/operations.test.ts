@@ -142,6 +142,43 @@ describe('the operation registry', () => {
       expect(db.listActivity(ticket.id).filter(entry => entry.kind === 'start_date').map(entry => entry.payload.to)).toEqual([null, '2026-03-20'])
     })
 
+    it('keeps a live window apart from the work, and a live lane quiets the due date', async () => {
+      type Result = { ticket: { id: string; liveFrom: string | null; liveUntil: string | null } }
+      const board = db.createBoard('Campaign board')
+      db.setBoardMember(board.id, people.editor!, 'editor', false)
+      const lanes = db.findBoardSummary(board.id)!.lanes.filter(lane => !lane.isImport)
+      const work = lanes[0]!
+      const live = lanes[1]!
+
+      const { ticket } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId: board.id, laneId: work.id, title: 'Launch', dueDate: '2026-01-18', liveFrom: '2026-01-18', liveUntil: '2026-07-31' }) as Result
+      expect(ticket).toMatchObject({ liveFrom: '2026-01-18', liveUntil: '2026-07-31' })
+      expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, liveUntil: '2026-01-01' }))).toBe(422)
+
+      // Live and done exclude each other; the import lane is neither.
+      db.updateLane(live.id, { isLive: true })
+      const doneLane = lanes.find(lane => lane.isDone)!
+      expect(db.findLane(live.id)).toMatchObject({ isLive: true, isDone: false })
+      db.updateLane(live.id, { isDone: true })
+      expect(db.findLane(live.id)).toMatchObject({ isLive: false, isDone: true })
+      db.updateLane(live.id, { isLive: true })
+      expect(db.findLane(doneLane.id)!.isDone).toBe(true)
+
+      // Overdue while worked on; quiet once live, and done as a subticket.
+      const owner = { userId: people.owner!, instanceAdmin: true }
+      expect(db.listDueTickets(owner as never, '2026-03-01').some(due => due.id === ticket.id)).toBe(true)
+      const parent = db.createTicket(board.id, { title: 'Bundle', laneId: work.id, todos: [{ text: '', completed: false, subticketId: ticket.id }] })!
+      db.moveTicket(ticket.id, live.id, 0)
+      expect(db.listDueTickets(owner as never, '2026-03-01').some(due => due.id === ticket.id)).toBe(false)
+      expect(db.findTicket(parent.id)!.todos[0]).toMatchObject({ completed: true, subticket: { done: true } })
+
+      const { timelineWarnings } = await import('../shared/utils/timeline')
+      const tree = db.ticketTimeline(parent.id, () => true)!
+      expect(tree.children[0]).toMatchObject({ live: true, done: true, liveUntil: '2026-07-31' })
+      expect(timelineWarnings(tree, '2026-03-01')).toEqual([])
+      expect(timelineWarnings(tree, '2026-08-02').map(warning => warning.kind)).toEqual(['live_ended'])
+      db.deleteBoard(board.id)
+    })
+
     it('reads a ticket and its subtickets down through theirs as a timeline', async () => {
       type Node = { ticketNumber: number; title: string; startDate: string | null; readable: boolean; children: Node[] }
       const design = db.createBoard('Production')
@@ -174,6 +211,26 @@ describe('the operation registry', () => {
       expect(timelineWarnings(tree as never, '2026-03-05').map(warning => warning.kind)).toEqual(['ends_after_plan'])
       db.deleteBoard(design.id)
       db.deleteBoard(review.id)
+    })
+
+    it('lists where a ticket is used: its parents on boards the caller can read', async () => {
+      type Parents = { parents: Array<{ ticketNumber: number; title: string; archived: boolean }> }
+      const other = db.createBoard('Elsewhere')
+      db.setBoardMember(other.id, people.editor!, 'editor', false)
+      const otherLane = db.findBoardSummary(other.id)!.lanes.find(lane => !lane.isImport)!.id
+      const mail = db.createTicket(boardId, { title: 'Start mail', laneId })!
+      const fragment = db.createSubticket(mail.id, { boardId, laneId, title: 'Shared fragment' }, null)!.subticket
+      db.createTicket(other.id, { title: 'Follow-up', laneId: otherLane, todos: [{ text: '', completed: false, subticketId: fragment.id }] })!
+      const dropped = db.createTicket(boardId, { title: 'Dropped mail', laneId, todos: [{ text: '', completed: false, subticketId: fragment.id }] })!
+      db.archiveTicket(dropped.id)
+
+      const read = async () => (await ops.run(ops.ticketParentsList, actorOf('editor'), { ticketId: fragment.id }) as Parents).parents
+      expect((await read()).map(parent => [parent.title, parent.archived])).toEqual([['Start mail', false], ['Follow-up', false], ['Dropped mail', true]])
+      // A parent on a board out of reach is not there at all, not even its number.
+      db.removeBoardMember(other.id, people.editor!)
+      expect((await read()).map(parent => parent.title)).toEqual(['Start mail', 'Dropped mail'])
+      expect(await ops.run(ops.ticketParentsList, actorOf('editor'), { ticketId: mail.id })).toEqual({ parents: [] })
+      db.deleteBoard(other.id)
     })
 
     it('files a subticket on another board of the workspace and ticks it from its lane', async () => {
