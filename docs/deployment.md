@@ -36,7 +36,7 @@ systemctl start git-autodeploy@open-bugster         # look now instead of waitin
 cat /root/open-bugster/.git/autodeploy-deployed     # the commit that is live
 ```
 
-A run with nothing new logs nothing but systemd's own start and finish lines. A release logs `New release on main: …`, the build, the backup, and ends in `Deployed: …`. It takes as long as the Docker build, a few minutes.
+A run with nothing new logs nothing but systemd's own start and finish lines. A release logs `New release on main: …`, the build, the backup, and ends in `Deployed: …`. It takes as long as the Docker build, a few minutes. The instance is unreachable for well under a minute of that: the seconds the backup stops the container, then the new container's start until its healthcheck passes, because the reverse proxy only routes to a healthy container.
 
 ### When something goes wrong
 
