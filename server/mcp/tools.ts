@@ -551,6 +551,8 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       recurrence: RECURRENCE_INPUT.nullable().optional().describe('Replaces the rule of a recurring ticket, whole; null stops the series and leaves the current round as a milestone. A rule that moves the rounds to other days puts dueDate on the first of them from today on; dueDate given alone moves only the current round.'),
       closeRound: z.enum(['done', 'skipped']).optional()
         .describe('For a recurring ticket: end the round that is on now — done, or skipped on purpose — and start the next one right away (to-dos reset, back to the return lane, dueDate the next round after today). Applied after the other fields. Leave it to the calendar when the work is simply finished on time: moving the card to a done lane is enough.'),
+      reopenRound: z.literal(true).optional()
+        .describe('For a recurring ticket: undo the last closed round, whether a person or the calendar closed it — dueDate, to-dos, decisions and lane go back to how they stood. Only the last round, and only until the next one is due. Not with other fields.'),
       startDate: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. Never after dueDate; not for a milestone.'),
       dueDate: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. The deadline of the work, not the end of a run.'),
       liveFrom: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. First day out in the world.'),
@@ -579,8 +581,13 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       }).optional()
         .describe('Moves this ticket\'s start and due date by days, and with them every ticket waiting on it, directly or through others. Finished work and tickets you may not edit stay put and stop the push; live windows never move. Applied after the other fields; a dry run has to come on its own.')
     }
-  }, async ({ shift, closeRound, ...input }) => {
+  }, async ({ shift, closeRound, reopenRound, ...input }) => {
     const fields = Object.keys(input).filter(key => key !== 'ticketId' && input[key as keyof typeof input] !== undefined)
+    if (reopenRound) {
+      if (fields.length || shift || closeRound) throw new Error('Reopen the round on its own, without other changes.')
+      const reopened = await call<{ ticket: Ticket; round: { date: string; outcome: string } }>(ops.ticketRoundReopen, { ticketId: input.ticketId })
+      return reply({ ...slim(reopened.ticket), reopenedRound: reopened.round })
+    }
     if (shift?.dryRun && fields.length) throw new Error('Send a dry run on its own, without other changes.')
     if (shift && closeRound) throw new Error('Shift the dates or close the round, not both at once.')
     const updated = fields.length || (!shift && !closeRound) ? (await call<{ ticket: Ticket }>(ops.ticketUpdate, input)).ticket : null

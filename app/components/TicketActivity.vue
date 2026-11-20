@@ -54,6 +54,7 @@ const sentences: Record<ActivityKind, (entry: TicketActivityEntry) => string> = 
       : `closed the round of ${entry.payload.date} as ${how}${next}`
   },
   round_missed: entry => `The round of ${entry.payload.date} was missed${entry.payload.next ? `; the next round is due ${entry.payload.next}` : ''}`,
+  round_reopened: entry => `opened the round of ${entry.payload.date} again`,
 }
 
 /**

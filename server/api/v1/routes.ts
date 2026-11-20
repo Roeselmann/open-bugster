@@ -104,6 +104,13 @@ export const v1Routes: readonly V1Route[] = [
       next: z.string().nullable().describe('The day the new round is due; null when the series ended with this one.')
     })
   }) },
+  { method: 'DELETE', path: '/tickets/{ticketId}/round', operation: ops.ticketRoundReopen, response: z.object({
+    ticket: ticketSchema.describe('The ticket with the round open again: its due date, to-dos and lane as they were.'),
+    round: z.object({
+      date: z.string().describe('The day the reopened round is due.'),
+      outcome: z.enum(['done', 'missed', 'skipped']).describe('How it had closed.')
+    })
+  }) },
   { method: 'GET', path: '/tickets/{ticketId}/parents', operation: ops.ticketParentsList, response: z.object({ parents: z.array(subticketRefSchema).describe('The tickets that hold this one as a subticket, on boards the caller can read.') }) },
   { method: 'GET', path: '/tickets/{ticketId}/timeline', operation: ops.ticketTimelineGet, response: z.object({ timeline: timelineNodeSchema }) },
   { method: 'GET', path: '/tickets/{ticketId}/subticket-candidates', operation: ops.ticketSubticketCandidates, response: z.object({ candidates: z.array(subticketRefSchema).describe('Open tickets of the workspace that could be linked: send one back in the to-do list with its id as `subticketId`. With `for=dependency`, the tickets this one could wait on instead: send ids back as `waitsOn`.') }) },

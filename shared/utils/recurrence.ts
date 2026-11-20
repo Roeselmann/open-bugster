@@ -146,3 +146,15 @@ export function nextRound(recurrence: Pick<TicketRecurrence, 'frequency' | 'inte
 export function roundCloses(recurrence: Pick<TicketRecurrence, 'frequency' | 'interval' | 'anchor' | 'until'>, current: string): string {
   return nextRound(recurrence, current) ?? toDate(toTime(current) + DAY)
 }
+
+/**
+ * Whether the last closed round of a ticket can be opened again: only the latest, and only
+ * while the clock would not close it again at once — before the day its next round is due.
+ * Opening an older one would leave two rounds on at the same time.
+ */
+export function reopenableRound(ticket: { recurrence: TicketRecurrence | null; dueDate: string | null; rounds: Array<{ date: string }>; archivedAt?: string | null }, today: string): string | null {
+  const last = ticket.rounds[0]
+  if (!ticket.recurrence || !ticket.dueDate || ticket.archivedAt || !last) return null
+  if (ticket.dueDate < last.date) return null
+  return today < roundCloses(ticket.recurrence, last.date) ? last.date : null
+}

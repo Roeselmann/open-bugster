@@ -257,7 +257,7 @@ export interface TicketComment {
   updatedAt: string
 }
 
-export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'start_date', 'due_date', 'live_from', 'live_until', 'schedule', 'type', 'archived', 'restored', 'commented', 'subticket', 'waits_on', 'decided', 'reopened', 'strict_order', 'went_live', 'live_ending', 'live_ended', 'recurrence', 'new_round', 'round_missed'] as const
+export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'start_date', 'due_date', 'live_from', 'live_until', 'schedule', 'type', 'archived', 'restored', 'commented', 'subticket', 'waits_on', 'decided', 'reopened', 'strict_order', 'went_live', 'live_ending', 'live_ended', 'recurrence', 'new_round', 'round_missed', 'round_reopened'] as const
 export type ActivityKind = typeof activityKinds[number]
 
 /**

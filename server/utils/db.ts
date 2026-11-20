@@ -24,7 +24,7 @@ export interface ActivityAuthor {
 /** The calendar, as the author of what it does: a live window passing, a new round starting. */
 export const SYSTEM_AUTHOR: ActivityAuthor = { principalId: null, agentId: null, channel: 'system' }
 import { decisionAnswer } from '../../shared/utils/todo-progress'
-import { nextRound as nextRoundOf, occurrenceOnOrBefore, roundCloses } from '../../shared/utils/recurrence'
+import { nextRound as nextRoundOf, occurrenceOnOrBefore, reopenableRound, roundCloses } from '../../shared/utils/recurrence'
 import { DEFAULT_TICKET_TYPES, DEFAULT_WORKSPACE_NAME } from '../../shared/utils/constants'
 import { boardToday, daysUntil, dueLevel, liveLevel } from '../../shared/utils/due-date'
 import { decryptSecret, encryptSecret, secretKeyAvailable } from './secret-box'
@@ -2231,6 +2231,8 @@ export function ensureTicketRecurrence(db: Database.Database) {
       );
       CREATE INDEX IF NOT EXISTS idx_ticket_rounds_ticket ON ticket_rounds (ticket_id, due_date DESC);
     `)
+    // How the ticket stood before the round closed, so the round can be opened again (`reopenRound`).
+    if (!tableColumns(db, 'ticket_rounds').has('snapshot')) db.exec('ALTER TABLE ticket_rounds ADD COLUMN snapshot TEXT')
   })()
   return !existed
 }
@@ -3397,14 +3399,21 @@ export function closeRound(ticketId: string, outcome: Exclude<RoundOutcome, 'mis
 
   const now = new Date().toISOString()
   db.transaction(() => {
+    const snapshot: RoundSnapshot = {
+      laneId: ticket.laneId,
+      index: (db.prepare('SELECT id FROM tickets WHERE lane_id = ? AND archived_at IS NULL ORDER BY position, created_at').all(ticket.laneId) as Array<{ id: string }>).findIndex(row => row.id === ticketId),
+      todos: db.prepare('SELECT id, completed, decision, decided_by AS decidedBy, decided_at AS decidedAt FROM ticket_todos WHERE ticket_id = ?').all(ticketId) as RoundSnapshot['todos']
+    }
     db.prepare(`
-      INSERT INTO ticket_rounds (id, ticket_id, due_date, outcome, todos_done, todos_total, open_todos, closed_at, closed_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO ticket_rounds (id, ticket_id, due_date, outcome, todos_done, todos_total, open_todos, closed_at, closed_by, snapshot)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (ticket_id, due_date) DO UPDATE SET outcome = excluded.outcome, todos_done = excluded.todos_done,
-        todos_total = excluded.todos_total, open_todos = excluded.open_todos, closed_at = excluded.closed_at, closed_by = excluded.closed_by
+        todos_total = excluded.todos_total, open_todos = excluded.open_todos, closed_at = excluded.closed_at, closed_by = excluded.closed_by,
+        snapshot = excluded.snapshot
     `).run(
       randomUUID(), ticketId, due, result, ticket.todos.filter(todo => todo.completed).length, ticket.todos.length,
-      JSON.stringify(ticket.todos.filter(todo => !todo.completed).map(todo => todo.text)), now, actor?.principalId ?? null
+      JSON.stringify(ticket.todos.filter(todo => !todo.completed).map(todo => todo.text)), now, actor?.principalId ?? null,
+      JSON.stringify(snapshot)
     )
     recordActivity(ticketId, actor, result === 'missed' ? 'round_missed' : 'new_round', { date: due, outcome: result, next })
     if (!next) return
@@ -3422,6 +3431,47 @@ export function closeRound(ticketId: string, outcome: Exclude<RoundOutcome, 'mis
     if (home && home.boardId === ticket.boardId && home.id !== ticket.laneId) moveTicket(ticketId, home.id, 0, actor)
   })()
   return { ticketId, boardId: ticket.boardId, kind: result === 'missed' ? 'round_missed' : 'new_round', date: due, outcome: result, next }
+}
+
+/** How a ticket stood as its round closed: its place on the board and its to-dos. */
+interface RoundSnapshot {
+  laneId: string
+  index: number
+  todos: Array<{ id: string; completed: number; decision: string | null; decidedBy: string | null; decidedAt: string | null }>
+}
+
+/**
+ * Opens the last closed round again, as if it had never closed: the due date goes back to it,
+ * the to-dos and decisions to how they stood, the card to the lane and place it left. A round
+ * closed before snapshots were kept gets its date back and nothing else. Null when there is no
+ * round that may be opened (see `reopenableRound`).
+ */
+export function reopenRound(ticketId: string, actor: ActivityAuthor | null, today = boardToday()): { date: string; outcome: RoundOutcome } | null {
+  const db = getDb()
+  const ticket = findTicket(ticketId)
+  if (!ticket) return null
+  const date = reopenableRound(ticket, today)
+  if (!date) return null
+  const row = db.prepare('SELECT outcome, snapshot FROM ticket_rounds WHERE ticket_id = ? AND due_date = ?').get(ticketId, date) as { outcome: RoundOutcome; snapshot: string | null } | undefined
+  if (!row) return null
+  let snapshot: RoundSnapshot | null = null
+  try {
+    snapshot = row.snapshot ? JSON.parse(row.snapshot) as RoundSnapshot : null
+  } catch {
+    snapshot = null
+  }
+  db.transaction(() => {
+    db.prepare('DELETE FROM ticket_rounds WHERE ticket_id = ? AND due_date = ?').run(ticketId, date)
+    db.prepare('UPDATE tickets SET due_date = ?, updated_at = ? WHERE id = ?').run(date, new Date().toISOString(), ticketId)
+    if (snapshot) {
+      const restore = db.prepare('UPDATE ticket_todos SET completed = ?, decision = ?, decided_by = ?, decided_at = ? WHERE id = ? AND ticket_id = ? AND subticket_id IS NULL')
+      for (const todo of snapshot.todos) restore.run(todo.completed, todo.decision, todo.decidedBy, todo.decidedAt, todo.id, ticketId)
+      const lane = findLane(snapshot.laneId)
+      if (lane && lane.boardId === ticket.boardId && lane.id !== ticket.laneId) moveTicket(ticketId, lane.id, Math.max(0, snapshot.index), actor)
+    }
+    recordActivity(ticketId, actor, 'round_reopened', { date, outcome: row.outcome })
+  })()
+  return { date, outcome: row.outcome }
 }
 
 /**

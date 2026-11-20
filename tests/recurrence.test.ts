@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  describeRecurrence, nextRound, occurrence, occurrenceAfter, occurrenceOnOrAfter, occurrenceOnOrBefore, occurrencesBetween, roundCloses
+  describeRecurrence, nextRound, occurrence, occurrenceAfter, occurrenceOnOrAfter, occurrenceOnOrBefore, occurrencesBetween, reopenableRound, roundCloses
 } from '../shared/utils/recurrence'
 import { settleSchedule, type ScheduleFields } from '../shared/utils/schedule'
 import type { TicketRecurrence } from '../shared/types/domain'
@@ -166,6 +166,40 @@ describe('rounds of a recurring ticket', () => {
     // A return lane has to be one of the board's own.
     const other = weeklyBoard('Elsewhere')
     await expect(ops.run(ops.ticketUpdate, owner, { ticketId: id, recurrence: { frequency: 'weekly', anchor: '2026-11-02', returnLaneId: other.weeklyLane.id } })).rejects.toMatchObject({ statusCode: 422 })
+  })
+
+  it('reopens the last round as it stood: date, to-dos and lane, until the next round is due', () => {
+    const { board, weeklyLane, done } = weeklyBoard('Reopen')
+    const ticket = db.createTicket(board.id, { title: 'Ads', laneId: done.id, schedule: 'recurring', dueDate: '2026-11-16', recurrence: series('2026-11-02', weeklyLane.id), todos })!
+    const signal = db.closeRound(ticket.id, 'skipped', null, '2026-11-18')!
+    expect(signal).toMatchObject({ outcome: 'skipped', next: '2026-11-23' })
+    const closed = db.findTicket(ticket.id)!
+    expect([closed.laneId, closed.todos.map(todo => todo.completed)]).toEqual([weeklyLane.id, [false, false]])
+    expect(reopenableRound(closed, '2026-11-23')).toBeNull()
+    expect(reopenableRound(closed, '2026-11-22')).toBe('2026-11-16')
+
+    expect(db.reopenRound(ticket.id, null, '2026-11-23')).toBeNull()
+    expect(db.reopenRound(ticket.id, null, '2026-11-20')).toEqual({ date: '2026-11-16', outcome: 'skipped' })
+    const reopened = db.findTicket(ticket.id)!
+    expect(reopened).toMatchObject({ dueDate: '2026-11-16', laneId: done.id, rounds: [] })
+    expect(reopened.todos.map(todo => todo.completed)).toEqual([true, false])
+    expect(db.listActivity(ticket.id).some(item => item.kind === 'round_reopened')).toBe(true)
+    // Nothing left to reopen, and the clock closes the round again when its time comes.
+    expect(db.reopenRound(ticket.id, null, '2026-11-20')).toBeNull()
+    expect(db.sweepRounds('2026-11-23').filter(item => item.ticketId === ticket.id).map(item => item.outcome)).toEqual(['done'])
+  })
+
+  it('reopens a round through the operation, and refuses when there is none', async () => {
+    const { board, weeklyLane } = weeklyBoard('Reopen op')
+    const owner = actorModule.actorFor(db.findUser(db.listUsers()[0]!.id)!)
+    const created = await ops.run(ops.ticketCreate, owner, { boardId: board.id, title: 'Review', laneId: weeklyLane.id, recurrence: { frequency: 'weekly', anchor: '2026-11-02' }, todos }) as { ticket: { id: string; dueDate: string } }
+    const id = created.ticket.id
+    await expect(ops.run(ops.ticketRoundReopen, owner, { ticketId: id })).rejects.toMatchObject({ statusCode: 409 })
+    await ops.run(ops.ticketRoundClose, owner, { ticketId: id, outcome: 'done' })
+    const result = await ops.run(ops.ticketRoundReopen, owner, { ticketId: id }) as { ticket: { dueDate: string; todos: Array<{ completed: boolean }> }; round: { date: string; outcome: string } }
+    expect(result.round).toEqual({ date: created.ticket.dueDate, outcome: 'done' })
+    expect(result.ticket.dueDate).toBe(created.ticket.dueDate)
+    expect(result.ticket.todos.map(todo => todo.completed)).toEqual([true, false])
   })
 
   it('ends a series after its last round', () => {

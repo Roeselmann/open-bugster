@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { boardMemberIds, boardViewer, requireBoardAccess, requireTicketAccess } from '../utils/access'
 import type { Actor } from '../utils/actor'
 import {
-  archiveTicket, closeRound, createSubticket, createTicket, listActivity, listDueTickets, listBoardActivity, listTickets, listTicketsPage,
+  archiveTicket, closeRound, reopenRound, createSubticket, createTicket, listActivity, listDueTickets, listBoardActivity, listTickets, listTicketsPage,
   atomically, dependencyRefs, findBoard, findLane, findTicket, listBoards, moveTicket, parentTicketRefsOf, searchSubticketCandidates, personById, restoreTicket, subticketIdsOf, ticketIdByNumber, ticketTimeline, ticketTypeBelongsToBoard, transferTicket, updateTicket, ticketsWaitingOn, waitingTicketIds, waitsOnTransitively
 } from '../utils/db'
 import { importedTicketUpdateSchema, subticketCreateSchema, ticketCreateSchema, ticketMoveSchema, ticketRoundCloseSchema, ticketShiftSchema, ticketTransferSchema, ticketUpdateSchema } from '../utils/validation'
@@ -418,6 +418,21 @@ export const ticketRoundClose = defineOperation({
     }
     const signal = orNotFound(closeRound(ticket.id, input.outcome, ctx.actor), 'Ticket')
     return { ticket: orNotFound(findTicket(ticket.id), 'Ticket'), round: { date: signal.date, outcome: signal.outcome, next: signal.next } }
+  }
+})
+
+export const ticketRoundReopen = defineOperation({
+  name: 'ticket.round.reopen',
+  summary: 'Open the last closed round of a recurring ticket again',
+  input: z.object({ ticketId }),
+  requires: { scope: 'ticket', role: 'editor', ticketId: input => input.ticketId },
+  audit: { targetType: 'ticket', targetId: input => input.ticketId, changes: [] },
+  run: (ctx) => {
+    const ticket = ctx.ticket!
+    if (ticket.schedule !== 'recurring') throw createError({ statusCode: 422, statusMessage: 'Only a recurring ticket has rounds to reopen.' })
+    const round = reopenRound(ticket.id, ctx.actor)
+    if (!round) throw createError({ statusCode: 409, statusMessage: 'No round to reopen: only the last one can, and only until the next round is due.' })
+    return { ticket: orNotFound(findTicket(ticket.id), 'Ticket'), round }
   }
 })
 

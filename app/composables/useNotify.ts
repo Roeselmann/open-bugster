@@ -8,9 +8,10 @@ export function useNotify() {
   const notice = useState<UiNotice | null>('notice', () => null)
   const lastId = useState('notice-id', () => 0)
 
-  function notify(type: 'success' | 'error', text: string) {
+  /** `action` adds a button to the toast, an Undo say; pressing it closes the toast. */
+  function notify(type: 'success' | 'error', text: string, action?: UiNotice['action']) {
     lastId.value += 1
-    notice.value = { id: lastId.value, type, text }
+    notice.value = { id: lastId.value, type, text, action }
   }
 
   function closeNotice(id: number) {

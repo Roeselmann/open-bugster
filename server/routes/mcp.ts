@@ -43,7 +43,7 @@ export default defineEventHandler(async (event) => {
         'the round that is on now. When the next round is due the server closes the current one — done',
         'if the card sits in a done or live lane or every to-do is ticked, otherwise missed — resets the',
         'to-dos and puts the card back in its return lane. Finish a round by moving the card to a done',
-        'lane; update_ticket with closeRound starts the next one at once.',
+        'lane; update_ticket with closeRound starts the next one at once, and reopenRound undoes the last close.',
         '',
         'Start with list_boards, then board_overview for the board you want — lane ids, member ids',
         'and the label and category names all come from there, and inventing one will fail.',

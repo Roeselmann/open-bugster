@@ -527,14 +527,30 @@ async function shiftedFromEditor() {
  * Ends the round of a recurring ticket that is on now and starts the next. The card may go back
  * to its return lane, which reorders two lanes, so the board reloads after.
  */
+const roundDayText = new Intl.DateTimeFormat('en', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })
+const roundDay = (date: string) => roundDayText.format(new Date(`${date}T00:00:00Z`))
 async function closeRoundFromEditor(ticket: Ticket, outcome: 'done' | 'skipped') {
   await patchQueue
   try {
     const response = await $fetch<{ ticket: Ticket; round: { date: string; next: string | null } }>(`/api/tickets/${ticket.id}/round`, { method: 'POST', body: { outcome } })
     replaceTicket(response.ticket)
     await refresh()
-    const what = outcome === 'skipped' ? 'Round skipped' : 'Round completed'
-    notify('success', response.round.next ? `${what}. The next one is due ${response.round.next}.` : `${what}. That was the last round of the series.`)
+    const what = outcome === 'skipped' ? 'Round skipped' : 'Round done'
+    notify('success', response.round.next ? `${what}. The next one is due ${roundDay(response.round.next)}.` : `${what}. That was the last round of the series.`,
+      { label: 'Undo', run: () => reopenRoundFromEditor(response.ticket) })
+  } catch (error) {
+    notify('error', errorText(error))
+  }
+}
+
+// The undo of closing a round: due date, to-dos and lane go back to how they stood.
+async function reopenRoundFromEditor(ticket: Ticket) {
+  await patchQueue
+  try {
+    const response = await $fetch<{ ticket: Ticket; round: { date: string } }>(`/api/tickets/${ticket.id}/round`, { method: 'DELETE' })
+    replaceTicket(response.ticket)
+    await refresh()
+    notify('success', `The round of ${roundDay(response.round.date)} is open again.`)
   } catch (error) {
     notify('error', errorText(error))
   }
@@ -711,7 +727,7 @@ async function sync(provider: IntegrationProvider) {
       <div v-else class="scrollbar-thin overflow-x-auto max-md:hidden"><KanbanBoard :board-id="board.id" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" @open="openTicket" @move="moveTicket" @create="newTicket" @upload="uploadAttachmentsFromCard" /></div>
     </main>
 
-    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :save-state="saveState" :deleting-attachment-id="deletingAttachmentId" :initial-lane-id="newTicketLaneId" :initial-placement="newTicketPlacement" :lane-ticket-count="selectedLaneTicketCount" :boards="transferableBoards" :subticket-boards="subticketBoards" :testflight="board.credentials.complete" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @reorder="reorderTicketFromEditor" @transfer="transferTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @save-description="saveDescriptionFromEditor" @save-title="saveTitleFromEditor" @patch="patchTicketFromEditor" @upload="uploadAttachmentsFromEditor" @create-subticket="createSubticketFromEditor" @commented="refresh()" @shifted="shiftedFromEditor" @close-round="closeRoundFromEditor" @notify="notify" />
+    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :save-state="saveState" :deleting-attachment-id="deletingAttachmentId" :initial-lane-id="newTicketLaneId" :initial-placement="newTicketPlacement" :lane-ticket-count="selectedLaneTicketCount" :boards="transferableBoards" :subticket-boards="subticketBoards" :testflight="board.credentials.complete" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @reorder="reorderTicketFromEditor" @transfer="transferTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @save-description="saveDescriptionFromEditor" @save-title="saveTitleFromEditor" @patch="patchTicketFromEditor" @upload="uploadAttachmentsFromEditor" @create-subticket="createSubticketFromEditor" @commented="refresh()" @shifted="shiftedFromEditor" @close-round="closeRoundFromEditor" @reopen-round="reopenRoundFromEditor" @notify="notify" />
 
     <UiConfirmDialog
       v-if="confirmation"

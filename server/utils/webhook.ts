@@ -41,6 +41,7 @@ export const eventForOperation: Record<string, WebhookEvent> = {
   'ticket.restore': 'ticket.restored',
   // A round closed by hand is done or skipped, never missed: that is the calendar's to note.
   'ticket.round.close': 'ticket.new_round',
+  // `ticket.round.reopen` sends nothing: it takes back a close, and the next close is sent again.
   'comment.add': 'comment.added',
   'import.run': 'import.completed'
 }

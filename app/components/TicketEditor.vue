@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ComponentPublicInstance } from 'vue'
-import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, CalendarArrowUp, CalendarClock, CalendarRange, Check, ChevronDown, Flag, Circle, CircleAlert, CircleCheck, CornerDownRight, CornerLeftUp, Download, Repeat, SkipForward, CircleX, ExternalLink, FileText, Gauge, GripVertical, History, Link2, ListOrdered, ListTodo, Lock, LoaderCircle, MessageSquare, Paperclip, PenLine, Pin, PinOff, Plus, Radio, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, Vote, X } from '@lucide/vue'
+import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, CalendarArrowUp, CalendarClock, CalendarRange, Check, ChevronDown, Flag, Circle, CircleAlert, CircleCheck, CornerDownRight, CornerLeftUp, Download, Repeat, SkipForward, Undo2, CircleX, ExternalLink, FileText, Gauge, GripVertical, History, Link2, ListOrdered, ListTodo, Lock, LoaderCircle, MessageSquare, Paperclip, PenLine, Pin, PinOff, Plus, Radio, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, Vote, X } from '@lucide/vue'
 import {
   DialogContent,
   DialogDescription,
@@ -16,7 +16,7 @@ import {
   VisuallyHidden,
 } from 'reka-ui'
 import type { Attachment, BoardMember, DependencyRef, ShiftResult, Category, LabelSummary, Lane, Person, RecurrenceFrequency, SubticketRef, Ticket, TicketDecisionInput, TicketLinkInput, TicketPatch, TicketPriority, TicketRecurrence, TicketSchedule, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
-import { describeRecurrence, occurrenceOnOrAfter } from '~~/shared/utils/recurrence'
+import { describeRecurrence, nextRound as nextRoundOf, occurrenceOnOrAfter, reopenableRound } from '~~/shared/utils/recurrence'
 import { TODO_LIGHT_LABELS, todoLight } from '~~/shared/utils/todo-progress'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 import { boardToday, dueDescription, dueLevel, liveDescription, liveLevel } from '~~/shared/utils/due-date'
@@ -45,6 +45,8 @@ const emit = defineEmits<{
   saveTitle: [ticket: Ticket, title: string]
   /** Ends the round of a recurring ticket that is on now and starts the next. */
   closeRound: [ticket: Ticket, outcome: 'done' | 'skipped']
+  /** Opens the last closed round again, the undo of `closeRound`. */
+  reopenRound: [ticket: Ticket]
   /** A new ticket filed as a to-do of this one; `done` says whether it worked, so the dialog can close. */
   createSubticket: [ticket: Ticket, input: { boardId: string; laneId: string; title: string; description: string }, done: (ok: boolean) => void]
 }>()
@@ -130,6 +132,20 @@ const longDay = new Intl.DateTimeFormat('en', { weekday: 'short', day: 'numeric'
 const longDayOf = (date: string) => longDay.format(new Date(`${date}T00:00:00Z`))
 const roundDay = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', timeZone: 'UTC' })
 const roundDayOf = (date: string) => roundDay.format(new Date(`${date}T00:00:00Z`))
+// What closing the round by hand does, said before the click: the server's own steps, in order.
+const closeHint = computed(() => {
+  if (!props.ticket || schedule.value !== 'recurring' || !rule.anchor || !form.dueDate) return ''
+  const next = nextRoundOf(rule, form.dueDate > today ? form.dueDate : today)
+  if (!next) return 'Both close the last round, and with it the series.'
+  const steps = ['close this round']
+  if (rule.resetTodos && props.ticket.todos.length) steps.push('untick the to-dos')
+  const home = rule.returnLaneId ? props.lanes.find(lane => lane.id === rule.returnLaneId) : null
+  if (home && home.id !== props.ticket.laneId) steps.push(`put the card in ${home.name}`)
+  steps.push(`start the round of ${longDayOf(next)}`)
+  return `Both ${steps.slice(0, -1).join(', ')} and ${steps.at(-1)}; skipping just leaves no warning. Undo is possible until the next round is due.`
+})
+// The last closed round, while it may still be opened again.
+const reopenable = computed(() => (props.ticket && schedule.value === 'recurring' ? reopenableRound(props.ticket, today) : null))
 function roundTitle(round: Ticket['rounds'][number]) {
   const how = { done: 'Done', missed: 'Missed', skipped: 'Skipped' }[round.outcome]
   const open = round.openTodos.length ? ` · open: ${round.openTodos.join(', ')}` : ''
@@ -325,7 +341,7 @@ const dateText = (date: string) => shortDate.format(new Date(`${date}T00:00:00Z`
 const scheduleSummary = computed(() => {
   if (schedule.value === 'none') return 'No schedule'
   if (schedule.value === 'milestone') return form.dueDate ? `Milestone · ${dateText(form.dueDate)}` : 'Milestone · no date yet'
-  if (schedule.value === 'recurring') return ruleText.value ? `${ruleText.value}${form.dueDate ? ` · next round ${dateText(form.dueDate)}` : ''}` : 'Recurring · no rule yet'
+  if (schedule.value === 'recurring') return ruleText.value ? `${ruleText.value}${roundLine.value ? ` · ${roundLine.value}` : ''}` : 'Recurring · no rule yet'
   const work = form.startDate && form.dueDate ? `${dateText(form.startDate)} – ${dateText(form.dueDate)}`
     : form.dueDate ? `Due ${dateText(form.dueDate)}`
     : form.startDate ? `From ${dateText(form.startDate)}` : null
@@ -1900,25 +1916,34 @@ function focusTitle(event: Event) {
                         <SkipForward v-else :size="11" aria-hidden="true" />
                         {{ roundDayOf(round.date) }}
                       </span>
+                      <button
+                        v-if="canEdit && reopenable"
+                        type="button"
+                        class="focus-ring muted ml-1 inline-flex items-center gap-1 rounded-md px-1 text-xs font-semibold hover:text-[var(--ink)] hover:underline"
+                        :title="`Open the round of ${longDayOf(reopenable)} again: due date, to-dos and lane go back to how they stood`"
+                        data-reopen-round
+                        @click="emit('reopenRound', ticket)"
+                      ><Undo2 :size="12" aria-hidden="true" /> Reopen {{ roundDayOf(reopenable) }}</button>
                     </div>
                     <p v-if="rounds[0]?.outcome === 'missed' && !inDoneLane" class="flex items-center gap-1.5 text-xs font-semibold text-rose-600" data-missed-warning>
                       <CircleAlert :size="13" aria-hidden="true" /> The round of {{ dateText(rounds[0].date) }} was missed{{ rounds[0].openTodos.length ? ` with ${rounds[0].openTodos.length} to-do${rounds[0].openTodos.length === 1 ? '' : 's'} open` : '' }}.
                     </p>
-                    <div v-if="canEdit && !seriesOver" class="flex flex-wrap gap-2">
+                    <div v-if="canEdit && !seriesOver" class="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
                         class="focus-ring flex h-9 items-center gap-1.5 rounded-xl border border-[var(--line)] px-3 text-xs font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]"
-                        title="Close this round as done and start the next one now"
+                        title="This round is done: close it and start the next one now"
                         data-complete-round
                         @click="emit('closeRound', ticket, 'done')"
-                      ><CircleCheck :size="13" aria-hidden="true" /> Complete round</button>
+                      ><CircleCheck :size="13" aria-hidden="true" /> Done, next round</button>
                       <button
                         type="button"
                         class="focus-ring muted flex h-9 items-center gap-1.5 rounded-xl px-3 text-xs font-semibold hover:bg-[var(--panel)] hover:text-[var(--ink)]"
-                        title="Let this round go and start the next one now"
+                        title="This round does not take place, a holiday say: close it without a warning and start the next one now"
                         data-skip-round
                         @click="emit('closeRound', ticket, 'skipped')"
-                      ><SkipForward :size="13" aria-hidden="true" /> Skip round</button>
+                      ><SkipForward :size="13" aria-hidden="true" /> Skip, next round</button>
+                      <span v-if="closeHint" class="muted w-full text-[11px]" data-close-hint>{{ closeHint }}</span>
                     </div>
                   </div>
                 </div>

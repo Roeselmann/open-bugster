@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { CircleCheck, CircleX, X } from '@lucide/vue'
-import { ToastClose, ToastDescription, ToastPortal, ToastProvider, ToastRoot, ToastViewport } from 'reka-ui'
+import { ToastAction, ToastClose, ToastDescription, ToastPortal, ToastProvider, ToastRoot, ToastViewport } from 'reka-ui'
 
 export interface UiNotice {
   id: number
   type: 'success' | 'error'
   text: string
+  /** A button beside the text, an Undo; the toast closes when it is pressed. Client-side only. */
+  action?: { label: string; run: () => void }
 }
 
 const props = defineProps<{ notice: UiNotice | null }>()
@@ -33,6 +35,9 @@ function handleOpenChange(open: boolean) {
           <CircleCheck v-if="notice.type === 'success'" :size="18" class="shrink-0" aria-hidden="true" />
           <CircleX v-else :size="18" class="shrink-0" aria-hidden="true" />
           <ToastDescription class="min-w-0 flex-1">{{ notice.text }}</ToastDescription>
+          <ToastAction v-if="notice.action" :alt-text="notice.action.label" as-child>
+            <button type="button" class="focus-ring shrink-0 rounded-lg border border-white/40 px-2.5 py-1 text-xs font-bold hover:bg-white/15" data-toast-action @click="notice.action.run()">{{ notice.action.label }}</button>
+          </ToastAction>
           <ToastClose as-child>
             <button type="button" class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg hover:bg-white/15" aria-label="Dismiss notification">
               <X :size="15" aria-hidden="true" />
