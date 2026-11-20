@@ -1327,7 +1327,7 @@ function focusTitle(event: Event) {
             </label>
 
             <!-- How the ticket is sorted: how urgent, which category, which labels. -->
-            <section class="space-y-4 rounded-2xl border border-[color-mix(in_srgb,var(--accent)_22%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_5%,transparent)] p-4" aria-label="Classification">
+            <section class="!mt-10 space-y-4 rounded-2xl border border-[color-mix(in_srgb,var(--accent)_22%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_5%,transparent)] p-4" aria-label="Classification">
               <div class="grid items-start gap-4 sm:grid-cols-2">
                 <div class="block">
                   <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Gauge :size="14" /> Priority</span>
