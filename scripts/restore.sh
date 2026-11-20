@@ -49,10 +49,16 @@ docker compose down >/dev/null
 # which a plain `rm -rf /data` would. The chown afterwards is not cosmetic: the Dockerfile
 # runs the server as `node` (uid 1000), and files unpacked by root would be unwritable.
 note "Restoring the data volume …"
+#
+# It runs as root on purpose. The helper is usually the application image, whose default
+# user is `node`: that user cannot read the archive (mode 600, owned by whoever took it), but
+# can delete everything in the volume — so without --user the volume was emptied and then
+# nothing came back. The archive is also read in full before anything is deleted.
 docker run --rm \
+  --user 0:0 \
   -v "$volume":/target \
   -v "$archive":/archive.tar.gz:ro \
-  "$image" sh -c 'find /target -mindepth 1 -delete && tar xzf /archive.tar.gz -C /target --strip-components=2 ./data && chown -R 1000:1000 /target'
+  "$image" sh -c 'tar tzf /archive.tar.gz ./data >/dev/null && find /target -mindepth 1 -delete && tar xzf /archive.tar.gz -C /target --strip-components=2 ./data && chown -R 1000:1000 /target'
 
 # The secret in .env decides whether the restored App Store Connect keys can be read at
 # all, so a mismatch is worth saying out loud rather than discovering at the next sync.
