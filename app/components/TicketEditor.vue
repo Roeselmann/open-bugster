@@ -16,7 +16,7 @@ import {
   VisuallyHidden,
 } from 'reka-ui'
 import type { Attachment, BoardMember, DependencyRef, ShiftResult, Category, LabelSummary, Lane, Person, RecurrenceFrequency, SubticketRef, Ticket, TicketDecisionInput, TicketLinkInput, TicketPatch, TicketPriority, TicketRecurrence, TicketSchedule, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
-import { describeRecurrence, isOccurrence, nextRound as nextRoundOf, occurrenceOnOrAfter } from '~~/shared/utils/recurrence'
+import { describeRecurrence, isOccurrence, nextRound as nextRoundOf, occurrenceOnOrAfter, occurrenceOnOrBefore } from '~~/shared/utils/recurrence'
 import { TODO_LIGHT_LABELS, todoLight } from '~~/shared/utils/todo-progress'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 import { boardToday, dueDescription, dueLevel, liveDescription, liveLevel } from '~~/shared/utils/due-date'
@@ -123,14 +123,32 @@ function commitReturnLane(value: string) {
   rule.returnLaneId = value === NO_RETURN_LANE ? null : value
   commitRule()
 }
-/** Moves only the round that is on now; clearing it puts the saved day back. */
-function commitRound() {
-  if (!form.dueDate) {
-    form.dueDate = props.ticket?.dueDate || ''
-    return
-  }
+// Moving the round that is on now, the exception: a holiday, a trip. The series keeps its beat.
+const movingRound = ref(false)
+const roundDraft = ref('')
+// The day the rule itself gives for the current round, to go back to after a move: the beat
+// nearest to where the round was moved, the later one on a tie.
+const ruleDay = computed(() => {
+  if (!rule.anchor || !form.dueDate) return null
+  const after = occurrenceOnOrAfter(rule, form.dueDate)
+  const before = occurrenceOnOrBefore(rule, form.dueDate)
+  if (!before) return after
+  const gap = (from: string, to: string) => Math.abs(Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`))
+  return gap(before, form.dueDate) < gap(form.dueDate, after) ? before : after
+})
+function startMovingRound() {
+  roundDraft.value = form.dueDate
+  movingRound.value = true
+}
+function saveMovedRound() {
+  if (!roundDraft.value) return
+  movingRound.value = false
+  if (roundDraft.value === form.dueDate) return
+  form.dueDate = roundDraft.value
   commit(withSchedule({ dueDate: form.dueDate }))
 }
+const longDay = new Intl.DateTimeFormat('en', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })
+const longDayOf = (date: string) => longDay.format(new Date(`${date}T00:00:00Z`))
 const roundDay = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', timeZone: 'UTC' })
 const roundDayOf = (date: string) => roundDay.format(new Date(`${date}T00:00:00Z`))
 function roundTitle(round: Ticket['rounds'][number]) {
@@ -1828,8 +1846,14 @@ function focusTitle(event: Event) {
                         </div>
                       </div>
                     </div>
+                  </div>
+                  <p v-if="ruleText" class="muted -mt-2 text-xs" data-recurrence-summary>{{ ruleText }}{{ rule.until ? `, until ${dateText(rule.until)}` : '' }}.</p>
+
+                  <!-- When the series runs, start and end side by side. -->
+                  <div class="grid gap-4 sm:grid-cols-2">
                     <label class="block">
-                      <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><CalendarArrowUp :size="14" /> First round</span>
+                      <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><CalendarArrowUp :size="14" /> Starts on</span>
+                      <!-- The series' start and its beat: the weekday or day of the month every round keeps. -->
                       <input
                         v-model="rule.anchor"
                         type="date"
@@ -1839,37 +1863,8 @@ function focusTitle(event: Event) {
                         @change="commitRule"
                       >
                     </label>
-                  </div>
-                  <p v-if="ruleText" class="muted -mt-2 text-xs" data-recurrence-summary>{{ ruleText }}{{ rule.until ? `, until ${dateText(rule.until)}` : '' }}. Later rounds keep the first round’s {{ rule.frequency === 'weekly' ? 'weekday' : rule.frequency === 'daily' ? 'rhythm' : rule.frequency === 'monthly' ? 'day of the month' : 'date' }}.</p>
-
-                  <div class="grid gap-4 sm:grid-cols-2">
                     <label class="block">
-                      <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]">
-                        <Calendar :size="14" /> This round
-                        <span
-                          v-if="dueText"
-                          class="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal"
-                          :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
-                        ><AlarmClock :size="11" /> {{ dueText }}</span>
-                      </span>
-                      <!-- Moving it moves this round alone; the series carries on from its rule. -->
-                      <input
-                        v-model="form.dueDate"
-                        type="date"
-                        class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
-                        :class="dueState === 'alert' ? 'ring-2 ring-rose-600' : dueState === 'warning' ? 'ring-2 ring-orange-400' : ''"
-                        :readonly="!canEdit"
-                        data-round-date
-                        @change="commitRound"
-                      >
-                      <span class="muted mt-1 block text-[11px]">
-                        <template v-if="seriesOver">The series is over.</template>
-                        <template v-else-if="nextRoundDate">Next round {{ dateText(nextRoundDate) }}{{ offRule ? ' · this one is moved' : '' }}</template>
-                        <template v-else>This is the last round of the series.</template>
-                      </span>
-                    </label>
-                    <label class="block">
-                      <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Flag :size="14" /> Ends after</span>
+                      <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Flag :size="14" /> Ends on</span>
                       <input
                         v-model="rule.until"
                         type="date"
@@ -1882,33 +1877,75 @@ function focusTitle(event: Event) {
                       <span class="muted mt-1 block text-[11px]">Empty: no end.</span>
                     </label>
                   </div>
+                  <div class="block">
+                    <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><SquareKanban :size="14" /> Each new round goes to</span>
+                    <UiSelect
+                      :model-value="rule.returnLaneId ?? NO_RETURN_LANE"
+                      :options="returnLaneOptions"
+                      aria-label="Lane for each new round"
+                      :disabled="!canEdit"
+                      data-recurrence-lane
+                      @update:model-value="commitReturnLane($event)"
+                    />
+                  </div>
+                  <label class="flex items-start gap-2.5 rounded-xl px-1 text-sm">
+                    <input
+                      v-model="rule.resetTodos"
+                      type="checkbox"
+                      class="focus-ring mt-0.5 size-4 shrink-0 cursor-pointer accent-[var(--accent)]"
+                      :disabled="!canEdit"
+                      data-recurrence-reset
+                      @change="commitRule"
+                    >
+                    <span>
+                      <span class="font-semibold">Fresh to-dos each round</span>
+                      <span class="muted block text-xs">Unticks the to-dos and reopens the decisions when the next round starts.</span>
+                    </span>
+                  </label>
 
-                  <div class="grid gap-4 sm:grid-cols-2">
-                    <div class="block">
-                      <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><SquareKanban :size="14" /> Each new round goes to</span>
-                      <UiSelect
-                        :model-value="rule.returnLaneId ?? NO_RETURN_LANE"
-                        :options="returnLaneOptions"
-                        aria-label="Lane for each new round"
-                        :disabled="!canEdit"
-                        data-recurrence-lane
-                        @update:model-value="commitReturnLane($event)"
-                      />
-                    </div>
-                    <label class="flex items-start gap-2.5 self-end rounded-xl px-1 py-2 text-sm">
-                      <input
-                        v-model="rule.resetTodos"
-                        type="checkbox"
-                        class="focus-ring mt-0.5 size-4 shrink-0 cursor-pointer accent-[var(--accent)]"
-                        :disabled="!canEdit"
-                        data-recurrence-reset
-                        @change="commitRule"
-                      >
-                      <span>
-                        <span class="font-semibold">Fresh to-dos each round</span>
-                        <span class="muted block text-xs">Unticks the to-dos and reopens the decisions when the next round starts.</span>
+                  <!--
+                    The round that is on now follows from the rule and moves on by itself, so it is a line
+                    to read rather than a field to fill. Moving it is the exception — a holiday — and the
+                    series keeps its beat afterwards.
+                  -->
+                  <div v-if="form.dueDate" class="surface-strong space-y-2 rounded-xl px-3 py-2.5 text-sm" data-current-round>
+                    <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <Calendar :size="14" class="shrink-0" aria-hidden="true" />
+                      <span><span class="font-semibold">Current round:</span> {{ longDayOf(form.dueDate) }}</span>
+                      <span
+                        v-if="dueText"
+                        class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold"
+                        :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
+                      ><AlarmClock :size="11" /> {{ dueText }}</span>
+                      <span v-if="offRule" class="tone tone-amber rounded-md px-1.5 py-0.5 text-[10px] font-semibold">moved</span>
+                      <span class="muted text-xs">
+                        <template v-if="seriesOver">· the series is over</template>
+                        <template v-else-if="nextRoundDate">· next {{ longDayOf(nextRoundDate) }}</template>
+                        <template v-else>· the last round of the series</template>
                       </span>
-                    </label>
+                      <button
+                        v-if="canEdit && !movingRound && !seriesOver"
+                        type="button"
+                        class="focus-ring muted ml-auto rounded-md px-1 text-xs font-semibold hover:text-[var(--ink)] hover:underline"
+                        data-move-round
+                        @click="startMovingRound"
+                      >Move this round…</button>
+                    </div>
+                    <div v-if="movingRound" class="flex flex-wrap items-center gap-2 border-t border-[var(--line)] pt-2">
+                      <label class="flex items-center gap-2 text-xs font-semibold">
+                        This round on
+                        <input
+                          v-model="roundDraft"
+                          type="date"
+                          class="focus-ring h-9 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-2 text-sm outline-none"
+                          data-round-date
+                        >
+                      </label>
+                      <button type="button" class="focus-ring h-9 rounded-xl border border-[var(--line)] px-3 text-xs font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:opacity-50" :disabled="!roundDraft" @click="saveMovedRound">Move</button>
+                      <button v-if="offRule && ruleDay" type="button" class="focus-ring muted rounded-lg px-1.5 text-xs font-semibold hover:text-[var(--ink)]" @click="roundDraft = ruleDay; saveMovedRound()">Back to {{ longDayOf(ruleDay) }}</button>
+                      <button type="button" class="focus-ring muted ml-auto rounded-lg px-1.5 text-xs font-semibold hover:text-[var(--ink)]" @click="movingRound = false">Cancel</button>
+                      <span class="muted w-full text-[11px]">Only this round moves; the one after stays on the series’ beat.</span>
+                    </div>
                   </div>
 
                   <!-- How the rounds went, newest last, and the way to end this one early. -->
