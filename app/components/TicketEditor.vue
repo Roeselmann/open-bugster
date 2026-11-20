@@ -413,6 +413,7 @@ const pendingFiles = ref<File[]>([])
 const fileError = ref('')
 const dragActive = ref(false)
 const lightboxId = ref<string | null>(null)
+const markdownPreview = ref<Attachment | null>(null)
 const imageAttachments = computed(() => props.ticket?.attachments.filter(attachment => attachment.mimeType.startsWith('image/')) || [])
 // The pictures the card shows, ticked here: attachments and link previews alike. A preview
 // rendered since the board was loaded counts already, as it does on the card.
@@ -2027,7 +2028,8 @@ function focusTitle(event: Event) {
                 </button>
                 <CardImageToggle v-if="cardImageOptions.has(attachment.id)" :checked="shownOnCard.has(attachment.id)" :can-edit="canEdit" :name="attachment.filename" @toggle="toggleCardImage(attachment.id)" />
                 <div class="px-2 pb-1 pt-2">
-                  <a v-if="!attachment.mimeType.startsWith('image/')" :href="attachment.url" target="_blank" class="focus-ring flex items-center gap-1.5 rounded font-semibold hover:text-[var(--accent)]" :title="attachment.filename"><FileText :size="14" class="muted shrink-0" /> <span class="min-w-0 truncate">{{ attachment.filename }}</span></a>
+                  <button v-if="attachment.mimeType === 'text/markdown'" type="button" class="focus-ring flex w-full items-center gap-1.5 rounded text-left font-semibold hover:text-[var(--accent)]" :title="`Preview ${attachment.filename}`" @click="markdownPreview = attachment"><FileText :size="14" class="muted shrink-0" /> <span class="min-w-0 truncate">{{ attachment.filename }}</span></button>
+                  <a v-else-if="!attachment.mimeType.startsWith('image/')" :href="attachment.url" target="_blank" class="focus-ring flex items-center gap-1.5 rounded font-semibold hover:text-[var(--accent)]" :title="attachment.filename"><FileText :size="14" class="muted shrink-0" /> <span class="min-w-0 truncate">{{ attachment.filename }}</span></a>
                   <div v-else class="truncate font-semibold" :title="attachment.filename">{{ attachment.filename }}</div>
                   <div class="mt-0.5 flex items-center">
                     <span class="muted mr-auto text-[10px]">{{ formatSize(attachment.size) }}</span>
@@ -2142,6 +2144,7 @@ function focusTitle(event: Event) {
       </div>
     </div>
   </Teleport>
+  <MarkdownPreview v-if="markdownPreview" :attachment="markdownPreview" @close="markdownPreview = null" />
   <ImageLightbox v-if="lightboxId" :images="imageAttachments" :initial-id="lightboxId" @close="lightboxId = null" />
 </template>
 
