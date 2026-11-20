@@ -21,7 +21,9 @@ export type ScheduleOutcome = { ok: true; value: ScheduleFields } | { ok: false;
  * only know dates keep working. A date the schedule has no room for, sent outright, is refused.
  */
 export function settleSchedule(before: ScheduleFields, patch: Partial<ScheduleFields>): ScheduleOutcome {
-  const next: ScheduleFields = { ...before }
+  // Only the schedule's own fields: `before` is often a whole ticket, whose labels, to-dos and
+  // the rest must not ride along into the update.
+  const next: ScheduleFields = { schedule: before.schedule, startDate: before.startDate, dueDate: before.dueDate, liveFrom: before.liveFrom, liveUntil: before.liveUntil }
   for (const key of dateKeys) if (patch[key] !== undefined) next[key] = patch[key] || null
   const sends = (key: typeof dateKeys[number]) => Boolean(patch[key])
   next.schedule = patch.schedule ?? (before.schedule === 'none' && dateKeys.some(sends) ? 'lifecycle' : before.schedule)
