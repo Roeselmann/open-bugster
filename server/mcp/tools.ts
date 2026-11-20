@@ -24,6 +24,8 @@ import type { BoardSummary, DependencyRef, LaneSummary, ShiftResult, TimelineNod
  * `get_ticket` is the one tool that returns everything, which is the point of it.
  */
 
+const SCHEDULE_FIELD = 'How the ticket sits in time. "milestone": an event on one day — a meeting, a go-live — given as dueDate, with no start and no live window. "lifecycle": work from startDate to dueDate, then optionally a live window; a dueDate alone is a plain deadline. "none": no dates. Sending dates without it to an undated ticket makes it a lifecycle.'
+
 /** What a ticket looks like in a list: enough to choose one, and no more. */
 function slim(ticket: Ticket) {
   return {
@@ -36,6 +38,7 @@ function slim(ticket: Ticket) {
     labels: ticket.labels.map(label => label.name),
     category: ticket.category?.name ?? null,
     type: ticket.type?.name ?? null,
+    schedule: ticket.schedule,
     startDate: ticket.startDate,
     dueDate: ticket.dueDate,
     liveFrom: ticket.liveFrom,
@@ -65,6 +68,7 @@ function timelineOf(node: TimelineNode): Record<string, unknown> {
     board: node.boardName,
     lane: node.laneName,
     done: node.done,
+    schedule: node.schedule,
     startDate: node.startDate,
     dueDate: node.dueDate,
     ...(node.liveFrom || node.liveUntil ? { live: node.live, liveFrom: node.liveFrom, liveUntil: node.liveUntil } : {}),
@@ -441,7 +445,8 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       laneId: z.string().optional().describe('Defaults to the board’s first non-import lane.'),
       priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
       assigneeId: z.string().optional().describe('Must be a member of this board.'),
-      startDate: z.string().optional().describe('YYYY-MM-DD: the day work starts. With dueDate it spans the ticket on a timeline; never after dueDate. Equal to dueDate marks a milestone.'),
+      schedule: z.enum(['none', 'milestone', 'lifecycle']).optional().describe(SCHEDULE_FIELD),
+      startDate: z.string().optional().describe('YYYY-MM-DD: the day work starts. With dueDate it spans the ticket on a timeline; never after dueDate. Not for a milestone.'),
       dueDate: z.string().optional().describe('YYYY-MM-DD: the day the work has to be done — for a campaign its go-live, not the end of its run.'),
       liveFrom: z.string().optional().describe('YYYY-MM-DD: the first day it is out in the world, e.g. a campaign\'s start in market.'),
       liveUntil: z.string().optional().describe('YYYY-MM-DD: the last day it is out, e.g. the end of a campaign or an approval\'s expiry. Warns while the ticket sits in a lane with isLive.'),
@@ -482,7 +487,8 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       description: z.string().max(10000).optional().describe(MARKDOWN_FIELD),
       priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
       assigneeId: z.string().nullable().optional(),
-      startDate: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. Never after dueDate.'),
+      schedule: z.enum(['none', 'milestone', 'lifecycle']).optional().describe(`${SCHEDULE_FIELD} Switching clears what the new one has no room for: none every date, milestone the start and the live window (the due date stays as its day).`),
+      startDate: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. Never after dueDate; not for a milestone.'),
       dueDate: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. The deadline of the work, not the end of a run.'),
       liveFrom: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. First day out in the world.'),
       liveUntil: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. Last day out; never before liveFrom.'),

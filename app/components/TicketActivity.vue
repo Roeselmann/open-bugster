@@ -31,6 +31,7 @@ const sentences: Record<ActivityKind, (entry: TicketActivityEntry) => string> = 
   start_date: entry => (entry.payload.to ? `set the start date to ${entry.payload.to}` : 'removed the start date'),
   live_from: entry => (entry.payload.to ? `set the live window to start ${entry.payload.to}` : 'removed the start of the live window'),
   live_until: entry => (entry.payload.to ? `set the live window to end ${entry.payload.to}` : 'removed the end of the live window'),
+  schedule: entry => ({ none: 'removed the schedule', milestone: 'made it a milestone', lifecycle: 'gave it a lifecycle' } as Record<string, string>)[entry.payload.to ?? ''] ?? 'changed the schedule',
   due_date: entry => (entry.payload.to ? `set the due date to ${entry.payload.to}` : 'removed the due date'),
   type: entry => (entry.payload.to ? `set the type to ${entry.payload.to}` : 'removed the type'),
   archived: () => 'archived it',

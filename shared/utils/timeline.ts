@@ -6,7 +6,7 @@ export interface Span {
   end: string
 }
 
-/** The ticket's own span: start to due date. Either one alone is a single day, a milestone. */
+/** The ticket's own span: start to due date. Either one alone is a single day: a milestone, or a deadline. */
 export function spanOf(node: Pick<TimelineNode, 'startDate' | 'dueDate'>): Span | null {
   const start = node.startDate ?? node.dueDate
   const end = node.dueDate ?? node.startDate
@@ -20,10 +20,9 @@ export function liveSpanOf(node: Pick<TimelineNode, 'liveFrom' | 'liveUntil' | '
   return start && end && start <= end ? { start, end } : null
 }
 
-/** Whether the ticket is a single day: a start equal to its due date, or only one of the two. */
-export function isMilestone(node: Pick<TimelineNode, 'startDate' | 'dueDate'>): boolean {
-  const span = spanOf(node)
-  return Boolean(span && span.start === span.end)
+/** Whether the ticket is an event on one day, drawn as a diamond. A one-day lifecycle is a short bar. */
+export function isMilestone(node: Pick<TimelineNode, 'schedule'>): boolean {
+  return node.schedule === 'milestone'
 }
 
 /** Every node of the tree in display order, each with how deep it sits; the root is depth 0. */

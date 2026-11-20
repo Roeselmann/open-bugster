@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlarmClock, ArrowDownToLine, ArrowUpToLine, Check, ChevronDown, ChevronUp, CornerDownRight, Image, Link as LinkIcon, ListTodo, MessageSquare, Paperclip, Radio, SquareKanban, Tag, TriangleAlert } from '@lucide/vue'
+import { AlarmClock, ArrowDownToLine, ArrowUpToLine, Check, ChevronDown, ChevronUp, CornerDownRight, Flag, Image, Link as LinkIcon, ListTodo, MessageSquare, Paperclip, Radio, SquareKanban, Tag, TriangleAlert } from '@lucide/vue'
 import type { Lane, Ticket } from '~~/shared/types/domain'
 import { CATEGORY_TONE_CLASSES } from '~~/shared/utils/constants'
 import { boardToday, daysUntil, dueDescription, dueLevel, liveDescription, liveLevel } from '~~/shared/utils/due-date'
@@ -76,14 +76,16 @@ const dueText = computed(() => {
   const days = daysUntil(dueDate, today)
   if (days === null) return null
   const span = startDate && startDate !== dueDate ? `${dayOf(startDate)} – ${dayOf(dueDate)}` : null
-  if (inDoneLane.value || days > 30) return span ?? `Due ${dayOf(dueDate)}`
+  // A milestone is a day, not a deadline: its date reads plain, beside a flag.
+  if (inDoneLane.value || days > 30) return span ?? (props.ticket.schedule === 'milestone' ? dayOf(dueDate) : `Due ${dayOf(dueDate)}`)
   if (span && dueState.value === 'none') return span
   return dueDescription(dueDate, today)
 })
 const dueTitle = computed(() => {
   const { startDate, dueDate, liveFrom, liveUntil } = props.ticket
   if (inLiveLane.value) return `Live ${liveFrom ?? '…'} to ${liveUntil ?? '…'}`
-  if (startDate && dueDate) return startDate === dueDate ? `Milestone ${dueDate}` : `${startDate} to ${dueDate}`
+  if (props.ticket.schedule === 'milestone') return `Milestone ${dueDate}`
+  if (startDate && dueDate) return startDate === dueDate ? `Due ${dueDate}` : `${startDate} to ${dueDate}`
   return startDate ? `Starts ${startDate}` : `Due ${dueDate}`
 })
 
@@ -285,7 +287,7 @@ const reorderButtons = computed(() => [
                 : dueState === 'warning' ? 'bg-orange-400/20 text-orange-700 dark:text-orange-300'
                   : 'bg-[var(--panel)]'"
               :title="dueTitle"
-            ><component :is="inLiveLane ? Radio : AlarmClock" :size="12" class="shrink-0" aria-hidden="true" /> <span class="truncate">{{ dueText }}</span></span>
+            ><component :is="inLiveLane ? Radio : ticket.schedule === 'milestone' ? Flag : AlarmClock" :size="12" class="shrink-0" aria-hidden="true" /> <span class="truncate">{{ dueText }}</span></span>
             <span class="ml-auto flex shrink-0 items-center gap-2">
               <UiAvatar v-if="ticket.assignee" :person="ticket.assignee" size="sm" :muted="ticket.assignee.status !== 'active'" />
               <span class="font-semibold tabular-nums">#{{ ticket.ticketNumber }}</span>

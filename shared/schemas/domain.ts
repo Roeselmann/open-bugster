@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { agentIcons } from '../utils/agent-icons'
 import {
-  activityChannels, activityKinds, boardMemberSources, boardRoles, categoryColors, integrationProviders, ticketPriorities, ticketSources,
+  activityChannels, activityKinds, boardMemberSources, boardRoles, categoryColors, integrationProviders, ticketPriorities, ticketSchedules, ticketSources,
   ticketTypeColors, ticketTypeIconNames, userRoles, userStatuses, workspaceRoles
 } from '../types/domain'
 import type {
@@ -121,6 +121,7 @@ export const timelineNodeSchema = z.object({
   laneName: z.string(),
   done: z.boolean().describe('Whether it sits in a done or live lane of its board.'),
   type: ticketTypeRefSchema.nullable(),
+  schedule: z.enum(ticketSchedules).describe('none, milestone (one day, drawn as a diamond) or lifecycle (a bar from start to due).'),
   startDate: z.string().nullable(),
   dueDate: z.string().nullable(),
   live: z.boolean().describe('Whether it sits in a live lane.'),
@@ -195,7 +196,8 @@ export const ticketSchema = z.object({
   description: z.string(),
   position: z.number().int(),
   priority: z.enum(ticketPriorities),
-  startDate: z.string().nullable().describe('The day work starts, YYYY-MM-DD. With `dueDate` it spans the ticket on a timeline; never after it.'),
+  schedule: z.enum(ticketSchedules).describe('How the ticket sits in time: `none` has no dates; `milestone` is one day, an event, kept in `dueDate`, with no start and no live window; `lifecycle` spans start to due and may have a live window, and a due date alone is a deadline.'),
+  startDate: z.string().nullable().describe('The day work starts, YYYY-MM-DD. With `dueDate` it spans the ticket on a timeline; never after it. Always null for a milestone.'),
   dueDate: z.string().nullable(),
   liveFrom: z.string().nullable().describe('The first day it is out in the world, YYYY-MM-DD: a campaign\'s start in market, an asset\'s release.'),
   liveUntil: z.string().nullable().describe('The last day it is out, YYYY-MM-DD: a campaign\'s end, an approval\'s expiry. Warns while the ticket sits in a live lane.'),

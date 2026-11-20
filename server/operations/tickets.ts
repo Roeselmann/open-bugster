@@ -10,6 +10,7 @@ import { importedTicketUpdateSchema, subticketCreateSchema, ticketCreateSchema, 
 import { deleteLinkThumbnails } from '../utils/link-preview'
 import { cardImageCandidates } from '../../shared/utils/card-images'
 import { addDays } from '../../shared/utils/timeline'
+import { settleSchedule, touchesSchedule, type ScheduleFields } from '../../shared/utils/schedule'
 import type { ShiftMove, ShiftResult, ShiftSkip } from '../../shared/types/domain'
 import { createdId, defineOperation } from './types'
 import { orNotFound } from './run'
@@ -123,8 +124,7 @@ export const ticketCreate = defineOperation({
       throw createError({ statusCode: 422, statusMessage: 'A ticket can only be assigned to a member of this board.' })
     }
     if (rest.typeId && !ticketTypeBelongsToBoard(rest.typeId, boardId)) throw foreignType()
-    checkSpan(rest.startDate ?? null, rest.dueDate ?? null)
-    checkLiveWindow(rest.liveFrom ?? null, rest.liveUntil ?? null)
+    Object.assign(rest, settled({ schedule: 'none', startDate: null, dueDate: null, liveFrom: null, liveUntil: null }, rest))
     checkNewSubtickets(ctx.actor, boardId, null, new Set(), rest.todos)
     if (rest.waitsOn?.length) checkWaitsOn(ctx.actor, boardId, null, new Set(), rest.waitsOn)
     // The author answers for the ticket, the actor for the write. Identical from the browser,
@@ -134,6 +134,18 @@ export const ticketCreate = defineOperation({
     return { ticket }
   }
 })
+
+/**
+ * The schedule and its dates as they will stand, checked: what the schedule has no room for
+ * cleared or refused, the span and the live window running forwards.
+ */
+function settled(before: ScheduleFields, patch: Partial<ScheduleFields>): ScheduleFields {
+  const outcome = settleSchedule(before, patch)
+  if (!outcome.ok) throw createError({ statusCode: 422, statusMessage: outcome.message })
+  checkSpan(outcome.value.startDate, outcome.value.dueDate)
+  checkLiveWindow(outcome.value.liveFrom, outcome.value.liveUntil)
+  return outcome.value
+}
 
 /** A start after the due date would draw a bar backwards; either one alone is fine. Both are YYYY-MM-DD, so they compare as text. */
 function checkSpan(startDate: string | null, dueDate: string | null) {
@@ -169,13 +181,9 @@ export const ticketUpdate = defineOperation({
     // Both checks only bite when the value actually moves. A ticket may well already name
     // somebody who has since been removed from the board — or anonymized — and editing its
     // title should not be blocked on that.
-    // The span is checked as it will stand: a new start against the due date already set, and so on.
-    if ('startDate' in fields || 'dueDate' in fields) {
-      checkSpan(fields.startDate === undefined ? ticket.startDate : fields.startDate, fields.dueDate === undefined ? ticket.dueDate : fields.dueDate)
-    }
-    if ('liveFrom' in fields || 'liveUntil' in fields) {
-      checkLiveWindow(fields.liveFrom === undefined ? ticket.liveFrom : fields.liveFrom, fields.liveUntil === undefined ? ticket.liveUntil : fields.liveUntil)
-    }
+    // The dates are checked as they will stand: a new start against the due date already set,
+    // a switch to a milestone dropping the start, and so on. Untouched, they are left alone.
+    if (touchesSchedule(fields)) Object.assign(fields, settled(ticket, fields))
     const members = boardMemberIds(ticket.boardId)
     if (fields.assigneeId && fields.assigneeId !== ticket.assignee?.id && !members.has(fields.assigneeId)) {
       throw createError({ statusCode: 422, statusMessage: 'A ticket can only be assigned to a member of this board.' })

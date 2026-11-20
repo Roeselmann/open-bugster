@@ -1,6 +1,6 @@
 import { createError } from 'h3'
 import { z } from 'zod'
-import { boardRoles, categoryColors, linkDisplays, integrationProviders, ticketTypeColors, ticketTypeIconNames, userRoles, userStatuses, workspaceRoles } from '../../shared/types/domain'
+import { boardRoles, categoryColors, linkDisplays, integrationProviders, ticketSchedules, ticketTypeColors, ticketTypeIconNames, userRoles, userStatuses, workspaceRoles } from '../../shared/types/domain'
 import { TICKET_TYPE_ICON_DATA_URL_MAX } from '../../shared/utils/constants'
 import { isJiraSiteUrl, normalizeSiteUrl } from './jira-policy'
 
@@ -32,6 +32,7 @@ const ticketShape = {
   description: z.string().max(10000),
   priority: z.enum(['low', 'medium', 'high', 'urgent']),
   assigneeId: idSchema.nullable(),
+  schedule: z.enum(ticketSchedules),
   startDate: z.iso.date().nullable(),
   dueDate: z.iso.date().nullable(),
   liveFrom: z.iso.date().nullable(),
@@ -58,6 +59,7 @@ export const ticketCreateSchema = z.object({
   description: ticketShape.description.default(''),
   priority: ticketShape.priority.default('medium'),
   assigneeId: ticketShape.assigneeId.optional(),
+  schedule: ticketShape.schedule.optional(),
   startDate: ticketShape.startDate.optional(),
   dueDate: ticketShape.dueDate.optional(),
   liveFrom: ticketShape.liveFrom.optional(),

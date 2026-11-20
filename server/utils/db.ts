@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import type {
   ActivityKind, AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardRole, BoardSummary, Category, CategoryColor,
   CategorySummary, DueTicket, IntegrationProvider, JiraIntegration, JiraIssue, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
-  LinkDisplay, LinkPreview, TicketLink, TicketLinkInput, TicketPriority, TicketSource, DependencyRef, SubticketRef, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary, TimelineNode,
+  LinkDisplay, LinkPreview, TicketLink, TicketLinkInput, TicketPriority, TicketSchedule, TicketSource, DependencyRef, SubticketRef, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary, TimelineNode,
   AgentAccess, AgentAccessMode, AgentAccount, AgentGrantRole, UserAccount, UserBoardMembership, UserRole, UserStatus, Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
 } from '../../shared/types/domain'
 import type { Actor, ActorChannel } from './actor'
@@ -360,6 +360,7 @@ export function getDb() {
   ensureTicketLiveWindow(database)
   ensureLaneLive(database)
   ensureTicketDependencies(database)
+  ensureTicketSchedule(database)
   // Not in `boardIndexes`: that block also runs inside `ensureBoards`, before an upgrading
   // database has been given the ticket_activity table. Serves the board-wide digest query.
   database.exec('CREATE INDEX IF NOT EXISTS idx_ticket_activity_created ON ticket_activity(created_at DESC)')
@@ -2142,6 +2143,24 @@ export function ensureTicketDependencies(db: Database.Database) {
   return !exists
 }
 
+/**
+ * Says how a ticket sits in time instead of reading it off its dates: none, a milestone (one
+ * day, an event) or a lifecycle (work across days, then a live window). Existing tickets are
+ * sorted once: start and due on the same day with no live window were drawn as a milestone
+ * and become one, keeping the day as due date; anything else with a date is a lifecycle.
+ */
+export function ensureTicketSchedule(db: Database.Database) {
+  if (tableColumns(db, 'tickets').has('schedule')) return false
+  db.transaction(() => {
+    db.exec("ALTER TABLE tickets ADD COLUMN schedule TEXT NOT NULL DEFAULT 'none' CHECK (schedule IN ('none', 'milestone', 'lifecycle'))")
+    db.exec(`UPDATE tickets SET schedule = 'milestone', start_date = NULL
+      WHERE start_date IS NOT NULL AND start_date = due_date AND live_from IS NULL AND live_until IS NULL`)
+    db.exec(`UPDATE tickets SET schedule = 'lifecycle'
+      WHERE schedule = 'none' AND COALESCE(start_date, due_date, live_from, live_until) IS NOT NULL`)
+  })()
+  return true
+}
+
 export function ensureTicketSourceJira(db: Database.Database) {
   const definition = db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'tickets'").get() as { sql: string } | undefined
   if (!definition || definition.sql.includes("'jira_issue'")) return false
@@ -2188,7 +2207,7 @@ type LaneRow = { id: string; board_id: string; name: string; position: number; i
 
 type TicketRow = {
   id: string; ticket_number: number; board_id: string; lane_id: string; title: string; description: string
-  position: number; priority: TicketPriority; start_date: string | null; due_date: string | null; live_from: string | null; live_until: string | null; build_number: string | null; link: string | null; cover_attachment_id: string | null; card_images: string | null
+  position: number; priority: TicketPriority; schedule?: TicketSchedule; start_date: string | null; due_date: string | null; live_from: string | null; live_until: string | null; build_number: string | null; link: string | null; cover_attachment_id: string | null; card_images: string | null
   source: TicketSource; external_id: string | null; created_at: string; updated_at: string; archived_at: string | null
   category_id: string | null; author_id: string | null; assignee_id: string | null; type_id: string | null
 }
@@ -3047,6 +3066,7 @@ function hydrateTicket(row: TicketRow): Ticket {
     description: row.description,
     position: row.position,
     priority: row.priority,
+    schedule: row.schedule ?? 'none',
     startDate: row.start_date ?? null,
     dueDate: row.due_date,
     liveFrom: row.live_from ?? null,
@@ -3412,7 +3432,7 @@ const TIMELINE_LIMIT = 500
 export function ticketTimeline(rootId: string, canRead: (boardId: string) => boolean): TimelineNode | null {
   const db = getDb()
   const readNode = db.prepare(`
-    SELECT t.id, t.ticket_number, t.title, t.board_id, t.type_id, t.start_date, t.due_date, t.live_from, t.live_until, t.archived_at,
+    SELECT t.id, t.ticket_number, t.title, t.board_id, t.type_id, t.schedule, t.start_date, t.due_date, t.live_from, t.live_until, t.archived_at,
       b.name AS board_name, l.name AS lane_name, MAX(l.is_done, l.is_live) AS is_done, l.is_live
     FROM tickets t JOIN boards b ON b.id = t.board_id JOIN lanes l ON l.id = t.lane_id
     WHERE t.id = ?
@@ -3435,7 +3455,7 @@ export function ticketTimeline(rootId: string, canRead: (boardId: string) => boo
   let budget = TIMELINE_LIMIT
   const build = (id: string, ancestors: Set<string>): TimelineNode | null => {
     const row = readNode.get(id) as {
-      id: string; ticket_number: number; title: string; board_id: string; type_id: string | null
+      id: string; ticket_number: number; title: string; board_id: string; type_id: string | null; schedule: TicketSchedule
       start_date: string | null; due_date: string | null; live_from: string | null; live_until: string | null; archived_at: string | null
       board_name: string; lane_name: string; is_done: number; is_live: number
     } | undefined
@@ -3453,6 +3473,7 @@ export function ticketTimeline(rootId: string, canRead: (boardId: string) => boo
       laneName: row.lane_name,
       done: Boolean(row.is_done),
       type: typeOf(row.type_id),
+      schedule: row.schedule,
       startDate: row.start_date,
       dueDate: row.due_date,
       live: Boolean(row.is_live),
@@ -3761,6 +3782,8 @@ export interface TicketInput {
   title: string
   description?: string
   priority?: TicketPriority
+  /** Settled by the caller together with the dates, so the two always agree. Omitted on create: none. */
+  schedule?: TicketSchedule
   startDate?: string | null
   dueDate?: string | null
   liveFrom?: string | null
@@ -3814,9 +3837,9 @@ export function createTicket(boardId: string, input: TicketInput, author: Person
     const categoryId = resolveCategoryId(boardId, input.categoryName)
     // Appended first either way; a ticket asked to the top is then shuffled with the lane.
     const position = nextPosition(lane.id)
-    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, start_date, due_date, live_from, live_until, build_number, source, created_at, updated_at, author_id, assignee_id, category_id, type_id)
-      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?)`).run(
-      id, boardId, lane.id, input.title, input.description || '', position, input.priority || 'medium',
+    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, schedule, start_date, due_date, live_from, live_until, build_number, source, created_at, updated_at, author_id, assignee_id, category_id, type_id)
+      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?)`).run(
+      id, boardId, lane.id, input.title, input.description || '', position, input.priority || 'medium', input.schedule ?? (input.startDate || input.dueDate || input.liveFrom || input.liveUntil ? 'lifecycle' : 'none'),
       input.startDate || null, input.dueDate || null, input.liveFrom || null, input.liveUntil || null, input.buildNumber || null, now, now,
       author?.id || null, input.assigneeId || null, categoryId, input.typeId || null
     )
@@ -3847,15 +3870,18 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
   const dueDate = input.dueDate === undefined ? existing.dueDate : input.dueDate || null
   const liveFrom = input.liveFrom === undefined ? existing.liveFrom : input.liveFrom || null
   const liveUntil = input.liveUntil === undefined ? existing.liveUntil : input.liveUntil || null
+  // A caller that only knows dates (an import, a sync) gives an undated ticket a lifecycle.
+  const schedule = input.schedule ?? (existing.schedule === 'none' && (startDate || dueDate || liveFrom || liveUntil) ? 'lifecycle' : existing.schedule)
   const assigneeId = input.assigneeId === undefined ? existing.assignee?.id || null : input.assigneeId || null
   const authorId = input.authorId === undefined ? existing.author?.id || null : input.authorId || null
   const typeId = input.typeId === undefined ? existing.type?.id || null : input.typeId || null
   getDb().transaction(() => {
     const categoryId = input.categoryName === undefined ? existing.category?.id || null : resolveCategoryId(existing.boardId, input.categoryName)
-    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, start_date = ?, due_date = ?, live_from = ?, live_until = ?, build_number = ?, assignee_id = ?, author_id = ?, category_id = ?, type_id = ?, updated_at = ? WHERE id = ?`).run(
+    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, schedule = ?, start_date = ?, due_date = ?, live_from = ?, live_until = ?, build_number = ?, assignee_id = ?, author_id = ?, category_id = ?, type_id = ?, updated_at = ? WHERE id = ?`).run(
       input.title ?? existing.title,
       input.description ?? existing.description,
       priority,
+      schedule,
       startDate,
       dueDate,
       liveFrom,
@@ -3884,6 +3910,7 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
     const links = input.links ?? (input.link === undefined ? undefined : linksWithFirst(existing.links, input.link))
     if (links) removedThumbnails.push(...setTicketLinks(id, links))
     if (priority !== existing.priority) recordActivity(id, actor, 'priority', { from: existing.priority, to: priority })
+    if (schedule !== existing.schedule) recordActivity(id, actor, 'schedule', { from: existing.schedule, to: schedule })
     if (startDate !== existing.startDate) recordActivity(id, actor, 'start_date', { from: existing.startDate, to: startDate })
     if (dueDate !== existing.dueDate) recordActivity(id, actor, 'due_date', { from: existing.dueDate, to: dueDate })
     if (liveFrom !== existing.liveFrom) recordActivity(id, actor, 'live_from', { from: existing.liveFrom, to: liveFrom })

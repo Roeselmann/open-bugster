@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, CalendarArrowUp, CalendarClock, CalendarRange, Check, Circle, CircleAlert, CircleCheck, CornerDownRight, CornerLeftUp, Download, ExternalLink, FileText, Gauge, GripVertical, Link2, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Radio, Shapes, SlidersHorizontal, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, CalendarArrowUp, CalendarClock, CalendarRange, Check, ChevronDown, Flag, Circle, CircleAlert, CircleCheck, CornerDownRight, CornerLeftUp, Download, ExternalLink, FileText, Gauge, GripVertical, Link2, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Radio, Shapes, SlidersHorizontal, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogContent,
   DialogDescription,
@@ -7,9 +7,14 @@ import {
   DialogPortal,
   DialogRoot,
   DialogTitle,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuPortal,
+  DropdownMenuRoot,
+  DropdownMenuTrigger,
   VisuallyHidden,
 } from 'reka-ui'
-import type { Attachment, BoardMember, DependencyRef, ShiftResult, Category, LabelSummary, Lane, SubticketRef, Ticket, TicketLinkInput, TicketPatch, TicketPriority, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
+import type { Attachment, BoardMember, DependencyRef, ShiftResult, Category, LabelSummary, Lane, SubticketRef, Ticket, TicketLinkInput, TicketPatch, TicketPriority, TicketSchedule, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
 import { TODO_LIGHT_LABELS, todoLight } from '~~/shared/utils/todo-progress'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 import { boardToday, dueDescription, dueLevel, liveDescription, liveLevel } from '~~/shared/utils/due-date'
@@ -55,11 +60,17 @@ const dueText = computed(() => (dueState.value === 'none' ? null : dueDescriptio
 // The live window only lights up while the ticket is in a live lane, as on the card.
 const liveState = computed(() => (inLiveLane.value ? liveLevel(form.liveUntil || null, today, props.dueWarningDays) : 'none'))
 const liveText = computed(() => (liveState.value === 'none' || !form.liveUntil ? null : liveDescription(form.liveUntil, today, date => date)))
-// Hidden until asked for or set: most tickets are never out in the world.
-// Lifecycle: a plain ticket has no days at all; switched on, it gets start, due date and live window.
-// Not stored — it is on whenever any of those dates is set, or the ticket sits in a live lane.
-const lifecycleOpen = ref(false)
-const lifecycleOn = computed(() => lifecycleOpen.value || inLiveLane.value || Boolean(form.startDate || form.dueDate || form.liveFrom || form.liveUntil || props.ticket?.waitsOn.length))
+// Schedule: a plain ticket has no days at all; a milestone has one, an event; a lifecycle has
+// start, due date and live window. A choice not saved yet — a milestone still without its
+// day — is held here until the date comes, and the saved one counts again once it agrees.
+const scheduleChoice = ref<TicketSchedule | null>(null)
+const schedule = computed<TicketSchedule>(() => scheduleChoice.value ?? props.ticket?.schedule ?? 'none')
+const lifecycleOn = computed(() => schedule.value !== 'none')
+const SCHEDULE_OPTIONS: Array<{ value: TicketSchedule; label: string; title: string }> = [
+  { value: 'none', label: 'None', title: 'No dates: removes every date and what it waits on' },
+  { value: 'milestone', label: 'Milestone', title: 'One day, an event: a meeting, a go-live' },
+  { value: 'lifecycle', label: 'Lifecycle', title: 'Work from start to due date, then a live window; a due date alone is a deadline' }
+]
 interface EditableTodo extends TicketTodoInput { key: string; subticket?: SubticketRef | null }
 const todos = ref<EditableTodo[]>([])
 const links = ref<TicketLinkInput[]>([])
@@ -397,7 +408,7 @@ watch(() => props.ticket, (ticket, previous) => {
   form.dueDate = ticket?.dueDate || ''
   form.liveFrom = ticket?.liveFrom || ''
   form.liveUntil = ticket?.liveUntil || ''
-  if (!sameTicket) lifecycleOpen.value = false
+  if (!sameTicket || ticket?.schedule === scheduleChoice.value) scheduleChoice.value = null
   form.buildNumber = ticket?.buildNumber || ''
   links.value = (ticket?.links || []).map(link => ({ url: link.url, display: link.display }))
   form.assigneeId = ticket?.assignee?.id || UNASSIGNED
@@ -515,22 +526,45 @@ function removeLiveWindow() {
   if (hadDates) commit({ liveFrom: null, liveUntil: null })
 }
 
-// Switching off clears every date in one save, so the ticket is plain again.
-function toggleLifecycle() {
-  if (!lifecycleOn.value) {
-    lifecycleOpen.value = true
+/**
+ * Switches the schedule, clearing what the new one has no room for; the server does the same.
+ * None drops every date and, as part of the plan, what it waits on. A milestone keeps one day:
+ * the due date, else the start. Without any day yet it waits for its date before it saves.
+ */
+function setSchedule(next: TicketSchedule) {
+  if (next === schedule.value || (props.ticket && !props.canEdit)) return
+  const saved = props.ticket
+  scheduleChoice.value = next
+  if (next === 'none') {
+    form.startDate = form.dueDate = form.liveFrom = form.liveUntil = ''
+    dependencyPicking.value = false
+    shiftOpen.value = false
+    const changes: TicketPatch = saved && saved.schedule !== 'none' ? { schedule: 'none' } : {}
+    if (saved?.waitsOn.length) changes.waitsOn = []
+    if (Object.keys(changes).length) commit(changes)
     return
   }
-  const saved = props.ticket
-  const hadDates = Boolean(saved?.startDate || saved?.dueDate || saved?.liveFrom || saved?.liveUntil)
-  form.startDate = form.dueDate = form.liveFrom = form.liveUntil = ''
-  lifecycleOpen.value = false
-  dependencyPicking.value = false
-  shiftOpen.value = false
-  // What it waits on is part of its plan, so it goes with the dates.
-  const changes: TicketPatch = hadDates ? { startDate: null, dueDate: null, liveFrom: null, liveUntil: null } : {}
-  if (saved?.waitsOn.length) changes.waitsOn = []
-  if (Object.keys(changes).length) commit(changes)
+  if (next === 'milestone') {
+    form.dueDate = form.dueDate || form.startDate
+    form.startDate = form.liveFrom = form.liveUntil = ''
+    if (form.dueDate) commit({ schedule: 'milestone' })
+    return
+  }
+  commit({ schedule: 'lifecycle' })
+}
+
+/** The schedule goes along with a date when it has not been saved yet: a milestone getting its day. */
+function withSchedule(changes: TicketPatch): TicketPatch {
+  return props.ticket && schedule.value !== props.ticket.schedule ? { schedule: schedule.value, ...changes } : changes
+}
+
+/** A milestone is its day: clearing it puts the saved day back rather than leave it without one. */
+function commitMilestone() {
+  if (!form.dueDate) {
+    form.dueDate = props.ticket?.schedule === 'milestone' ? props.ticket.dueDate || '' : ''
+    return
+  }
+  commit(withSchedule({ dueDate: payload.dueDate() }))
 }
 
 // Dependencies, finish-to-start: what this ticket waits on is part of it; who waits on it is
@@ -650,9 +684,9 @@ function commitLiveWindow(changed: 'liveFrom' | 'liveUntil') {
   if (form.liveFrom && form.liveUntil && form.liveFrom > form.liveUntil) {
     if (changed === 'liveFrom') form.liveUntil = form.liveFrom
     else form.liveFrom = form.liveUntil
-    return commit({ liveFrom: payload.liveFrom(), liveUntil: payload.liveUntil() })
+    return commit(withSchedule({ liveFrom: payload.liveFrom(), liveUntil: payload.liveUntil() }))
   }
-  commit(changed === 'liveFrom' ? { liveFrom: payload.liveFrom() } : { liveUntil: payload.liveUntil() })
+  commit(withSchedule(changed === 'liveFrom' ? { liveFrom: payload.liveFrom() } : { liveUntil: payload.liveUntil() }))
 }
 
 /**
@@ -663,9 +697,9 @@ function commitSpan(changed: 'startDate' | 'dueDate') {
   if (form.startDate && form.dueDate && form.startDate > form.dueDate) {
     if (changed === 'startDate') form.dueDate = form.startDate
     else form.startDate = form.dueDate
-    return commit({ startDate: payload.startDate(), dueDate: payload.dueDate() })
+    return commit(withSchedule({ startDate: payload.startDate(), dueDate: payload.dueDate() }))
   }
-  commit(changed === 'startDate' ? { startDate: payload.startDate() } : { dueDate: payload.dueDate() })
+  commit(withSchedule(changed === 'startDate' ? { startDate: payload.startDate() } : { dueDate: payload.dueDate() }))
 }
 
 // Text inputs save when they are left. Leaving one untouched must not cost a request (and an
@@ -717,7 +751,7 @@ function submit(options: { stayOpen?: boolean } = {}) {
   const manualFields = isManual.value ? { buildNumber: payload.buildNumber() } : {}
   // Sent only by somebody allowed to set it — the API rejects it from anyone else.
   const authorFields = canAttribute.value ? { authorId: payload.authorId() } : {}
-  emit('save', { ...shared, ...manualFields, ...authorFields, laneId: form.laneId || undefined, placement: form.placement, title: form.title.trim(), description: form.description, priority: form.priority, startDate: payload.startDate(), dueDate: payload.dueDate(), liveFrom: payload.liveFrom(), liveUntil: payload.liveUntil(), links: [...links.value], labels: payload.labels(), categoryName: payload.categoryName(), typeId: payload.typeId(), stayOpen: options.stayOpen === true })
+  emit('save', { ...shared, ...manualFields, ...authorFields, laneId: form.laneId || undefined, placement: form.placement, title: form.title.trim(), description: form.description, priority: form.priority, schedule: schedule.value === 'milestone' && !form.dueDate ? 'none' : schedule.value, startDate: payload.startDate(), dueDate: payload.dueDate(), liveFrom: payload.liveFrom(), liveUntil: payload.liveUntil(), links: [...links.value], labels: payload.labels(), categoryName: payload.categoryName(), typeId: payload.typeId(), stayOpen: options.stayOpen === true })
 }
 
 // Links save as soon as one is added, removed or switched between preview and text.
@@ -1138,7 +1172,8 @@ function focusTitle(event: Event) {
             </div>
 
             <section class="space-y-3">
-              <div class="flex items-center gap-2">
+              <!-- Without to-dos the heading would label nothing; the Add button is enough. -->
+              <div v-if="todos.length" class="flex items-center gap-2">
                 <h3 class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><ListTodo :size="15" /> To-dos</h3>
                 <span v-if="light" class="ml-auto flex items-center gap-1.5 text-[11px] font-semibold" :title="TODO_LIGHT_LABELS[light]">
                   <TodoLight :light="light" />
@@ -1213,10 +1248,38 @@ function focusTitle(event: Event) {
                   </div>
                 </TransitionGroup>
               </div>
-              <div class="flex flex-wrap gap-2">
-                <button type="button" :disabled="todos.length >= 100" class="focus-ring flex h-10 items-center gap-2 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50" @click="addTodo()"><Plus :size="16" /> Add to-do</button>
-                <button v-if="canAddSubticket" type="button" :disabled="todos.length >= 100" class="focus-ring flex h-10 items-center gap-2 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50" @click="subticketOpen = true"><CornerDownRight :size="16" /> Add subticket</button>
-                <button v-if="ticket && !commentsOpen" type="button" class="focus-ring flex h-10 items-center gap-2 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]" @click="openComments"><MessageSquare :size="16" /> {{ commentCount ? 'Show comments' : 'Add comment' }} <span v-if="commentCount" class="muted tabular-nums">{{ commentCount }}</span></button>
+              <!-- One quiet way to add: to-do, subticket and comment wait in a small menu. -->
+              <div class="flex justify-end">
+                <DropdownMenuRoot :modal="false">
+                  <DropdownMenuTrigger
+                    data-add-menu
+                    class="focus-ring group flex h-9 items-center gap-1.5 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] data-[state=open]:border-[var(--accent)] data-[state=open]:bg-[var(--accent-soft)]"
+                  >
+                    <Plus :size="16" aria-hidden="true" /> Add
+                    <ChevronDown :size="14" class="muted transition-transform duration-150 group-data-[state=open]:rotate-180" aria-hidden="true" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuPortal>
+                    <!-- Focus goes where the item sends it (a new to-do, the comment box), not back here. -->
+                    <DropdownMenuContent
+                      align="end"
+                      :side-offset="6"
+                      class="ui-popover z-[100] min-w-52 overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel-strong)] p-1 text-[var(--ink)] shadow-[0_18px_45px_rgba(0,0,0,.16),0_3px_12px_rgba(0,0,0,.08)]"
+                      @close-auto-focus.prevent
+                    >
+                      <DropdownMenuItem :disabled="todos.length >= 100" class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-medium outline-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--accent-soft)]" @select="addTodo()">
+                        <Plus :size="15" aria-hidden="true" /> To-do
+                      </DropdownMenuItem>
+                      <DropdownMenuItem v-if="canAddSubticket" :disabled="todos.length >= 100" class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-medium outline-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--accent-soft)]" @select="subticketOpen = true">
+                        <CornerDownRight :size="15" aria-hidden="true" /> Subticket…
+                      </DropdownMenuItem>
+                      <DropdownMenuItem v-if="ticket && !commentsOpen" class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-medium outline-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--accent-soft)]" @select="openComments">
+                        <MessageSquare :size="15" aria-hidden="true" />
+                        <span class="flex-1">{{ commentCount ? 'Show comments' : 'Comment' }}</span>
+                        <span v-if="commentCount" class="muted text-xs tabular-nums">{{ commentCount }}</span>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenuPortal>
+                </DropdownMenuRoot>
               </div>
             </section>
 
@@ -1333,33 +1396,56 @@ function focusTitle(event: Event) {
               </div>
             </section>
 
-            <!-- The ticket's days, kept apart so a plain ticket stays plain: switched off it has none. -->
-            <section class="rounded-2xl border border-[color-mix(in_srgb,var(--accent)_22%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_5%,transparent)]" :class="lifecycleOn ? 'space-y-4 p-4' : 'px-4 py-3'" aria-labelledby="ticket-lifecycle-heading">
-              <div class="flex items-center gap-3">
-                <div class="min-w-0 flex-1">
-                  <h3 id="ticket-lifecycle-heading" class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><CalendarRange :size="14" /> Lifecycle</h3>
-                  <p v-if="!lifecycleOn" class="muted mt-0.5 text-xs">Start, due date and live window</p>
+            <!-- The ticket's days, kept apart so a plain ticket stays plain: with no schedule it has none. -->
+            <section class="rounded-2xl border border-[color-mix(in_srgb,var(--accent)_22%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_5%,transparent)]" :class="lifecycleOn ? 'space-y-4 p-4' : 'px-4 py-3'" aria-labelledby="ticket-schedule-heading">
+              <div class="flex flex-wrap items-center gap-3">
+                <h3 id="ticket-schedule-heading" class="flex min-w-0 flex-1 items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><CalendarRange :size="14" /> Schedule</h3>
+                <div role="radiogroup" aria-labelledby="ticket-schedule-heading" class="flex shrink-0 rounded-xl bg-[var(--panel)] p-0.5" data-schedule-switch>
+                  <button
+                    v-for="option in SCHEDULE_OPTIONS"
+                    :key="option.value"
+                    type="button"
+                    role="radio"
+                    :aria-checked="schedule === option.value"
+                    :disabled="Boolean(ticket) && !canEdit"
+                    :title="option.title"
+                    class="focus-ring flex h-8 items-center gap-1.5 rounded-[10px] px-2.5 text-xs font-semibold transition disabled:cursor-not-allowed"
+                    :class="schedule === option.value ? 'surface-strong text-[var(--ink)] shadow-sm' : 'muted hover:text-[var(--ink)]'"
+                    @click="setSchedule(option.value)"
+                  >
+                    <Flag v-if="option.value === 'milestone'" :size="13" aria-hidden="true" />
+                    <CalendarRange v-else-if="option.value === 'lifecycle'" :size="13" aria-hidden="true" />
+                    {{ option.label }}
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  role="switch"
-                  :aria-checked="lifecycleOn"
-                  aria-labelledby="ticket-lifecycle-heading"
-                  :disabled="!canEdit"
-                  class="focus-ring relative h-6 w-11 shrink-0 rounded-full transition disabled:opacity-50"
-                  :class="lifecycleOn ? 'bg-[var(--accent)]' : 'bg-[var(--line)]'"
-                  :title="lifecycleOn ? 'Switch off: removes the start, due date and live window' : 'Give this ticket a start, a due date and a live window'"
-                  @click="toggleLifecycle"
-                >
-                  <span class="absolute left-0.5 top-0.5 size-5 rounded-full bg-white shadow transition" :class="lifecycleOn ? 'translate-x-5' : ''" aria-hidden="true" />
-                </button>
               </div>
 
               <template v-if="lifecycleOn">
+                <!-- A milestone is one day, kept as its due date: an event, so no start and no live window. -->
+                <label v-if="schedule === 'milestone'" class="block sm:w-1/2 sm:pr-2">
+                  <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]">
+                    <Flag :size="14" /> Date
+                    <span
+                      v-if="dueText"
+                      class="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal"
+                      :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
+                    ><AlarmClock :size="11" /> {{ dueText }}</span>
+                  </span>
+                  <input
+                    v-model="form.dueDate"
+                    type="date"
+                    data-milestone-date
+                    class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
+                    :class="dueState === 'alert' ? 'ring-2 ring-rose-600' : dueState === 'warning' ? 'ring-2 ring-orange-400' : ''"
+                    :readonly="!canEdit"
+                    @change="commitMilestone"
+                  >
+                </label>
+                <template v-else>
                 <div class="grid gap-4 sm:grid-cols-2">
                   <label class="block">
                     <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><CalendarArrowUp :size="14" /> Start date</span>
-                    <!-- With the due date it spans the ticket on a timeline; the same day makes a milestone. -->
+                    <!-- With the due date it spans the ticket on a timeline; the same day is a one-day bar. -->
                     <input
                       v-model="form.startDate"
                       type="date"
@@ -1433,6 +1519,7 @@ function focusTitle(event: Event) {
                     >
                   </label>
                 </div>
+                </template>
 
                 <!-- Finish-to-start: it starts once these end. Only an existing ticket can point at others. -->
                 <div v-if="ticket" class="space-y-2 border-t border-[var(--line)] pt-4">

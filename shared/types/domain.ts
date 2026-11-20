@@ -22,6 +22,14 @@ export const ticketTypeIconNames = [
 ] as const
 
 export type TicketPriority = typeof ticketPriorities[number]
+
+/**
+ * How a ticket sits in time. `none`: no dates at all. `milestone`: one day, an event — a
+ * meeting, a go-live — kept in `dueDate`, with no start and no live window. `lifecycle`: work
+ * across days, start to due, and the live window after; a due date alone is a deadline.
+ */
+export const ticketSchedules = ['none', 'milestone', 'lifecycle'] as const
+export type TicketSchedule = typeof ticketSchedules[number]
 export type TicketSource = typeof ticketSources[number]
 export type IntegrationProvider = typeof integrationProviders[number]
 export type CategoryColor = typeof categoryColors[number]
@@ -207,7 +215,7 @@ export interface TicketComment {
   updatedAt: string
 }
 
-export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'start_date', 'due_date', 'live_from', 'live_until', 'type', 'archived', 'restored', 'commented', 'subticket', 'waits_on'] as const
+export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'start_date', 'due_date', 'live_from', 'live_until', 'schedule', 'type', 'archived', 'restored', 'commented', 'subticket', 'waits_on'] as const
 export type ActivityKind = typeof activityKinds[number]
 
 /** How a change reached the server. Everything written before agents existed reads `web`. */
@@ -468,6 +476,7 @@ export interface TimelineNode {
   /** Whether it sits in a done or live lane of its board. */
   done: boolean
   type: TicketTypeRef | null
+  schedule: TicketSchedule
   startDate: string | null
   dueDate: string | null
   /** Whether it sits in a live lane: finished, and running. */
@@ -518,6 +527,8 @@ export interface TicketPatch {
   title?: string
   description?: string
   priority?: TicketPriority
+  /** None, milestone or lifecycle; switching clears the dates the new one has no room for. */
+  schedule?: TicketSchedule
   /** The day work starts, YYYY-MM-DD; never after `dueDate`. */
   startDate?: string | null
   dueDate?: string | null
@@ -611,7 +622,8 @@ export interface Ticket {
   description: string
   position: number
   priority: TicketPriority
-  /** The day work starts; with `dueDate` the ticket's span. Equal to it: a milestone. */
+  schedule: TicketSchedule
+  /** The day work starts; with `dueDate` the ticket's span. Null for a milestone. */
   startDate: string | null
   dueDate: string | null
   /**

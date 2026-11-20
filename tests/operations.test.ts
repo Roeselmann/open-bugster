@@ -134,12 +134,62 @@ describe('the operation registry', () => {
       // Checked as the span will stand: a new start against the due date already set.
       expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, startDate: '2026-03-20' }))).toBe(422)
       expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, dueDate: '2026-03-01' }))).toBe(422)
-      // Moving both together is fine, and so is a milestone: start and due on the same day.
+      // Moving both together is fine, and so is a one-day span: start and due on the same day.
       const moved = await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, startDate: '2026-03-20', dueDate: '2026-03-20' }) as Result
       expect(moved.ticket).toMatchObject({ startDate: '2026-03-20', dueDate: '2026-03-20' })
       const cleared = await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, startDate: null }) as Result
       expect(cleared.ticket.startDate).toBeNull()
       expect(db.listActivity(ticket.id).filter(entry => entry.kind === 'start_date').map(entry => entry.payload.to)).toEqual([null, '2026-03-20'])
+    })
+
+    it('tells a milestone from a lifecycle, and clears what a schedule has no room for', async () => {
+      type Result = { ticket: { id: string; schedule: string; startDate: string | null; dueDate: string | null; liveFrom: string | null; liveUntil: string | null } }
+      const create = (input: Record<string, unknown>) => ops.run(ops.ticketCreate, actorOf('editor'), { boardId, laneId, title: 'Scheduled', ...input }) as Promise<Result>
+      const update = (ticketId: string, input: Record<string, unknown>) => ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId, ...input }) as Promise<Result>
+
+      // Without a schedule the dates say it: none, or a lifecycle — a due date alone is a deadline.
+      expect((await create({})).ticket.schedule).toBe('none')
+      const deadline = (await create({ dueDate: '2026-05-08' })).ticket
+      expect(deadline).toMatchObject({ schedule: 'lifecycle', startDate: null, dueDate: '2026-05-08' })
+
+      // A milestone is one day, its due date; a start or a live window is refused outright.
+      const meeting = (await create({ schedule: 'milestone', dueDate: '2026-05-12' })).ticket
+      expect(meeting).toMatchObject({ schedule: 'milestone', startDate: null, dueDate: '2026-05-12' })
+      expect(await statusOf(create({ schedule: 'milestone' }))).toBe(422)
+      expect(await statusOf(create({ schedule: 'milestone', startDate: '2026-05-11', dueDate: '2026-05-12' }))).toBe(422)
+      expect(await statusOf(update(meeting.id, { liveUntil: '2026-06-01' }))).toBe(422)
+      expect(await statusOf(update(meeting.id, { dueDate: null }))).toBe(422)
+      expect(await statusOf(create({ schedule: 'none', dueDate: '2026-05-12' }))).toBe(422)
+
+      // Switching clears what the new schedule has no room for, and keeps one day for a milestone.
+      const span = (await create({ startDate: '2026-05-04', dueDate: '2026-05-15', liveFrom: '2026-05-15', liveUntil: '2026-06-30' })).ticket
+      const pinned = (await update(span.id, { schedule: 'milestone' })).ticket
+      expect(pinned).toMatchObject({ schedule: 'milestone', startDate: null, dueDate: '2026-05-15', liveFrom: null, liveUntil: null })
+      const startOnly = (await create({ startDate: '2026-05-04' })).ticket
+      expect((await update(startOnly.id, { schedule: 'milestone' })).ticket).toMatchObject({ startDate: null, dueDate: '2026-05-04' })
+      expect((await update(pinned.id, { schedule: 'lifecycle', startDate: '2026-05-11' })).ticket).toMatchObject({ schedule: 'lifecycle', startDate: '2026-05-11', dueDate: '2026-05-15' })
+      expect((await update(pinned.id, { schedule: 'none' })).ticket).toMatchObject({ schedule: 'none', startDate: null, dueDate: null })
+      // A date for an undated ticket makes it a lifecycle, as on create.
+      expect((await update(pinned.id, { dueDate: '2026-05-20' })).ticket.schedule).toBe('lifecycle')
+      expect(db.listActivity(pinned.id).filter(entry => entry.kind === 'schedule').map(entry => entry.payload.to)).toEqual(['lifecycle', 'none', 'lifecycle', 'milestone'])
+    })
+
+    it('sorts existing tickets into a schedule once: the same day without a live window is a milestone', () => {
+      const ids = ['a', 'b', 'c', 'd'].map(() => db.createTicket(boardId, { title: 'Before schedules' })!.id)
+      const raw = db.getDb()
+      raw.prepare('UPDATE tickets SET start_date = ?, due_date = ? WHERE id = ?').run('2026-04-01', '2026-04-01', ids[0])
+      raw.prepare('UPDATE tickets SET start_date = ?, due_date = ?, live_until = ? WHERE id = ?').run('2026-04-01', '2026-04-01', '2026-05-01', ids[1])
+      raw.prepare('UPDATE tickets SET due_date = ? WHERE id = ?').run('2026-04-09', ids[2])
+      // Back to the time before the column: rebuilt without it, then migrated again.
+      raw.exec('ALTER TABLE tickets DROP COLUMN schedule')
+      expect(db.ensureTicketSchedule(raw)).toBe(true)
+      expect(db.ensureTicketSchedule(raw)).toBe(false)
+      expect(ids.map(id => db.findTicket(id)!).map(ticket => [ticket.schedule, ticket.startDate, ticket.dueDate])).toEqual([
+        ['milestone', null, '2026-04-01'],
+        ['lifecycle', '2026-04-01', '2026-04-01'],
+        ['lifecycle', null, '2026-04-09'],
+        ['none', null, null]
+      ])
     })
 
     it('keeps a live window apart from the work, and a live lane quiets the due date', async () => {
