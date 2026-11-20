@@ -17,7 +17,26 @@ const todoSchema = z.object({
   // always sends the flag explicitly.
   completed: z.boolean().default(false),
   /** Keeps a subticket the list already holds; its text and flag are read from that ticket. */
-  subticketId: idSchema.nullable().optional()
+  subticketId: idSchema.nullable().optional(),
+  /** Makes the to-do a decision: the text is its question. */
+  decision: z.object({
+    multiple: z.boolean().default(false),
+    options: z.array(z.string().trim().min(1).max(200)).min(1).max(20),
+    allowOther: z.boolean().default(false),
+    chosen: z.array(z.number().int().min(0)).max(20).default([]),
+    other: z.string().trim().max(500).nullable().default(null).transform(value => value || null)
+  }).nullable().optional()
+}).superRefine((todo, context) => {
+  const decision = todo.decision
+  if (!decision) return
+  if (todo.subticketId) context.addIssue({ code: 'custom', message: 'A subticket cannot be a decision.' })
+  if (new Set(decision.chosen).size !== decision.chosen.length || decision.chosen.some(index => index >= decision.options.length)) {
+    context.addIssue({ code: 'custom', message: 'A decision can only pick its own options, each once.' })
+  }
+  if (decision.other && !decision.allowOther) context.addIssue({ code: 'custom', message: 'This decision takes no answer of its own.' })
+  const picked = decision.chosen.length + (decision.other ? 1 : 0)
+  if (!decision.multiple && picked > 1) context.addIssue({ code: 'custom', message: 'A single-choice decision takes one answer.' })
+  if (todo.completed && !picked) context.addIssue({ code: 'custom', message: 'A decision is decided with at least one answer.' })
 })
 
 const webAddress = z.string().trim().max(2000).refine(value => /^https?:\/\/\S+$/i.test(value), 'A link has to start with http:// or https://.')
@@ -48,6 +67,8 @@ const ticketShape = {
   /** A type of the board's workspace; null leaves the ticket untyped. */
   typeId: idSchema.nullable(),
   todos: z.array(todoSchema).max(100),
+  /** Work the to-dos top to bottom. */
+  strictOrder: z.boolean(),
   /** Ids of the tickets it waits on, the whole list; each of the same workspace, none waiting on it in turn. */
   waitsOn: z.array(idSchema).max(50)
 }
@@ -71,6 +92,7 @@ export const ticketCreateSchema = z.object({
   categoryName: ticketShape.categoryName.optional(),
   typeId: ticketShape.typeId.optional(),
   todos: ticketShape.todos.default([]),
+  strictOrder: ticketShape.strictOrder.optional(),
   waitsOn: ticketShape.waitsOn.optional(),
   /** Where in its lane the ticket lands; the bottom unless asked otherwise. */
   placement: z.enum(['top', 'bottom']).default('bottom')

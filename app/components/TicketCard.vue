@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { AlarmClock, ArrowDownToLine, ArrowUpToLine, Check, ChevronDown, ChevronUp, CornerDownRight, Flag, Image, Link as LinkIcon, ListTodo, MessageSquare, Paperclip, Radio, SquareKanban, Tag, TriangleAlert } from '@lucide/vue'
+import { AlarmClock, ArrowDownToLine, ArrowUpToLine, Check, ChevronDown, ChevronUp, CornerDownRight, Flag, Image, Link as LinkIcon, ListTodo, MessageSquare, Paperclip, Radio, SquareKanban, ListOrdered, Tag, TriangleAlert, Vote } from '@lucide/vue'
 import type { Lane, Ticket } from '~~/shared/types/domain'
 import { CATEGORY_TONE_CLASSES } from '~~/shared/utils/constants'
 import { boardToday, daysUntil, dueDescription, dueLevel, liveDescription, liveLevel } from '~~/shared/utils/due-date'
 import { cardImages } from '~~/shared/utils/card-images'
-import { TODO_LIGHT_LABELS, todoLight } from '~~/shared/utils/todo-progress'
+import { TODO_LIGHT_LABELS, decisionAnswer, todoLight } from '~~/shared/utils/todo-progress'
 
 const props = withDefaults(defineProps<{
   ticket: Ticket
@@ -193,6 +193,7 @@ const reorderButtons = computed(() => [
           <div class="muted mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[.06em]">
             <ListTodo :size="12" />
             <span>To-dos</span>
+            <ListOrdered v-if="ticket.strictOrder" :size="12" title="Strict order: top to bottom" aria-label="Strict order" />
             <span class="ml-auto flex items-center gap-1.5 tabular-nums" :title="light ? TODO_LIGHT_LABELS[light] : undefined">
               <TodoLight v-if="light" :light="light" size="sm" />
               {{ completedTodoCount }}/{{ ticket.todos.length }}
@@ -200,12 +201,20 @@ const reorderButtons = computed(() => [
           </div>
           <div class="space-y-1">
             <div v-for="todo in visibleTodos" :key="todo.id" class="flex min-w-0 items-start gap-1.5 text-[11px] leading-tight" :class="todo.completed ? 'muted' : ''">
-              <span class="mt-px grid size-3 shrink-0 place-items-center rounded-[3px] border" :class="todo.completed ? 'border-[var(--accent)] bg-[var(--accent)] text-white' : 'border-[var(--line)]'">
+              <span v-if="todo.decision" class="mt-px grid size-3 shrink-0 place-items-center" :class="todo.completed ? 'text-[var(--accent)]' : ''" :title="todo.completed ? 'Decided' : 'Open decision'">
+                <Vote :size="12" aria-hidden="true" />
+              </span>
+              <span v-else class="mt-px grid size-3 shrink-0 place-items-center rounded-[3px] border" :class="todo.completed ? 'border-[var(--accent)] bg-[var(--accent)] text-white' : 'border-[var(--line)]'">
                 <Check v-if="todo.completed" :size="9" :stroke-width="3" />
               </span>
               <!-- As in the editor: the title alone, and a subticket's number leading a second line. -->
               <span class="flex min-w-0 flex-col">
-                <span class="truncate" :class="todo.completed ? 'line-through' : ''">{{ todo.text }}</span>
+                <span class="truncate" :class="todo.completed && !todo.decision ? 'line-through' : ''">{{ todo.text }}</span>
+                <!-- A decided question keeps its words; what it landed on is the news. -->
+                <span v-if="todo.decision && todo.completed" class="flex min-w-0 items-center gap-1 text-[10px] font-semibold text-[var(--ink)]">
+                  <CornerDownRight :size="10" class="shrink-0 text-[var(--accent)]" aria-hidden="true" />
+                  <span class="truncate">{{ decisionAnswer(todo.decision) }}</span>
+                </span>
                 <span v-if="todo.subticket" class="muted flex min-w-0 items-center gap-1 text-[10px]">
                   <CornerDownRight :size="10" class="shrink-0" aria-hidden="true" />
                   <span class="shrink-0 font-semibold tabular-nums">#{{ todo.subticket.ticketNumber }}</span>

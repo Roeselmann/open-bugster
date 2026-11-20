@@ -215,7 +215,7 @@ export interface TicketComment {
   updatedAt: string
 }
 
-export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'start_date', 'due_date', 'live_from', 'live_until', 'schedule', 'type', 'archived', 'restored', 'commented', 'subticket', 'waits_on'] as const
+export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'start_date', 'due_date', 'live_from', 'live_until', 'schedule', 'type', 'archived', 'restored', 'commented', 'subticket', 'waits_on', 'decided', 'reopened', 'strict_order'] as const
 export type ActivityKind = typeof activityKinds[number]
 
 /** How a change reached the server. Everything written before agents existed reads `web`. */
@@ -399,6 +399,31 @@ export interface TicketTodoInput {
    * `POST /tickets/{id}/subtickets`. Its text and completion are read from that ticket.
    */
   subticketId?: string | null
+  /**
+   * Set when the to-do is a decision: `text` is the question, `options` the answers to pick
+   * from. `completed` is whether it is decided; then `chosen` (and `other`) hold the result.
+   */
+  decision?: TicketDecisionInput | null
+}
+
+/** A question to settle with one answer, or several, picked from a list — maybe one typed in. */
+export interface TicketDecisionInput {
+  /** Several answers may be picked; otherwise exactly one. */
+  multiple: boolean
+  /** The answers to pick from, in order. */
+  options: string[]
+  /** Whether an answer of one's own may be typed in beside the options. */
+  allowOther: boolean
+  /** Indexes into `options` that are picked — the result once decided, a preselection before. */
+  chosen: number[]
+  /** The answer typed in, when `allowOther`; null for none. */
+  other: string | null
+}
+
+export interface TicketDecision extends TicketDecisionInput {
+  /** Who decided it, and when; null while it is open. */
+  decidedBy: Person | null
+  decidedAt: string | null
 }
 
 /** The ticket a subticket to-do stands for, as far as the parent needs to show it. */
@@ -431,6 +456,11 @@ export interface DependencyRef {
   archived: boolean
   startDate: string | null
   dueDate: string | null
+  /**
+   * Set when the dependency comes from a strict to-do list rather than by hand: the number of
+   * the ticket whose list puts these two one after the other. It goes once the list is loose.
+   */
+  strictOrderOf: number | null
 }
 
 /** One ticket a shift moves: its dates before and after. */
@@ -551,6 +581,8 @@ export interface TicketPatch {
   categoryName?: string | null
   typeId?: string | null
   todos?: TicketTodoInput[]
+  /** Whether the to-dos are worked top to bottom: each waits on the ones before it. */
+  strictOrder?: boolean
   /** Ids of the tickets it waits on; the whole list, replacing what it had. */
   waitsOn?: string[]
 }
@@ -561,6 +593,8 @@ export interface TicketTodo extends TicketTodoInput {
   subticketId: string | null
   /** The subticket behind this to-do; null for a plain one. */
   subticket: SubticketRef | null
+  /** The decision this to-do asks for; null for a plain one or a subticket. */
+  decision: TicketDecision | null
 }
 
 export interface AppleFeedback {
@@ -659,6 +693,11 @@ export interface Ticket {
   jira: JiraIssue | null
   attachments: Attachment[]
   todos: TicketTodo[]
+  /**
+   * The to-dos are worked top to bottom: one is ticked only once those above it are, and each
+   * subticket waits on the subticket before it, as if that were set under `waitsOn`.
+   */
+  strictOrder: boolean
   /** The tickets it waits on: it starts once they end. Who waits on it is a read of its own. */
   waitsOn: DependencyRef[]
 }

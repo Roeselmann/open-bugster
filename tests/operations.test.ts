@@ -806,4 +806,99 @@ describe('the operation registry', () => {
       expect(await statusOf(ops.run(ops.commentUpdate, actorOf('editor'), { commentId: comment.id, body: 'Mine' }))).toBe(200)
     })
   })
+
+  describe('decisions', () => {
+    type Todo = { text: string; completed: boolean; decision: null | { options: string[]; chosen: number[]; other: string | null; decidedBy: { id: string } | null; decidedAt: string | null } }
+    const logo = (completed: boolean, chosen: number[], other: string | null = null) => ({
+      text: 'Which logo goes on the flyer?', completed,
+      decision: { multiple: false, options: ['Old logo', 'New logo'], allowOther: true, chosen, other }
+    })
+
+    it('stamps who decided, keeps it over a rewrite of the list, and writes the history', async () => {
+      const { ticket } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Flyer', laneId, todos: [logo(false, [])] }) as { ticket: { id: string; todos: Todo[] } }
+      expect(ticket.todos[0]!.decision).toMatchObject({ chosen: [], decidedBy: null })
+
+      const decided = await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, todos: [logo(true, [1])] }) as { ticket: { todos: Todo[] } }
+      const stamp = decided.ticket.todos[0]!
+      expect(stamp.completed).toBe(true)
+      expect(stamp.decision?.decidedBy?.id).toBe(people.editor)
+      expect(db.listActivity(ticket.id).find(entry => entry.kind === 'decided')?.payload).toMatchObject({ question: 'Which logo goes on the flyer?', answer: 'New logo' })
+
+      // Somebody else saving the same list, a plain to-do added, leaves the decision theirs.
+      const again = await ops.run(ops.ticketUpdate, actorOf('owner'), { ticketId: ticket.id, todos: [{ text: 'Print it', completed: false }, logo(true, [1])] }) as { ticket: { todos: Todo[] } }
+      expect(again.ticket.todos[1]!.decision).toMatchObject({ decidedBy: { id: people.editor }, decidedAt: stamp.decision!.decidedAt })
+
+      await ops.run(ops.ticketUpdate, actorOf('owner'), { ticketId: ticket.id, todos: [logo(false, [1])] })
+      expect(db.listActivity(ticket.id).some(entry => entry.kind === 'reopened')).toBe(true)
+    })
+
+    it('refuses a result the question does not offer', async () => {
+      const { ticket } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Undecidable', laneId }) as { ticket: { id: string } }
+      expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, todos: [logo(true, [])] }))).toBe(422)
+      expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, todos: [logo(true, [0, 1])] }))).toBe(422)
+      expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, todos: [logo(false, [5])] }))).toBe(422)
+      expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, todos: [logo(true, [], 'A third one')] }))).toBe(200)
+    })
+
+    it('lets an agent ask a decision but not answer it', async () => {
+      const { ticket } = await ops.run(ops.ticketCreate, agentOf('editor'), { boardId, title: 'Asked by an agent', laneId, todos: [logo(true, [0])] }) as { ticket: { id: string; todos: Todo[] } }
+      expect(ticket.todos[0]).toMatchObject({ completed: false, decision: { chosen: [], decidedBy: null } })
+
+      await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, todos: [logo(true, [0])] })
+      // Sent back open and with another pick, it still stands as the person decided it.
+      const kept = await ops.run(ops.ticketUpdate, agentOf('editor'), { ticketId: ticket.id, todos: [logo(false, [1])] }) as { ticket: { todos: Todo[] } }
+      expect(kept.ticket.todos[0]).toMatchObject({ completed: true, decision: { chosen: [0], decidedBy: { id: people.editor } } })
+    })
+  })
+
+  describe('strict order', () => {
+    const steps = (...done: boolean[]) => done.map((completed, index) => ({ text: `Step ${index + 1}`, completed }))
+
+    it('ticks the to-dos only top to bottom, and lets a step be undone', async () => {
+      const { ticket } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'In order', laneId, strictOrder: true, todos: steps(false, false, false) }) as { ticket: { id: string; strictOrder: boolean } }
+      expect(ticket.strictOrder).toBe(true)
+      expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, todos: steps(false, true, false) }))).toBe(422)
+      expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, todos: steps(true, true, false) }))).toBe(200)
+      // Undoing the first leaves the second as it is; ticking the third waits again.
+      expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, todos: steps(false, true, false) }))).toBe(200)
+      expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, todos: steps(false, true, true) }))).toBe(422)
+      // In any order, anything goes.
+      await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, strictOrder: false })
+      expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, todos: steps(false, true, true) }))).toBe(200)
+      expect(db.listActivity(ticket.id).filter(entry => entry.kind === 'strict_order').map(entry => entry.payload.to)).toEqual(['loose'])
+    })
+
+    it('makes each subticket wait on the one before it, without storing it', async () => {
+      const parent = db.createTicket(boardId, { title: 'Campaign', laneId })!
+      const file = async (title: string) => ((await ops.run(ops.ticketSubticketCreate, actorOf('editor'), { ticketId: parent.id, boardId, laneId, title })) as { subticket: { id: string } }).subticket.id
+      const brief = await file('Brief')
+      const draft = await file('Draft')
+      await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: brief, startDate: '2026-06-01', dueDate: '2026-06-05' })
+      await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: draft, startDate: '2026-06-06', dueDate: '2026-06-10' })
+      expect(db.findTicket(draft)!.waitsOn).toEqual([])
+
+      await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: parent.id, strictOrder: true })
+      const parentNumber = db.findTicket(parent.id)!.ticketNumber
+      expect(db.findTicket(draft)!.waitsOn).toEqual([expect.objectContaining({ id: brief, strictOrderOf: parentNumber })])
+
+      // A shift of the first pushes the second along, as if it waited by hand.
+      type Shift = { moves: Array<{ title: string }> }
+      const preview = await ops.run(ops.ticketShift, actorOf('editor'), { ticketId: brief, days: 2, dryRun: true }) as Shift
+      expect(preview.moves.map(move => move.title)).toEqual(['Brief', 'Draft'])
+
+      // Sent back with the list, it is not stored: in any order again, it is gone.
+      await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: draft, waitsOn: [brief] })
+      await ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: parent.id, strictOrder: false })
+      expect(db.findTicket(draft)!.waitsOn).toEqual([])
+    })
+  })
+
+  it('changes the schedule of a ticket with labels and to-dos without touching them', async () => {
+    const { ticket } = await ops.run(ops.ticketCreate, actorOf('editor'), { boardId, title: 'Labelled', laneId, labels: ['Bug'], todos: [{ text: 'Check', completed: true }] }) as { ticket: { id: string } }
+    expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, schedule: 'lifecycle' }))).toBe(200)
+    expect(await statusOf(ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId: ticket.id, dueDate: '2026-12-01' }))).toBe(200)
+    const after = db.findTicket(ticket.id)!
+    expect(after.labels.map(label => label.name)).toEqual(['Bug'])
+    expect(after.todos.map(todo => [todo.text, todo.completed])).toEqual([['Check', true]])
+  })
 })

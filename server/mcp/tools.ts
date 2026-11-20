@@ -52,7 +52,7 @@ function slim(ticket: Ticket) {
 
 /** A dependency as an agent reads it: which ticket, where it stands, and its dates. */
 function dependencyOf(item: DependencyRef) {
-  return { id: item.id, number: item.ticketNumber, title: item.title, board: item.boardName, lane: item.laneName, done: item.done, startDate: item.startDate, dueDate: item.dueDate }
+  return { id: item.id, number: item.ticketNumber, title: item.title, board: item.boardName, lane: item.laneName, done: item.done, startDate: item.startDate, dueDate: item.dueDate, ...(item.strictOrderOf !== null ? { strictOrderOf: item.strictOrderOf } : {}) }
 }
 
 /**
@@ -83,6 +83,29 @@ function timelineOf(node: TimelineNode): Record<string, unknown> {
  * enough to scan a board for what is blocked. `light` is the traffic light the UI shows —
  * green when all is done, orange from half, red below. Null for a ticket without to-dos.
  */
+/**
+ * A decision as an agent asks it: the question is the to-do's text. Whether and how it is
+ * decided is left to people; the server keeps an earlier result over a rewrite of the list.
+ */
+const STRICT_ORDER_FIELD = 'Work the to-dos top to bottom: a to-do or decision can only be completed once everything above it is done (an update ticking one too early is refused), '
+  + 'and each subticket waits on the subticket before it — shown in waitsOn with strictOrderOf, counted by the timeline and by shift. False: any order.'
+
+const DECISION_INPUT = z.object({
+  options: z.array(z.string().min(1).max(200)).min(1).max(20).describe('The answers to pick from, in order.'),
+  multiple: z.boolean().default(false).describe('Several answers may be picked; otherwise one.'),
+  allowOther: z.boolean().default(false).describe('Offer a field for an answer of one\'s own.')
+}).optional().describe('Makes the to-do a decision — a question with answers for people to pick, e.g. which logo to use. Its text is the question.')
+  .transform(value => value && { ...value, chosen: [] as number[], other: null })
+
+/** Whether a decision is decided is the server's to carry over, never the agent's to say. */
+function openDecision<T extends { completed: boolean; decision?: unknown }>(todo: T): T {
+  return todo.decision ? { ...todo, completed: false } : todo
+}
+
+function decisionAnswerOf(decision: NonNullable<TicketTodo['decision']>) {
+  return [...decision.chosen.map(index => decision.options[index]).filter(Boolean), ...(decision.other ? [decision.other] : [])]
+}
+
 function progressOf(todos: TicketTodo[]) {
   const light = todoLight(todos)
   if (!light) return null
@@ -302,7 +325,10 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       + 'so prefer search_tickets when scanning. '
       + 'A to-do with a subticketId is a subticket: a ticket of its own, maybe on another board of '
       + 'the workspace, whose `completed` follows its lane — it is done once it sits in a lane with '
-      + 'isDone. `parents` lists the tickets that hold this one as a subticket; `progress` sums up the list. '
+      + 'isDone. A to-do with a `decision` is a question to settle: `text` is the question, `decision.options` '
+      + 'the answers, `completed` whether it is decided, and then `decision.answer` what was decided, by whom and when. '
+      + 'Decisions are made by people in Bugster; you can ask one and read it, not answer it. '
+      + '`parents` lists the tickets that hold this one as a subticket; `progress` sums up the list. '
       + 'With timeline: true it adds `timeline`, the plan below the ticket: every subticket down through '
       + 'theirs, with board, lane, start and due date, plus `warnings` for open tickets past their due '
       + 'date and subtickets that start before or end after this ticket\'s own window. Use it when the question '
@@ -363,7 +389,19 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
               archived: todo.subticket.archived
             }
           }
-        : { text: todo.text, completed: todo.completed }),
+        : todo.decision
+          ? {
+              text: todo.text,
+              completed: todo.completed,
+              decision: {
+                multiple: todo.decision.multiple,
+                options: todo.decision.options,
+                allowOther: todo.decision.allowOther,
+                ...(todo.completed ? { answer: decisionAnswerOf(todo.decision), decidedBy: nameOf(todo.decision.decidedBy), decidedAt: todo.decision.decidedAt } : {})
+              }
+            }
+          : { text: todo.text, completed: todo.completed }),
+      strictOrder: ticket.strictOrder,
       progress: progressOf(ticket.todos),
       // The other way round: the tickets whose to-do lists hold this one, as far as this token
       // can read them. Moving this ticket into a done lane ticks it off on each of them.
@@ -454,8 +492,9 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       labels: z.array(z.string()).max(12).optional(),
       categoryName: z.string().optional(),
       typeId: z.string().optional().describe('A ticket type id from board_overview.ticketTypes. Omit for an untyped ticket.'),
-      todos: z.array(z.object({ text: z.string().min(1).max(500), completed: z.boolean().default(false) })).max(100).optional()
-        .describe('The ticket’s initial to-do list, in order.'),
+      todos: z.array(z.object({ text: z.string().min(1).max(500), completed: z.boolean().default(false), decision: DECISION_INPUT }).transform(openDecision)).max(100).optional()
+        .describe('The ticket’s initial to-do list, in order. An item with decision is a question for people to decide.'),
+      strictOrder: z.boolean().optional().describe(STRICT_ORDER_FIELD),
       placement: z.enum(['top', 'bottom']).optional()
         .describe('Where the ticket lands in its lane. Defaults to the bottom; "top" pushes the lane’s other tickets down one.'),
       parentTicketId: z.string().optional()
@@ -503,9 +542,11 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       todos: z.array(z.object({
         text: z.string().min(1).max(500),
         completed: z.boolean().default(false),
-        subticketId: z.string().optional().describe('Send back the subticketId get_ticket showed to keep that subticket in the list. The id of another open ticket of the workspace (from search_tickets) links it as a new subticket. Its text and completion follow the subticket itself.')
-      })).max(100).optional()
-        .describe('Replaces the whole to-do list — read the ticket first and send every item back, changed and unchanged alike, subtickets with their subticketId. A subticket left out is unlinked; the ticket itself stays. To file a brand-new subticket use create_ticket with parentTicketId. Omit the field to leave the list alone.'),
+        subticketId: z.string().optional().describe('Send back the subticketId get_ticket showed to keep that subticket in the list. The id of another open ticket of the workspace (from search_tickets) links it as a new subticket. Its text and completion follow the subticket itself.'),
+        decision: DECISION_INPUT
+      }).transform(openDecision)).max(100).optional()
+        .describe('Replaces the whole to-do list — read the ticket first and send every item back, changed and unchanged alike, subtickets with their subticketId, decisions with their decision (question as text, same options) so they keep their result. A subticket left out is unlinked; the ticket itself stays. To file a brand-new subticket use create_ticket with parentTicketId. Omit the field to leave the list alone.'),
+      strictOrder: z.boolean().optional().describe(STRICT_ORDER_FIELD),
       waitsOn: z.array(z.string()).max(50).optional()
         .describe('Ids of the tickets this one waits on, finish-to-start: it starts once they end. Replaces the whole list — send back the ids get_ticket showed under waitsOn to keep them; [] removes all. Same workspace only, and never a loop.'),
       shift: z.object({

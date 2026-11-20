@@ -16,3 +16,8 @@ export function todoLight(todos: ReadonlyArray<{ completed: boolean }>): TodoLig
   if (done === todos.length) return 'green'
   return done * 2 >= todos.length ? 'orange' : 'red'
 }
+
+/** What a decision landed on, as one line: the picked options in order, then the typed answer. */
+export function decisionAnswer(decision: { options: string[]; chosen: number[]; other: string | null }): string {
+  return [...decision.chosen.map(index => decision.options[index]).filter(Boolean), ...(decision.other ? [decision.other] : [])].join(', ')
+}

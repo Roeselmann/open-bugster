@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronDown, ChevronRight, Diamond, EyeOff } from '@lucide/vue'
+import { ArrowRightToLine, ChevronDown, ChevronRight, Diamond, EyeOff } from '@lucide/vue'
 import type { TimelineNode } from '~~/shared/types/domain'
 import { boardToday, daysUntil } from '~~/shared/utils/due-date'
 import { flattenTimeline, isMilestone, liveSpanOf, spanOf, timelineBounds } from '~~/shared/utils/timeline'
@@ -53,11 +53,21 @@ const monthFormatter = new Intl.DateTimeFormat('en', { month: 'short', timeZone:
 const dayFormatter = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', timeZone: 'UTC' })
 const dayOf = (date: string) => dayFormatter.format(new Date(`${date}T00:00:00Z`))
 
-// Month starts as gridlines; weeks (Mondays) as well when there is room for them: under two
-// months in the editor, under six full screen.
+// A short span gets every day, its number centred over the day it names, the month beside
+// the first and on the 1st. Longer ones get month starts as gridlines, and weeks (Mondays) as
+// well when there is room: under two months in the editor, under six full screen.
+const daily = computed(() => totalDays.value <= (full.value ? 31 : 16))
 const ticks = computed(() => {
   if (!range.value) return []
   const result: Array<{ date: string; label: string | null; major: boolean }> = []
+  if (daily.value) {
+    for (let date = range.value.start; date <= range.value.end; date = shift(date, 1)) {
+      const value = new Date(`${date}T00:00:00Z`)
+      const named = date === range.value.start || value.getUTCDate() === 1
+      result.push({ date, label: named ? dayOf(date) : String(value.getUTCDate()), major: value.getUTCDate() === 1 })
+    }
+    return result
+  }
   const weekly = totalDays.value <= (full.value ? 183 : 62)
   for (let date = range.value.start; date <= range.value.end; date = shift(date, 1)) {
     const value = new Date(`${date}T00:00:00Z`)
@@ -75,6 +85,18 @@ function clearOfMonthStart(value: Date) {
 const hasLiveWindows = computed(() => flattenTimeline(props.timeline).some(({ node }) => liveSpanOf(node)))
 const todayVisible = computed(() => Boolean(range.value && today >= range.value.start && today <= range.value.end))
 
+/** A due date with no start: a deadline, drawn as an arrow up to a line at the close of its day. */
+function isDeadline(node: TimelineNode) {
+  return !isMilestone(node) && !node.startDate && Boolean(node.dueDate)
+}
+function deadlineClass(node: TimelineNode) {
+  if (!node.readable) return 'text-[var(--muted)]'
+  if (node.done) return 'text-emerald-500'
+  if (props.warned.has(node.id) && node.dueDate && node.dueDate < today) return 'text-rose-600'
+  if (props.warned.has(node.id)) return 'text-orange-500'
+  return 'text-[var(--accent)]'
+}
+
 function barClass(node: TimelineNode) {
   if (!node.readable) return 'border border-dashed border-[var(--muted)] bg-transparent'
   if (node.done) return 'bg-emerald-500/70'
@@ -88,6 +110,13 @@ function spanLabel(node: TimelineNode) {
   const work = span ? (span.start === span.end ? dayOf(span.start) : `${dayOf(span.start)} – ${dayOf(span.end)}`) : null
   const out = live ? `live ${dayOf(live.start)} – ${dayOf(live.end)}` : null
   return [work, out].filter(Boolean).join(' · ') || 'No dates'
+}
+// A due date alone is a deadline; with a start it is a span of work; a milestone is its day.
+function dateLabel(node: TimelineNode) {
+  const span = spanOf(node)!
+  if (isMilestone(node)) return dayOf(span.start)
+  if (!node.startDate) return `due ${dayOf(span.end)}`
+  return span.start === span.end ? dayOf(span.start) : `${dayOf(span.start)} – ${dayOf(span.end)}`
 }
 // The live window sits behind the work as a thin, pale band: sky while running or ahead,
 // rose once it has ended and the ticket is still in a live lane.
@@ -135,6 +164,10 @@ function barEdges(node: TimelineNode, frame: { left: number; width: number }) {
   const span = spanOf(node)
   if (!span) return null
   const x = (percent: number) => frame.left + (percent / 100) * frame.width
+  if (isDeadline(node)) {
+    const line = x(offset(span.end, true))
+    return { start: line - 20, end: line, half: 8 }
+  }
   if (isMilestone(node)) {
     const center = x((offset(span.start) + offset(span.end, true)) / 2)
     return { start: center - 6, end: center + 6, half: 6 }
@@ -194,9 +227,15 @@ const arrows = computed(() => {
           v-for="tick in ticks"
           :key="tick.date"
           class="absolute top-1.5 -translate-x-1/2 whitespace-nowrap"
-          :class="tick.major ? '' : 'muted font-medium normal-case tracking-normal'"
-          :style="{ left: `${offset(tick.date)}%` }"
+          :class="[tick.major ? '' : 'muted font-medium normal-case tracking-normal', tick.date === today ? '!text-rose-600' : '']"
+          :style="{ left: `${daily ? (offset(tick.date) + offset(tick.date, true)) / 2 : offset(tick.date)}%` }"
         >{{ tick.label }}</span>
+        <!-- Without a day of its own on the scale, today says what the red line is. -->
+        <span
+          v-if="todayVisible && !daily"
+          class="absolute top-1.5 -translate-x-1/2 whitespace-nowrap font-medium normal-case tracking-normal text-rose-600"
+          :style="{ left: `${offset(today)}%` }"
+        >Today</span>
       </div>
     </div>
 
@@ -204,7 +243,7 @@ const arrows = computed(() => {
       <!-- Gridlines and today behind every row, drawn once for the whole chart. -->
       <div class="pointer-events-none absolute inset-y-0 right-0 left-[var(--timeline-label)]" aria-hidden="true">
         <span v-for="tick in ticks" :key="tick.date" class="absolute inset-y-0 w-px" :class="tick.major ? 'bg-[var(--line)]' : 'bg-[color-mix(in_srgb,var(--line)_45%,transparent)]'" :style="{ left: `${offset(tick.date)}%` }" />
-        <span v-if="todayVisible" class="absolute inset-y-0 w-0.5 bg-rose-500/70" :style="{ left: `${offset(today)}%` }" title="Today" />
+        <span v-if="todayVisible" class="absolute inset-y-0 w-0.5 bg-rose-500/70" :style="{ left: `${daily ? (offset(today) + offset(today, true)) / 2 : offset(today)}%` }" title="Today" />
       </div>
 
       <div
@@ -253,8 +292,17 @@ const arrows = computed(() => {
             :style="{ left: `${offset(liveSpanOf(node)!.start)}%`, width: `${Math.max(0.8, offset(liveSpanOf(node)!.end, true) - offset(liveSpanOf(node)!.start))}%` }"
           />
           <template v-if="spanOf(node)">
+            <!-- The icon's line sits on the close of the due day; the arrow runs into it. -->
+            <ArrowRightToLine
+              v-if="isDeadline(node)"
+              :size="full ? 26 : 22"
+              :stroke-width="3"
+              class="absolute top-1/2 -translate-y-1/2"
+              :class="deadlineClass(node)"
+              :style="{ left: `calc(${offset(spanOf(node)!.end, true)}% - ${full ? 23 : 20}px)` }"
+            />
             <Diamond
-              v-if="isMilestone(node)"
+              v-else-if="isMilestone(node)"
               :size="full ? 16 : 14"
               class="absolute top-1/2 -translate-x-1/2 -translate-y-1/2"
               :class="node.done ? 'fill-emerald-500 text-emerald-500' : 'fill-[var(--accent)] text-[var(--accent)]'"
@@ -266,6 +314,13 @@ const arrows = computed(() => {
               :class="[barClass(node), full ? 'h-4' : 'h-3.5']"
               :style="{ left: `${offset(spanOf(node)!.start)}%`, width: `${Math.max(0.8, offset(spanOf(node)!.end, true) - offset(spanOf(node)!.start))}%` }"
             />
+            <!-- Its days in words beside it, so nobody has to read them off the scale. -->
+            <span
+              v-if="full"
+              class="muted absolute top-1/2 -translate-y-1/2 whitespace-nowrap text-[11px] font-medium"
+              :class="offset(spanOf(node)!.end, true) > 80 ? '-translate-x-full pr-2' : 'pl-2'"
+              :style="{ left: `${offset(spanOf(node)!.end, true) > 80 ? offset(spanOf(node)!.start) : offset(spanOf(node)!.end, true)}%` }"
+            >{{ dateLabel(node) }}</span>
           </template>
           <span v-else-if="!liveSpanOf(node)" class="muted absolute inset-0 flex items-center px-2 text-[10px] italic">No dates</span>
         </div>

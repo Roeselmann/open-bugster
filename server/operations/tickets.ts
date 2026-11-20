@@ -11,7 +11,7 @@ import { deleteLinkThumbnails } from '../utils/link-preview'
 import { cardImageCandidates } from '../../shared/utils/card-images'
 import { addDays } from '../../shared/utils/timeline'
 import { settleSchedule, touchesSchedule, type ScheduleFields } from '../../shared/utils/schedule'
-import type { ShiftMove, ShiftResult, ShiftSkip } from '../../shared/types/domain'
+import type { ShiftMove, ShiftResult, ShiftSkip, TicketDecisionInput } from '../../shared/types/domain'
 import { createdId, defineOperation } from './types'
 import { orNotFound } from './run'
 
@@ -126,6 +126,8 @@ export const ticketCreate = defineOperation({
     if (rest.typeId && !ticketTypeBelongsToBoard(rest.typeId, boardId)) throw foreignType()
     Object.assign(rest, settled({ schedule: 'none', startDate: null, dueDate: null, liveFrom: null, liveUntil: null }, rest))
     checkNewSubtickets(ctx.actor, boardId, null, new Set(), rest.todos)
+    keepDecisionsOpenFor(ctx.actor, [], rest.todos)
+    if (rest.strictOrder) checkStrictOrder([], rest.todos)
     if (rest.waitsOn?.length) checkWaitsOn(ctx.actor, boardId, null, new Set(), rest.waitsOn)
     // The author answers for the ticket, the actor for the write. Identical from the browser,
     // and different the moment a service identity files on somebody's behalf.
@@ -189,6 +191,8 @@ export const ticketUpdate = defineOperation({
       throw createError({ statusCode: 422, statusMessage: 'A ticket can only be assigned to a member of this board.' })
     }
     if (fields.typeId && fields.typeId !== ticket.type?.id && !ticketTypeBelongsToBoard(fields.typeId, ticket.boardId)) throw foreignType()
+    if (fields.todos) keepDecisionsOpenFor(ctx.actor, ticket.todos, fields.todos)
+    if (fields.todos && (fields.strictOrder ?? ticket.strictOrder)) checkStrictOrder(ticket.todos, fields.todos)
     if (fields.todos?.some(todo => todo.subticketId)) checkNewSubtickets(ctx.actor, ticket.boardId, ticket.id, subticketIdsOf(ticket.id), fields.todos)
     if (fields.waitsOn?.length) checkWaitsOn(ctx.actor, ticket.boardId, ticket.id, new Set(ticket.waitsOn.map(item => item.id)), fields.waitsOn)
     if (fields.coverAttachmentId && !ticket.attachments.some(file => file.id === fields.coverAttachmentId && file.mimeType.startsWith('image/'))) {
@@ -445,6 +449,53 @@ function foreignType() {
  * to be one the caller can read — anything else is the same 404 a stranger gets — on a board
  * of the same workspace, and neither the ticket itself nor one that already lists it.
  */
+/**
+ * A strict list is worked top to bottom: a step ticked (or a decision decided) now has to come
+ * after steps that are all done. Only what changes is checked — a step undone again, or a list
+ * switched to strict with gaps already in it, is left alone. A subticket ticks itself in its
+ * own lane, so it is never refused here, but an open one holds back the steps below it.
+ */
+function checkStrictOrder(existing: Array<{ text: string; completed: boolean; subticketId?: string | null }>, todos: Array<{ text: string; completed: boolean; subticketId?: string | null }>) {
+  const doneBefore = new Map<string, number>()
+  for (const todo of existing) if (todo.completed && !todo.subticketId) doneBefore.set(todo.text, (doneBefore.get(todo.text) ?? 0) + 1)
+  const subticketsDone = new Map(existing.filter(todo => todo.subticketId).map(todo => [todo.subticketId!, todo.completed]))
+  let open: string | null = null
+  for (const todo of todos) {
+    if (todo.subticketId) {
+      if (!open && !(subticketsDone.get(todo.subticketId) ?? todo.completed)) open = todo.text
+      continue
+    }
+    const text = todo.text.trim()
+    const wasDone = (doneBefore.get(text) ?? 0) > 0
+    if (todo.completed && wasDone) doneBefore.set(text, doneBefore.get(text)! - 1)
+    if (todo.completed && !wasDone && open) {
+      throw createError({ statusCode: 422, statusMessage: `This ticket's to-dos go in strict order: “${open}” comes first.` })
+    }
+    if (!todo.completed && !open) open = text
+  }
+}
+
+/**
+ * Decisions are made by people. An agent may ask one — file it, reword it, move it — but the
+ * result stays what it was: a decision it keeps carries its earlier result over, matched by
+ * its question, and one it adds starts open.
+ */
+function keepDecisionsOpenFor(actor: Actor, existing: Array<{ text: string; completed: boolean; decision?: TicketDecisionInput | null }>, todos: Array<{ text: string; completed: boolean; decision?: TicketDecisionInput | null }>) {
+  if (actor.channel !== 'mcp') return
+  const earlier = new Map<string, Array<{ completed: boolean; decision: TicketDecisionInput }>>()
+  for (const todo of existing) if (todo.decision) earlier.set(todo.text, [...(earlier.get(todo.text) ?? []), { completed: todo.completed, decision: todo.decision }])
+  for (const todo of todos) {
+    if (!todo.decision) continue
+    const previous = earlier.get(todo.text.trim())?.shift()
+    const options = todo.decision.options.map(option => option.trim())
+    // The picks name options by place, so they only carry over while those options stand.
+    const same = previous && previous.decision.options.every((option, index) => options[index] === option)
+    todo.completed = Boolean(same && previous.completed)
+    todo.decision.chosen = same ? previous.decision.chosen.filter(index => index < options.length) : []
+    todo.decision.other = same && todo.decision.allowOther ? previous.decision.other : null
+  }
+}
+
 function checkNewSubtickets(actor: Actor, boardId: string, parentId: string | null, held: Set<string>, todos: Array<{ subticketId?: string | null }>) {
   const workspaceId = orNotFound(findBoard(boardId), 'Board').workspaceId
   for (const todo of todos) {

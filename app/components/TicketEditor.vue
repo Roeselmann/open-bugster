@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ComponentPublicInstance } from 'vue'
-import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, CalendarArrowUp, CalendarClock, CalendarRange, Check, ChevronDown, Flag, Circle, CircleAlert, CircleCheck, CornerDownRight, CornerLeftUp, Download, ExternalLink, FileText, Gauge, GripVertical, History, Link2, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Pin, PinOff, Plus, Radio, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, CalendarArrowUp, CalendarClock, CalendarRange, Check, ChevronDown, Flag, Circle, CircleAlert, CircleCheck, CornerDownRight, CornerLeftUp, Download, ExternalLink, FileText, Gauge, GripVertical, History, Link2, ListOrdered, ListTodo, Lock, LoaderCircle, MessageSquare, Paperclip, PenLine, Pin, PinOff, Plus, Radio, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, Vote, X } from '@lucide/vue'
 import {
   DialogContent,
   DialogDescription,
@@ -15,7 +15,7 @@ import {
   DropdownMenuTrigger,
   VisuallyHidden,
 } from 'reka-ui'
-import type { Attachment, BoardMember, DependencyRef, ShiftResult, Category, LabelSummary, Lane, SubticketRef, Ticket, TicketLinkInput, TicketPatch, TicketPriority, TicketSchedule, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
+import type { Attachment, BoardMember, DependencyRef, ShiftResult, Category, LabelSummary, Lane, Person, SubticketRef, Ticket, TicketDecisionInput, TicketLinkInput, TicketPatch, TicketPriority, TicketSchedule, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
 import { TODO_LIGHT_LABELS, todoLight } from '~~/shared/utils/todo-progress'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 import { boardToday, dueDescription, dueLevel, liveDescription, liveLevel } from '~~/shared/utils/due-date'
@@ -65,6 +65,8 @@ const liveText = computed(() => (liveState.value === 'none' || !form.liveUntil ?
 // start, due date and live window. A choice not saved yet — a milestone still without its
 // day — is held here until the date comes, and the saved one counts again once it agrees.
 const scheduleChoice = ref<TicketSchedule | null>(null)
+// See `parkSchedule`. Lives as long as the editor; a drawer reopened for the same ticket starts fresh.
+const parkedSchedules = new Map<string, { startDate: string; dueDate: string; liveFrom: string; liveUntil: string; waitsOn: string[] }>()
 const schedule = computed<TicketSchedule>(() => scheduleChoice.value ?? props.ticket?.schedule ?? 'none')
 const lifecycleOn = computed(() => schedule.value !== 'none')
 const SCHEDULE_OPTIONS: Array<{ value: TicketSchedule; label: string; title: string }> = [
@@ -72,12 +74,16 @@ const SCHEDULE_OPTIONS: Array<{ value: TicketSchedule; label: string; title: str
   { value: 'milestone', label: 'Milestone', title: 'One day, an event: a meeting, a go-live' },
   { value: 'lifecycle', label: 'Lifecycle', title: 'Work from start to due date, then a live window; a due date alone is a deadline' }
 ]
-interface EditableTodo extends TicketTodoInput { key: string; subticket?: SubticketRef | null }
+interface EditableTodo extends TicketTodoInput { key: string; subticket?: SubticketRef | null; decidedBy?: Pick<Person, 'firstName' | 'lastName' | 'email'> | null; decidedAt?: string | null }
 const todos = ref<EditableTodo[]>([])
 const links = ref<TicketLinkInput[]>([])
 // The category value whose save is still on its way, see `commitCategory`.
 let categoryInFlight: string | null | undefined
 let todoSequence = 0
+// A strict list is worked top to bottom; see `blockedBy`.
+const strictOrder = ref(false)
+// The list as last sent, so its own echo from the server is told apart from somebody else's change.
+let sentTodos: string | null = null
 const isEdit = computed(() => Boolean(props.ticket))
 const isManual = computed(() => !props.ticket || props.ticket.source === 'manual')
 const showBuildNumber = computed(() => isManual.value && props.testflight)
@@ -252,6 +258,27 @@ function scrollPaneIntoView(tab: EditorTab) {
     else pane.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   })
 }
+// The schedule's one-line summary in Details, and the way from there to the block in Plan.
+const shortDate = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+const dateText = (date: string) => shortDate.format(new Date(`${date}T00:00:00Z`))
+const scheduleSummary = computed(() => {
+  if (schedule.value === 'none') return 'No schedule'
+  if (schedule.value === 'milestone') return form.dueDate ? `Milestone · ${dateText(form.dueDate)}` : 'Milestone · no date yet'
+  const work = form.startDate && form.dueDate ? `${dateText(form.startDate)} – ${dateText(form.dueDate)}`
+    : form.dueDate ? `Due ${dateText(form.dueDate)}`
+    : form.startDate ? `From ${dateText(form.startDate)}` : null
+  const live = form.liveFrom || form.liveUntil ? `live ${form.liveFrom ? dateText(form.liveFrom) : '…'} – ${form.liveUntil ? dateText(form.liveUntil) : '…'}` : null
+  return [work, live].filter(Boolean).join(' · ') || 'Lifecycle · no dates yet'
+})
+function openSchedule() {
+  selectTab('plan')
+  nextTick(() => {
+    const block = document.querySelector<HTMLElement>('[data-schedule-block]')
+    block?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    block?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')?.focus({ preventScroll: true })
+  })
+}
+
 function selectTab(tab: EditorTab) {
   if (isPinnable(tab) && pinned[tab]) return scrollPaneIntoView(tab)
   activeTab.value = tab
@@ -486,13 +513,29 @@ watch(() => props.ticket, (ticket, previous) => {
   // Only a new ticket picks its lane and position here; an existing one is moved through the lane select.
   form.laneId = ticket ? ticket.laneId : (props.initialLaneId || props.lanes[0]?.id || '')
   form.placement = ticket ? 'bottom' : props.initialPlacement
-  const savedTodos = savedTodoList(ticket)
-  if (!sameTicket || JSON.stringify(savedTodos) !== JSON.stringify(payload.todos())) {
-    todos.value = (ticket?.todos || []).map(todo => ({ key: `todo-${++todoSequence}`, text: todo.text, completed: todo.completed, subticketId: todo.subticketId, subticket: todo.subticket }))
+  strictOrder.value = ticket?.strictOrder ?? false
+  const savedTodos = JSON.stringify(savedTodoList(ticket))
+  // The answer to our own save leaves alone what was typed since; anything else is somebody's news.
+  if (!sameTicket || (savedTodos !== JSON.stringify(payload.todos()) && savedTodos !== sentTodos)) {
+    sentTodos = null
+    todos.value = (ticket?.todos || []).map(todo => ({
+      key: `todo-${++todoSequence}`, text: todo.text, completed: todo.completed, subticketId: todo.subticketId, subticket: todo.subticket,
+      ...(todo.decision ? {
+        decision: { multiple: todo.decision.multiple, options: [...todo.decision.options], allowOther: todo.decision.allowOther, chosen: [...todo.decision.chosen], other: todo.decision.other },
+        decidedBy: todo.decision.decidedBy,
+        decidedAt: todo.decision.decidedAt
+      } : {})
+    }))
   } else {
     // Same list, but a subticket may have moved lanes or been renamed meanwhile.
     const refs = new Map((ticket?.todos || []).filter(todo => todo.subticket).map(todo => [todo.subticketId, todo.subticket]))
     for (const todo of todos.value) if (todo.subticketId) todo.subticket = refs.get(todo.subticketId) ?? todo.subticket
+    // And who decided is the server's to say.
+    const decided = new Map((ticket?.todos || []).filter(todo => todo.decision && todo.completed).map(todo => [todo.text, todo.decision!]))
+    for (const todo of todos.value) {
+      const stamp = todo.decision && todo.completed ? decided.get(todo.text.trim()) : undefined
+      if (stamp) Object.assign(todo, { decidedBy: stamp.decidedBy, decidedAt: stamp.decidedAt })
+    }
   }
 }, { immediate: true })
 
@@ -509,20 +552,49 @@ const payload = {
   buildNumber: () => form.buildNumber.trim() || null,
   categoryName: () => form.categoryName.trim() || null,
   labels: () => [...form.labels],
-  todos: () => todos.value.map(todoInput).filter(todo => todo.text),
+  todos: () => todos.value.map(todoInput).filter(todo => todo.text && (!todo.decision || todo.decision.options.length)),
 }
 
 // A subticket goes back with its id, which is all that keeps it in the list; its text and
 // flag are the server's to say. Plain to-dos carry no id at all, as they always did.
 function todoInput(todo: TicketTodoInput): TicketTodoInput {
-  return todo.subticketId
-    ? { text: todo.text.trim(), completed: todo.completed, subticketId: todo.subticketId }
-    : { text: todo.text.trim(), completed: todo.completed }
+  if (todo.subticketId) return { text: todo.text.trim(), completed: todo.completed, subticketId: todo.subticketId }
+  if (todo.decision) return { text: todo.text.trim(), completed: todo.completed, decision: decisionInput(todo.decision) }
+  return { text: todo.text.trim(), completed: todo.completed }
+}
+// A decision as the server keeps it: blank options left out, the picks following the ones that stay.
+function decisionInput(decision: TicketDecisionInput): TicketDecisionInput {
+  const kept: number[] = []
+  const options: string[] = []
+  decision.options.forEach((option, index) => {
+    if (!option.trim()) return
+    kept[index] = options.length
+    options.push(option.trim())
+  })
+  const chosen = decision.chosen.map(index => kept[index]).filter((index): index is number => index !== undefined).sort((a, b) => a - b)
+  return { multiple: decision.multiple, options, allowOther: decision.allowOther, chosen, other: decision.allowOther ? decision.other?.trim() || null : null }
 }
 function savedTodoList(ticket: Ticket | null | undefined): TicketTodoInput[] {
   return (ticket?.todos || []).map(todoInput)
 }
 const light = computed(() => todoLight(todos.value))
+
+// Everything below the first open step of a strict list waits for it.
+const firstOpenIndex = computed(() => (strictOrder.value ? todos.value.findIndex(todo => !todo.completed) : -1))
+function blockedBy(item: EditableTodo): EditableTodo | null {
+  const first = firstOpenIndex.value
+  if (first < 0 || item.completed) return null
+  const index = todos.value.indexOf(item)
+  return index > first ? todos.value[first] ?? null : null
+}
+function stepName(item: EditableTodo) {
+  return item.subticket ? `#${item.subticket.ticketNumber} ${item.text}` : item.text || `step ${todos.value.indexOf(item) + 1}`
+}
+function setStrictOrder(next: boolean) {
+  if (props.ticket && !props.canEdit) return
+  strictOrder.value = next
+  if (props.ticket && props.ticket.strictOrder !== next) commit({ strictOrder: next })
+}
 
 const hasSubtickets = computed(() => Boolean(props.ticket?.todos.some(todo => todo.subticketId)))
 // Whatever the editor learns about the ticket and its subtickets asks the timeline to read again.
@@ -593,26 +665,64 @@ function removeLiveWindow() {
  * None drops every date and, as part of the plan, what it waits on. A milestone keeps one day:
  * the due date, else the start. Without any day yet it waits for its date before it saves.
  */
+/**
+ * The days a switch to None (or to a milestone) cleared, kept per ticket while the page is open,
+ * so switching back puts them in again instead of asking for them anew. Not saved anywhere: the
+ * ticket itself has no dates while it has no schedule.
+ */
+function parkSchedule(id: string) {
+  const before = parkedSchedules.get(id)
+  const keep = (value: string, earlier?: string) => value || earlier || ''
+  parkedSchedules.set(id, {
+    startDate: keep(form.startDate, before?.startDate),
+    dueDate: keep(form.dueDate, before?.dueDate),
+    liveFrom: keep(form.liveFrom, before?.liveFrom),
+    liveUntil: keep(form.liveUntil, before?.liveUntil),
+    // Only what was set by hand; a strict list puts its own back by itself.
+    waitsOn: waitsOn.value.filter(item => item.strictOrderOf === null).map(item => item.id).concat(before?.waitsOn ?? [])
+      .filter((id, index, all) => all.indexOf(id) === index)
+  })
+}
+
 function setSchedule(next: TicketSchedule) {
   if (next === schedule.value || (props.ticket && !props.canEdit)) return
   const saved = props.ticket
+  const key = saved?.id ?? 'new'
   scheduleChoice.value = next
   if (next === 'none') {
+    parkSchedule(key)
     form.startDate = form.dueDate = form.liveFrom = form.liveUntil = ''
     dependencyPicking.value = false
     shiftOpen.value = false
     const changes: TicketPatch = saved && saved.schedule !== 'none' ? { schedule: 'none' } : {}
-    if (saved?.waitsOn.length) changes.waitsOn = []
+    if (saved?.waitsOn.some(item => item.strictOrderOf === null)) changes.waitsOn = []
     if (Object.keys(changes).length) commit(changes)
     return
   }
+  const parked = parkedSchedules.get(key)
   if (next === 'milestone') {
-    form.dueDate = form.dueDate || form.startDate
+    parkSchedule(key)
+    const restored = !form.dueDate && !form.startDate && Boolean(parked?.dueDate || parked?.startDate)
+    form.dueDate = form.dueDate || form.startDate || parked?.dueDate || parked?.startDate || ''
     form.startDate = form.liveFrom = form.liveUntil = ''
-    if (form.dueDate) commit({ schedule: 'milestone' })
+    if (form.dueDate) commit(restored ? { schedule: 'milestone', dueDate: form.dueDate } : { schedule: 'milestone' })
     return
   }
-  commit({ schedule: 'lifecycle' })
+  // Back to a lifecycle: whatever is empty comes back from the last switch away, if anything.
+  const changes: TicketPatch = { schedule: 'lifecycle' }
+  if (parked) {
+    for (const field of ['startDate', 'dueDate', 'liveFrom', 'liveUntil'] as const) {
+      if (!form[field] && parked[field]) {
+        form[field] = parked[field]
+        changes[field] = parked[field]
+      }
+    }
+    const missing = parked.waitsOn.filter(id => !waitsOn.value.some(item => item.id === id))
+    if (saved && missing.length) changes.waitsOn = [...waitsOn.value.filter(item => item.strictOrderOf === null).map(item => item.id), ...missing]
+    parkedSchedules.delete(key)
+  }
+  if (changes.startDate && changes.dueDate && changes.startDate > changes.dueDate) delete changes.startDate
+  commit(changes)
 }
 
 /** The schedule goes along with a date when it has not been saved yet: a milestone getting its day. */
@@ -791,7 +901,9 @@ function leaveCategory(event: FocusEvent) {
 }
 function commitTodos() {
   const next = payload.todos()
-  if (JSON.stringify(next) !== JSON.stringify(savedTodoList(props.ticket))) commit({ todos: next })
+  if (JSON.stringify(next) === JSON.stringify(savedTodoList(props.ticket))) return
+  sentTodos = JSON.stringify(next)
+  commit({ todos: next })
 }
 
 // Escape (or anything else that unmounts the drawer) takes the focus away without a blur,
@@ -809,7 +921,7 @@ onBeforeUnmount(flushPendingCommits)
 // with the big one, but the editor stays and shows it, so writing can go on.
 function submit(options: { stayOpen?: boolean } = {}) {
   if (isEdit.value || !form.title.trim()) return
-  const shared = { todos: payload.todos(), attachments: [...pendingFiles.value], assigneeId: payload.assigneeId() }
+  const shared = { todos: payload.todos(), strictOrder: strictOrder.value, attachments: [...pendingFiles.value], assigneeId: payload.assigneeId() }
   const manualFields = isManual.value ? { buildNumber: payload.buildNumber() } : {}
   // Sent only by somebody allowed to set it — the API rejects it from anyone else.
   const authorFields = canAttribute.value ? { authorId: payload.authorId() } : {}
@@ -831,6 +943,28 @@ function addTodo(index = todos.value.length) {
   const todo = { key: `todo-${++todoSequence}`, text: '', completed: false }
   todos.value.splice(index, 0, todo)
   focusTodo(todo.key)
+}
+
+function addDecision(index = todos.value.length) {
+  if (todos.value.length >= 100) return
+  const todo: EditableTodo = { key: `todo-${++todoSequence}`, text: '', completed: false, decision: { multiple: false, options: ['', ''], allowOther: false, chosen: [], other: null } }
+  todos.value.splice(index, 0, todo)
+  focusTodo(todo.key)
+}
+
+function decide(item: EditableTodo) {
+  item.completed = true
+  // Shown at once; the save stamps the real one.
+  item.decidedBy = user.value ? { firstName: user.value.firstName ?? '', lastName: user.value.lastName ?? '', email: user.value.email ?? null } : null
+  item.decidedAt = new Date().toISOString()
+  commitTodos()
+}
+
+function reopen(item: EditableTodo) {
+  item.completed = false
+  item.decidedBy = null
+  item.decidedAt = null
+  commitTodos()
 }
 
 function removeTodo(index: number) {
@@ -1370,8 +1504,176 @@ function focusTitle(event: Event) {
               </div>
             </section>
 
+            <!-- The days live in Plan; here only what they say, and the way there. -->
+            <button
+              type="button"
+              class="focus-ring flex w-full items-center gap-2 rounded-2xl border border-[color-mix(in_srgb,var(--accent)_22%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_5%,transparent)] px-4 py-3 text-left text-sm hover:border-[var(--accent)]"
+              title="Edit the schedule in Plan"
+              data-schedule-summary
+              @click="openSchedule"
+            >
+              <CalendarRange :size="15" class="shrink-0" aria-hidden="true" />
+              <span class="text-xs font-bold uppercase tracking-[.08em]">Schedule</span>
+              <span class="min-w-0 flex-1 truncate" :class="schedule === 'none' ? 'muted' : 'font-semibold'">{{ scheduleSummary }}</span>
+              <span
+                v-if="dueText"
+                class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold"
+                :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
+              ><AlarmClock :size="11" /> {{ dueText }}</span>
+              <span class="muted shrink-0 text-xs font-semibold">Plan →</span>
+            </button>
+          </div>
+
+          <!-- The way the work is laid out: its steps and subtickets, their timeline, and what it has to wait for. -->
+          <div v-show="activeTab === 'plan'" data-editor-pane="plan" role="tabpanel" class="order-first space-y-6 px-5 py-6 sm:px-7">
+            <section class="space-y-3">
+              <div class="flex items-center gap-2">
+                <h3 class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><ListTodo :size="15" /> To-dos</h3>
+                <!-- Strict: top to bottom, subtickets waiting on each other. Loose: any order. -->
+                <div class="flex overflow-hidden rounded-md border border-[var(--line)] text-[11px]" role="radiogroup" aria-label="Order of the to-dos">
+                  <button
+                    v-for="choice in [{ strict: false, label: 'Any order', title: 'The steps can be done in any order' }, { strict: true, label: 'Strict order', title: 'Top to bottom: a step can only be ticked once those above are done, and each subticket waits on the one before it' }]"
+                    :key="choice.label"
+                    type="button"
+                    role="radio"
+                    :aria-checked="strictOrder === choice.strict"
+                    :disabled="Boolean(ticket) && !canEdit"
+                    :title="choice.title"
+                    class="focus-ring flex items-center gap-1 px-2 py-0.5 font-semibold"
+                    :class="strictOrder === choice.strict ? 'bg-[var(--accent-soft)] text-[var(--ink)]' : 'muted enabled:hover:bg-[var(--panel)]'"
+                    @click="setStrictOrder(choice.strict)"
+                  ><ListOrdered v-if="choice.strict" :size="12" aria-hidden="true" />{{ choice.label }}</button>
+                </div>
+                <span v-if="todos.length && light" class="ml-auto flex items-center gap-1.5 text-[11px] font-semibold" :title="TODO_LIGHT_LABELS[light]">
+                  <TodoLight :light="light" />
+                  <span class="muted">{{ todos.filter(todo => todo.completed).length }}/{{ todos.length }} completed</span>
+                </span>
+              </div>
+              <p v-if="!todos.length" class="muted text-xs">No to-dos yet. Add steps, or subtickets that count as done once they are finished.</p>
+              <div v-if="todos.length" ref="todoListElement">
+                <TransitionGroup name="todo-sort" tag="div" data-todo-stack class="relative flex flex-col gap-2">
+                  <div v-for="item in todoSortItems" :key="item?.key || '__todo-drop-placeholder'" :data-todo-sort-item="item?.key">
+                    <div
+                      v-if="item"
+                      :data-todo-row="item.key"
+                      :class="item.decision ? 'items-start' : 'items-center'"
+                      class="surface-strong flex gap-2 rounded-xl p-2 transition-[border-color,background-color,box-shadow] duration-150 hover:border-[color-mix(in_srgb,var(--line)_60%,var(--accent))]"
+                    >
+                      <button
+                        type="button"
+                        :data-todo-handle="item.key"
+                        class="focus-ring muted grid size-8 shrink-0 cursor-grab touch-none place-items-center rounded-lg hover:bg-[var(--panel)] active:cursor-grabbing"
+                        :aria-label="`Reorder to-do ${todoIndexOf(item.key) + 1}`"
+                        title="Drag to reorder · Alt+arrow keys"
+                        @pointerdown="beginTodoDrag($event, item.key)"
+                        @keydown.alt.up.prevent="moveTodo(todoIndexOf(item.key), -1)"
+                        @keydown.alt.down.prevent="moveTodo(todoIndexOf(item.key), 1)"
+                      ><GripVertical :size="17" /></button>
+                      <TodoDecision
+                        v-if="item.decision"
+                        v-model:question="item.text"
+                        :decision="item.decision"
+                        :decided="item.completed"
+                        :decided-by="item.decidedBy"
+                        :decided-at="item.decidedAt"
+                        :can-edit="canEdit"
+                        :blocked-by="blockedBy(item) ? stepName(blockedBy(item)!) : null"
+                        :input-key="item.key"
+                        @commit="commitTodos()"
+                        @decide="decide(item)"
+                        @reopen="reopen(item)"
+                      />
+                      <template v-else-if="item.subticketId">
+                        <span class="grid size-4 shrink-0 place-items-center" :class="item.completed ? 'text-[var(--accent)]' : 'muted'" :title="item.completed ? 'Done: the subticket is in a done lane' : 'Open until the subticket reaches a done lane'">
+                          <CircleCheck v-if="item.completed" :size="16" aria-label="Done" />
+                          <Circle v-else :size="16" aria-label="Open" />
+                        </span>
+                        <NuxtLink
+                          :to="item.subticket ? subticketHref(item.subticket) : undefined"
+                          class="focus-ring group/sub flex min-w-0 flex-1 flex-col rounded-md px-1 py-0.5 hover:bg-[var(--panel)]"
+                          :title="item.subticket ? `Open subticket #${item.subticket.ticketNumber}` : undefined"
+                        >
+                          <!-- The title alone on the first line; the number leads the second, where "Subticket" used to say what the arrow already does. -->
+                          <span class="truncate text-sm group-hover/sub:underline" :class="item.completed ? 'muted line-through' : ''">{{ item.text }}</span>
+                          <span v-if="item.subticket" class="muted flex min-w-0 items-center gap-1 text-[11px]">
+                            <CornerDownRight :size="11" class="shrink-0" aria-hidden="true" />
+                            <span class="shrink-0 font-semibold tabular-nums">#{{ item.subticket.ticketNumber }}</span>
+                            <span class="truncate">· {{ item.subticket.boardName }} · {{ item.subticket.laneName }}{{ item.subticket.archived ? ' · archived' : '' }}</span>
+                          </span>
+                        </NuxtLink>
+                      </template>
+                      <template v-else>
+                      <span v-if="blockedBy(item)" class="muted grid size-4 shrink-0 place-items-center" :title="`Waits for “${stepName(blockedBy(item)!)}”: the to-dos go in strict order`">
+                        <Lock :size="14" :aria-label="`Locked until “${stepName(blockedBy(item)!)}” is done`" />
+                      </span>
+                      <input v-else v-model="item.completed" type="checkbox" class="focus-ring size-4 shrink-0 cursor-pointer accent-[var(--accent)]" :aria-label="`Mark to-do “${item.text || todoIndexOf(item.key) + 1}” as completed`" @change="commitTodos()">
+                      <input
+                        v-model="item.text"
+                        :data-todo-input="item.key"
+                        maxlength="500"
+                        class="focus-ring min-w-0 flex-1 bg-transparent px-1 py-1.5 text-sm outline-none"
+                        :class="item.completed ? 'muted line-through' : ''"
+                        placeholder="What needs to be done?"
+                        @keydown.enter.prevent="addTodo(todoIndexOf(item.key) + 1)"
+                        @blur="commitTodos()"
+                      >
+                      </template>
+                      <button
+                        type="button"
+                        class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10"
+                        :aria-label="item.subticketId ? `Remove subticket ${todoIndexOf(item.key) + 1} from the list` : `Delete to-do ${todoIndexOf(item.key) + 1}`"
+                        :title="item.subticketId ? 'Remove from the list — the subticket itself stays' : undefined"
+                        @click="removeTodo(todoIndexOf(item.key))"
+                      ><Trash2 :size="15" /></button>
+                    </div>
+                    <div
+                      v-else
+                      data-todo-placeholder
+                      class="pointer-events-none rounded-xl border border-dashed border-[color-mix(in_srgb,var(--accent)_38%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_8%,transparent)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--accent)_8%,transparent)]"
+                      :style="{ height: `${todoDragPreview?.height || 52}px` }"
+                      aria-hidden="true"
+                    />
+                  </div>
+                </TransitionGroup>
+              </div>
+              <!-- One quiet way to add: a to-do or a subticket. -->
+              <div class="flex justify-end">
+                <DropdownMenuRoot :modal="false">
+                  <DropdownMenuTrigger
+                    data-add-menu
+                    class="focus-ring group flex h-9 items-center gap-1.5 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] data-[state=open]:border-[var(--accent)] data-[state=open]:bg-[var(--accent-soft)]"
+                  >
+                    <Plus :size="16" aria-hidden="true" /> Add
+                    <ChevronDown :size="14" class="muted transition-transform duration-150 group-data-[state=open]:rotate-180" aria-hidden="true" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuPortal>
+                    <!-- Focus goes where the item sends it (a new to-do), not back here. -->
+                    <DropdownMenuContent
+                      align="end"
+                      :side-offset="6"
+                      class="ui-popover z-[100] min-w-52 overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel-strong)] p-1 text-[var(--ink)] shadow-[0_18px_45px_rgba(0,0,0,.16),0_3px_12px_rgba(0,0,0,.08)]"
+                      @close-auto-focus.prevent
+                    >
+                      <DropdownMenuItem :disabled="todos.length >= 100" class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-medium outline-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--accent-soft)]" @select="addTodo()">
+                        <Plus :size="15" aria-hidden="true" /> To-do
+                      </DropdownMenuItem>
+                      <DropdownMenuItem :disabled="todos.length >= 100" class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-medium outline-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--accent-soft)]" @select="addDecision()">
+                        <Vote :size="15" aria-hidden="true" /> Decision
+                      </DropdownMenuItem>
+                      <DropdownMenuItem v-if="canAddSubticket" :disabled="todos.length >= 100" class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-medium outline-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--accent-soft)]" @select="subticketOpen = true">
+                        <CornerDownRight :size="15" aria-hidden="true" /> Subticket…
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenuPortal>
+                </DropdownMenuRoot>
+              </div>
+            </section>
+
+            <!-- Only once there is a plan to draw: a ticket that bundles subtickets. -->
+            <TicketTimeline v-if="ticket && hasSubtickets" :ticket-id="ticket.id" :refresh-key="timelineKey" />
+
             <!-- The ticket's days, kept apart so a plain ticket stays plain: with no schedule it has none. -->
-            <section class="rounded-2xl border border-[color-mix(in_srgb,var(--accent)_22%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_5%,transparent)]" :class="lifecycleOn ? 'space-y-4 p-4' : 'px-4 py-3'" aria-labelledby="ticket-schedule-heading">
+            <section class="rounded-2xl border border-[color-mix(in_srgb,var(--accent)_22%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_5%,transparent)]" :class="lifecycleOn ? 'space-y-4 p-4' : 'px-4 py-3'" aria-labelledby="ticket-schedule-heading" data-schedule-block>
               <div class="flex flex-wrap items-center gap-3">
                 <h3 id="ticket-schedule-heading" class="flex min-w-0 flex-1 items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><CalendarRange :size="14" /> Schedule</h3>
                 <div role="radiogroup" aria-labelledby="ticket-schedule-heading" class="flex shrink-0 rounded-xl bg-[var(--panel)] p-0.5" data-schedule-switch>
@@ -1533,119 +1835,6 @@ function focusTitle(event: Event) {
                 </div>
               </template>
             </section>
-          </div>
-
-          <!-- The way the work is laid out: its steps and subtickets, their timeline, and what it has to wait for. -->
-          <div v-show="activeTab === 'plan'" data-editor-pane="plan" role="tabpanel" class="order-first space-y-6 px-5 py-6 sm:px-7">
-            <section class="space-y-3">
-              <div class="flex items-center gap-2">
-                <h3 class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><ListTodo :size="15" /> To-dos</h3>
-                <span v-if="todos.length && light" class="ml-auto flex items-center gap-1.5 text-[11px] font-semibold" :title="TODO_LIGHT_LABELS[light]">
-                  <TodoLight :light="light" />
-                  <span class="muted">{{ todos.filter(todo => todo.completed).length }}/{{ todos.length }} completed</span>
-                </span>
-              </div>
-              <p v-if="!todos.length" class="muted text-xs">No to-dos yet. Add steps, or subtickets that count as done once they are finished.</p>
-              <div v-if="todos.length" ref="todoListElement">
-                <TransitionGroup name="todo-sort" tag="div" data-todo-stack class="relative flex flex-col gap-2">
-                  <div v-for="item in todoSortItems" :key="item?.key || '__todo-drop-placeholder'" :data-todo-sort-item="item?.key">
-                    <div
-                      v-if="item"
-                      :data-todo-row="item.key"
-                      class="surface-strong flex items-center gap-2 rounded-xl p-2 transition-[border-color,background-color,box-shadow] duration-150 hover:border-[color-mix(in_srgb,var(--line)_60%,var(--accent))]"
-                    >
-                      <button
-                        type="button"
-                        :data-todo-handle="item.key"
-                        class="focus-ring muted grid size-8 shrink-0 cursor-grab touch-none place-items-center rounded-lg hover:bg-[var(--panel)] active:cursor-grabbing"
-                        :aria-label="`Reorder to-do ${todoIndexOf(item.key) + 1}`"
-                        title="Drag to reorder · Alt+arrow keys"
-                        @pointerdown="beginTodoDrag($event, item.key)"
-                        @keydown.alt.up.prevent="moveTodo(todoIndexOf(item.key), -1)"
-                        @keydown.alt.down.prevent="moveTodo(todoIndexOf(item.key), 1)"
-                      ><GripVertical :size="17" /></button>
-                      <template v-if="item.subticketId">
-                        <span class="grid size-4 shrink-0 place-items-center" :class="item.completed ? 'text-[var(--accent)]' : 'muted'" :title="item.completed ? 'Done: the subticket is in a done lane' : 'Open until the subticket reaches a done lane'">
-                          <CircleCheck v-if="item.completed" :size="16" aria-label="Done" />
-                          <Circle v-else :size="16" aria-label="Open" />
-                        </span>
-                        <NuxtLink
-                          :to="item.subticket ? subticketHref(item.subticket) : undefined"
-                          class="focus-ring group/sub flex min-w-0 flex-1 flex-col rounded-md px-1 py-0.5 hover:bg-[var(--panel)]"
-                          :title="item.subticket ? `Open subticket #${item.subticket.ticketNumber}` : undefined"
-                        >
-                          <!-- The title alone on the first line; the number leads the second, where "Subticket" used to say what the arrow already does. -->
-                          <span class="truncate text-sm group-hover/sub:underline" :class="item.completed ? 'muted line-through' : ''">{{ item.text }}</span>
-                          <span v-if="item.subticket" class="muted flex min-w-0 items-center gap-1 text-[11px]">
-                            <CornerDownRight :size="11" class="shrink-0" aria-hidden="true" />
-                            <span class="shrink-0 font-semibold tabular-nums">#{{ item.subticket.ticketNumber }}</span>
-                            <span class="truncate">· {{ item.subticket.boardName }} · {{ item.subticket.laneName }}{{ item.subticket.archived ? ' · archived' : '' }}</span>
-                          </span>
-                        </NuxtLink>
-                      </template>
-                      <template v-else>
-                      <input v-model="item.completed" type="checkbox" class="focus-ring size-4 shrink-0 cursor-pointer accent-[var(--accent)]" :aria-label="`Mark to-do “${item.text || todoIndexOf(item.key) + 1}” as completed`" @change="commitTodos()">
-                      <input
-                        v-model="item.text"
-                        :data-todo-input="item.key"
-                        maxlength="500"
-                        class="focus-ring min-w-0 flex-1 bg-transparent px-1 py-1.5 text-sm outline-none"
-                        :class="item.completed ? 'muted line-through' : ''"
-                        placeholder="What needs to be done?"
-                        @keydown.enter.prevent="addTodo(todoIndexOf(item.key) + 1)"
-                        @blur="commitTodos()"
-                      >
-                      </template>
-                      <button
-                        type="button"
-                        class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10"
-                        :aria-label="item.subticketId ? `Remove subticket ${todoIndexOf(item.key) + 1} from the list` : `Delete to-do ${todoIndexOf(item.key) + 1}`"
-                        :title="item.subticketId ? 'Remove from the list — the subticket itself stays' : undefined"
-                        @click="removeTodo(todoIndexOf(item.key))"
-                      ><Trash2 :size="15" /></button>
-                    </div>
-                    <div
-                      v-else
-                      data-todo-placeholder
-                      class="pointer-events-none rounded-xl border border-dashed border-[color-mix(in_srgb,var(--accent)_38%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_8%,transparent)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--accent)_8%,transparent)]"
-                      :style="{ height: `${todoDragPreview?.height || 52}px` }"
-                      aria-hidden="true"
-                    />
-                  </div>
-                </TransitionGroup>
-              </div>
-              <!-- One quiet way to add: a to-do or a subticket. -->
-              <div class="flex justify-end">
-                <DropdownMenuRoot :modal="false">
-                  <DropdownMenuTrigger
-                    data-add-menu
-                    class="focus-ring group flex h-9 items-center gap-1.5 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] data-[state=open]:border-[var(--accent)] data-[state=open]:bg-[var(--accent-soft)]"
-                  >
-                    <Plus :size="16" aria-hidden="true" /> Add
-                    <ChevronDown :size="14" class="muted transition-transform duration-150 group-data-[state=open]:rotate-180" aria-hidden="true" />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuPortal>
-                    <!-- Focus goes where the item sends it (a new to-do), not back here. -->
-                    <DropdownMenuContent
-                      align="end"
-                      :side-offset="6"
-                      class="ui-popover z-[100] min-w-52 overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel-strong)] p-1 text-[var(--ink)] shadow-[0_18px_45px_rgba(0,0,0,.16),0_3px_12px_rgba(0,0,0,.08)]"
-                      @close-auto-focus.prevent
-                    >
-                      <DropdownMenuItem :disabled="todos.length >= 100" class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-medium outline-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--accent-soft)]" @select="addTodo()">
-                        <Plus :size="15" aria-hidden="true" /> To-do
-                      </DropdownMenuItem>
-                      <DropdownMenuItem v-if="canAddSubticket" :disabled="todos.length >= 100" class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-medium outline-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--accent-soft)]" @select="subticketOpen = true">
-                        <CornerDownRight :size="15" aria-hidden="true" /> Subticket…
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenuPortal>
-                </DropdownMenuRoot>
-              </div>
-            </section>
-
-            <!-- Only once there is a plan to draw: a ticket that bundles subtickets. -->
-            <TicketTimeline v-if="ticket && hasSubtickets" :ticket-id="ticket.id" :refresh-key="timelineKey" />
 
             <!-- Finish-to-start: it starts once these end. Only an existing ticket can point at others. -->
             <section v-if="ticket" class="space-y-2 border-t border-[var(--line)] pt-6" aria-label="Waits on">
@@ -1678,8 +1867,13 @@ function focusTitle(event: Event) {
                     :class="blockerConcern(blocker) === 'late' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
                     :title="blockerConcern(blocker) === 'late' ? 'It is past its due date and not done' : 'It ends after this ticket starts'"
                   >{{ blockerConcern(blocker) === 'late' ? 'Late' : 'Ends later' }}</span>
+                  <span
+                    v-if="blocker.strictOrderOf !== null"
+                    class="muted flex shrink-0 items-center gap-1 rounded-md bg-[var(--panel)] px-1.5 py-0.5 text-[10px] font-semibold"
+                    :title="`Set by the strict order of #${blocker.strictOrderOf}'s to-dos; it goes when that list is in any order`"
+                  ><ListOrdered :size="11" aria-hidden="true" /> #{{ blocker.strictOrderOf }}</span>
                   <button
-                    v-if="canEdit"
+                    v-if="canEdit && blocker.strictOrderOf === null"
                     type="button"
                     class="focus-ring muted grid size-7 shrink-0 place-items-center rounded-lg hover:bg-[var(--panel)] hover:text-rose-600"
                     :aria-label="`No longer wait on #${blocker.ticketNumber}`"

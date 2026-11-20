@@ -6,10 +6,11 @@ import { randomUUID } from 'node:crypto'
 import type {
   ActivityKind, AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardRole, BoardSummary, Category, CategoryColor,
   CategorySummary, DueTicket, IntegrationProvider, JiraIntegration, JiraIssue, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
-  LinkDisplay, LinkPreview, TicketLink, TicketLinkInput, TicketPriority, TicketSchedule, TicketSource, DependencyRef, SubticketRef, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary, TimelineNode,
+  LinkDisplay, LinkPreview, TicketLink, TicketLinkInput, TicketPriority, TicketSchedule, TicketSource, DependencyRef, SubticketRef, TicketDecision, TicketDecisionInput, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary, TimelineNode,
   AgentAccess, AgentAccessMode, AgentAccount, AgentGrantRole, UserAccount, UserBoardMembership, UserRole, UserStatus, Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
 } from '../../shared/types/domain'
 import type { Actor, ActorChannel } from './actor'
+import { decisionAnswer } from '../../shared/utils/todo-progress'
 import { DEFAULT_TICKET_TYPES, DEFAULT_WORKSPACE_NAME } from '../../shared/utils/constants'
 import { boardToday, dueLevel } from '../../shared/utils/due-date'
 import { decryptSecret, encryptSecret, secretKeyAvailable } from './secret-box'
@@ -350,6 +351,7 @@ export function getDb() {
   ensureUploadSlots(database)
   // After every rebuild of `tickets` as well: the new column points into that table.
   ensureTodoSubtickets(database)
+  ensureTodoDecisions(database)
   // Agents (service identities) say what they are for; people leave it empty.
   ensureUserDescription(database)
   ensureUserAvatars(database)
@@ -361,6 +363,7 @@ export function getDb() {
   ensureLaneLive(database)
   ensureTicketDependencies(database)
   ensureTicketSchedule(database)
+  ensureTicketStrictOrder(database)
   // Not in `boardIndexes`: that block also runs inside `ensureBoards`, before an upgrading
   // database has been given the ticket_activity table. Serves the board-wide digest query.
   database.exec('CREATE INDEX IF NOT EXISTS idx_ticket_activity_created ON ticket_activity(created_at DESC)')
@@ -710,6 +713,20 @@ export function ensureTodoSubtickets(db: Database.Database) {
   db.transaction(() => {
     db.exec('ALTER TABLE ticket_todos ADD COLUMN subticket_id TEXT REFERENCES tickets(id) ON DELETE CASCADE')
     db.exec('CREATE INDEX IF NOT EXISTS idx_ticket_todos_subticket ON ticket_todos(subticket_id) WHERE subticket_id IS NOT NULL')
+  })()
+  return true
+}
+
+/**
+ * Lets a to-do be a decision: a question with answers to pick from. The question is the row's
+ * text, the rest one JSON column; who decided and when sit beside it for the history.
+ */
+export function ensureTodoDecisions(db: Database.Database) {
+  if (tableColumns(db, 'ticket_todos').has('decision')) return false
+  db.transaction(() => {
+    db.exec('ALTER TABLE ticket_todos ADD COLUMN decision TEXT')
+    db.exec('ALTER TABLE ticket_todos ADD COLUMN decided_by TEXT REFERENCES users(id) ON DELETE SET NULL')
+    db.exec('ALTER TABLE ticket_todos ADD COLUMN decided_at TEXT')
   })()
   return true
 }
@@ -2161,6 +2178,29 @@ export function ensureTicketSchedule(db: Database.Database) {
   return true
 }
 
+/** A to-do list worked strictly top to bottom: its subtickets then wait on each other in turn. */
+export function ensureTicketStrictOrder(db: Database.Database) {
+  if (tableColumns(db, 'tickets').has('strict_order')) return false
+  db.exec('ALTER TABLE tickets ADD COLUMN strict_order INTEGER NOT NULL DEFAULT 0 CHECK (strict_order IN (0, 1))')
+  return true
+}
+
+/**
+ * Every finish-to-start dependency, as rows of (blocker_id, blocked_id, via_id): the ones set by
+ * hand, with via_id null, and the ones a strict to-do list implies, with via_id the ticket
+ * holding the list — there each subticket waits on the subticket before it. The latter are
+ * never stored, so reordering the list or switching it to loose leaves nothing to clean up.
+ */
+const ALL_DEPENDENCIES = `(
+  SELECT blocker_id, blocked_id, NULL AS via_id FROM ticket_dependencies
+  UNION ALL
+  SELECT previous, subticket_id, ticket_id FROM (
+    SELECT td.ticket_id, td.subticket_id, LAG(td.subticket_id) OVER (PARTITION BY td.ticket_id ORDER BY td.position) AS previous
+    FROM ticket_todos td JOIN tickets p ON p.id = td.ticket_id
+    WHERE td.subticket_id IS NOT NULL AND p.strict_order = 1
+  ) WHERE previous IS NOT NULL AND previous != subticket_id
+)`
+
 export function ensureTicketSourceJira(db: Database.Database) {
   const definition = db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'tickets'").get() as { sql: string } | undefined
   if (!definition || definition.sql.includes("'jira_issue'")) return false
@@ -2210,6 +2250,7 @@ type TicketRow = {
   position: number; priority: TicketPriority; schedule?: TicketSchedule; start_date: string | null; due_date: string | null; live_from: string | null; live_until: string | null; build_number: string | null; link: string | null; cover_attachment_id: string | null; card_images: string | null
   source: TicketSource; external_id: string | null; created_at: string; updated_at: string; archived_at: string | null
   category_id: string | null; author_id: string | null; assignee_id: string | null; type_id: string | null
+  strict_order?: number
 }
 
 type TicketTypeRow = {
@@ -2613,11 +2654,12 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
       const attachLabel = db.prepare('INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)')
       // A copied subticket becomes a plain to-do: the ticket it stood for stays where it is.
       const todosOf = db.prepare(`
-        SELECT COALESCE(st.title, td.text) AS text, CASE WHEN st.id IS NULL THEN td.completed ELSE COALESCE(MAX(sl.is_done, sl.is_live), 0) END AS completed, td.position
+        SELECT COALESCE(st.title, td.text) AS text, CASE WHEN st.id IS NULL THEN td.completed ELSE COALESCE(MAX(sl.is_done, sl.is_live), 0) END AS completed, td.position,
+          td.decision, td.decided_by, td.decided_at
         FROM ticket_todos td LEFT JOIN tickets st ON st.id = td.subticket_id LEFT JOIN lanes sl ON sl.id = st.lane_id
         WHERE td.ticket_id = ? ORDER BY td.position
       `)
-      const insertTodo = db.prepare('INSERT INTO ticket_todos (id, ticket_id, text, completed, position) VALUES (?, ?, ?, ?, ?)')
+      const insertTodo = db.prepare('INSERT INTO ticket_todos (id, ticket_id, text, completed, position, decision, decided_by, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       const feedbackOf = db.prepare('SELECT * FROM apple_feedback WHERE ticket_id = ?')
       const insertFeedback = db.prepare(`
         INSERT INTO apple_feedback (ticket_id, feedback_type, comment, tester_id, device_model, os_version, locale, build_id, build_version, build_bundle_id, source_created_at, raw_json)
@@ -2644,8 +2686,8 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
           const labelId = labelIds.get(row.label_id)
           if (labelId) attachLabel.run(ticketId, labelId)
         }
-        for (const todo of todosOf.all(ticket.id) as Array<{ text: string; completed: number; position: number }>) {
-          insertTodo.run(randomUUID(), ticketId, todo.text, todo.completed, todo.position)
+        for (const todo of todosOf.all(ticket.id) as Array<{ text: string; completed: number; position: number; decision: string | null; decided_by: string | null; decided_at: string | null }>) {
+          insertTodo.run(randomUUID(), ticketId, todo.text, todo.completed, todo.position, todo.decision, todo.decided_by, todo.decided_at)
         }
         const feedback = feedbackOf.get(ticket.id) as {
           feedback_type: string; comment: string | null; tester_id: string | null; device_model: string | null
@@ -3023,7 +3065,7 @@ function hydrateTicket(row: TicketRow): Ticket {
   const jiraRow = db.prepare('SELECT * FROM jira_issues WHERE ticket_id = ?').get(row.id) as JiraIssueRow | undefined
   const attachmentRows = db.prepare('SELECT id, kind, filename, mime_type, size FROM attachments WHERE ticket_id = ? ORDER BY created_at').all(row.id) as Array<{ id: string; kind: Attachment['kind']; filename: string; mime_type: string; size: number }>
   const todoRows = db.prepare(`
-    SELECT td.id, td.text, td.completed, td.position, td.subticket_id,
+    SELECT td.id, td.text, td.completed, td.position, td.subticket_id, td.decision, td.decided_by, td.decided_at,
       st.ticket_number AS sub_number, st.title AS sub_title, st.board_id AS sub_board_id, st.lane_id AS sub_lane_id,
       st.archived_at AS sub_archived_at, sb.name AS sub_board_name, sl.name AS sub_lane_name, MAX(sl.is_done, sl.is_live) AS sub_done
     FROM ticket_todos td
@@ -3091,6 +3133,7 @@ function hydrateTicket(row: TicketRow): Ticket {
     jira: jiraRow ? toJiraIssue(jiraRow) : null,
     attachments,
     todos,
+    strictOrder: Boolean(row.strict_order),
     waitsOn: dependencyRefs('waitsOn', row.id)
   }
 }
@@ -3394,6 +3437,7 @@ export function listLabels(boardId: string): LabelSummary[] {
 
 type TodoRow = {
   id: string; text: string; completed: number; position: number; subticket_id: string | null
+  decision: string | null; decided_by: string | null; decided_at: string | null
   sub_number: number | null; sub_title: string | null; sub_board_id: string | null; sub_lane_id: string | null
   sub_archived_at: string | null; sub_board_name: string | null; sub_lane_name: string | null; sub_done: number | null
 }
@@ -3417,9 +3461,34 @@ function toTicketTodo(todo: TodoRow): TicketTodo {
     completed: subticket ? subticket.done : Boolean(todo.completed),
     position: todo.position,
     subticketId: subticket?.id ?? null,
-    subticket
+    subticket,
+    decision: subticket ? null : toTicketDecision(todo)
   }
 }
+
+function parseDecision(json: string | null): TicketDecisionInput | null {
+  if (!json) return null
+  try {
+    const value = JSON.parse(json) as Partial<TicketDecisionInput>
+    return {
+      multiple: Boolean(value.multiple),
+      options: Array.isArray(value.options) ? value.options.map(String) : [],
+      allowOther: Boolean(value.allowOther),
+      chosen: Array.isArray(value.chosen) ? value.chosen.filter((index): index is number => Number.isInteger(index)) : [],
+      other: typeof value.other === 'string' && value.other ? value.other : null
+    }
+  } catch {
+    return null
+  }
+}
+
+function toTicketDecision(todo: Pick<TodoRow, 'decision' | 'decided_by' | 'decided_at' | 'completed'>): TicketDecision | null {
+  const decision = parseDecision(todo.decision)
+  if (!decision) return null
+  const decided = Boolean(todo.completed)
+  return { ...decision, decidedBy: decided ? personById(todo.decided_by) : null, decidedAt: decided ? todo.decided_at : null }
+}
+
 
 /** At most this many tickets in one timeline; a subticket under two parents counts twice. */
 const TIMELINE_LIMIT = 500
@@ -3497,7 +3566,7 @@ export function ticketTimeline(rootId: string, canRead: (boardId: string) => boo
 
 type DependencyRow = {
   id: string; ticket_number: number; title: string; board_id: string; board_name: string; lane_name: string
-  is_done: number; archived_at: string | null; start_date: string | null; due_date: string | null
+  is_done: number; archived_at: string | null; start_date: string | null; due_date: string | null; via_number: number | null
 }
 
 /**
@@ -3508,15 +3577,19 @@ export function dependencyRefs(side: 'waitsOn' | 'waitedOnBy', ticketId: string)
   const [mine, theirs] = side === 'waitsOn' ? ['blocked_id', 'blocker_id'] : ['blocker_id', 'blocked_id']
   const rows = getDb().prepare(`
     SELECT t.id, t.ticket_number, t.title, t.board_id, b.name AS board_name, l.name AS lane_name,
-      MAX(l.is_done, l.is_live) AS is_done, t.archived_at, t.start_date, t.due_date
-    FROM ticket_dependencies d
+      MAX(l.is_done, l.is_live) AS is_done, t.archived_at, t.start_date, t.due_date,
+      CASE WHEN SUM(d.via_id IS NULL) > 0 THEN NULL ELSE MIN(v.ticket_number) END AS via_number
+    FROM ${ALL_DEPENDENCIES} d
     JOIN tickets t ON t.id = d.${theirs} JOIN boards b ON b.id = t.board_id JOIN lanes l ON l.id = t.lane_id
-    WHERE d.${mine} = ?
+    LEFT JOIN tickets v ON v.id = d.via_id
+    WHERE d.${mine} = ? AND t.id != ?
+    GROUP BY t.id
     ORDER BY t.due_date IS NULL, t.due_date, t.ticket_number
-  `).all(ticketId) as DependencyRow[]
+  `).all(ticketId, ticketId) as DependencyRow[]
   return rows.map(row => ({
     id: row.id, ticketNumber: row.ticket_number, title: row.title, boardId: row.board_id, boardName: row.board_name,
-    laneName: row.lane_name, done: Boolean(row.is_done), archived: Boolean(row.archived_at), startDate: row.start_date, dueDate: row.due_date
+    laneName: row.lane_name, done: Boolean(row.is_done), archived: Boolean(row.archived_at), startDate: row.start_date, dueDate: row.due_date,
+    strictOrderOf: row.via_number
   }))
 }
 
@@ -3525,9 +3598,9 @@ export function waitsOnTransitively(fromId: string, targetId: string): boolean {
   if (fromId === targetId) return true
   const row = getDb().prepare(`
     WITH RECURSIVE upstream(id) AS (
-      SELECT blocker_id FROM ticket_dependencies WHERE blocked_id = ?
+      SELECT blocker_id FROM ${ALL_DEPENDENCIES} WHERE blocked_id = ?
       UNION
-      SELECT d.blocker_id FROM ticket_dependencies d JOIN upstream u ON d.blocked_id = u.id
+      SELECT d.blocker_id FROM ${ALL_DEPENDENCIES} d JOIN upstream u ON d.blocked_id = u.id
     )
     SELECT 1 FROM upstream WHERE id = ? LIMIT 1
   `).get(fromId, targetId)
@@ -3538,9 +3611,9 @@ export function waitsOnTransitively(fromId: string, targetId: string): boolean {
 export function ticketsWaitingOn(ticketId: string): Set<string> {
   const rows = getDb().prepare(`
     WITH RECURSIVE downstream(id) AS (
-      SELECT blocked_id FROM ticket_dependencies WHERE blocker_id = ?
+      SELECT blocked_id FROM ${ALL_DEPENDENCIES} WHERE blocker_id = ?
       UNION
-      SELECT d.blocked_id FROM ticket_dependencies d JOIN downstream w ON d.blocker_id = w.id
+      SELECT d.blocked_id FROM ${ALL_DEPENDENCIES} d JOIN downstream w ON d.blocker_id = w.id
     )
     SELECT id FROM downstream
   `).all(ticketId) as Array<{ id: string }>
@@ -3549,7 +3622,7 @@ export function ticketsWaitingOn(ticketId: string): Set<string> {
 
 /** The ids of the tickets waiting directly on this one. */
 export function waitingTicketIds(ticketId: string): string[] {
-  return (getDb().prepare('SELECT blocked_id FROM ticket_dependencies WHERE blocker_id = ?').all(ticketId) as Array<{ blocked_id: string }>).map(row => row.blocked_id)
+  return (getDb().prepare(`SELECT DISTINCT blocked_id FROM ${ALL_DEPENDENCIES} WHERE blocker_id = ?`).all(ticketId) as Array<{ blocked_id: string }>).map(row => row.blocked_id)
 }
 
 /**
@@ -3558,8 +3631,10 @@ export function waitingTicketIds(ticketId: string): string[] {
  */
 function setTicketWaitsOn(ticketId: string, ids: string[], actor: Actor | null) {
   const db = getDb()
-  const wanted = new Set(ids.filter(id => id !== ticketId))
+  // What a strict list implies comes back with every read; sent back, it is not stored as well.
+  const implied = new Set((db.prepare(`SELECT blocker_id FROM ${ALL_DEPENDENCIES} WHERE blocked_id = ? AND via_id IS NOT NULL`).all(ticketId) as Array<{ blocker_id: string }>).map(row => row.blocker_id))
   const before = new Set((db.prepare('SELECT blocker_id FROM ticket_dependencies WHERE blocked_id = ?').all(ticketId) as Array<{ blocker_id: string }>).map(row => row.blocker_id))
+  const wanted = new Set(ids.filter(id => id !== ticketId && (before.has(id) || !implied.has(id))))
   const describe = (id: string) => db.prepare('SELECT ticket_number, title FROM tickets WHERE id = ?').get(id) as { ticket_number: number; title: string } | undefined
   const now = new Date().toISOString()
   for (const id of before) {
@@ -3589,8 +3664,15 @@ export function subticketIdsOf(ticketId: string): Set<string> {
  * the ticket itself, a ticket that does not exist and a repeat are dropped here. Its text and
  * flag are a snapshot for whoever reads the row bare; the list always reads them live.
  */
-function setTicketTodos(ticketId: string, todos: TicketTodoInput[]) {
+function setTicketTodos(ticketId: string, todos: TicketTodoInput[], actor: Actor | null = null) {
   const db = getDb()
+  // Decisions keep who decided them across the rewrite, matched by their question; a new or
+  // changed result is the actor's, and goes into the history.
+  const before = db.prepare('SELECT text, completed, decision, decided_by, decided_at FROM ticket_todos WHERE ticket_id = ? AND decision IS NOT NULL ORDER BY position')
+    .all(ticketId) as Array<{ text: string; completed: number; decision: string; decided_by: string | null; decided_at: string | null }>
+  const earlier = new Map<string, typeof before>()
+  for (const row of before) earlier.set(row.text, [...(earlier.get(row.text) ?? []), row])
+  const now = new Date().toISOString()
   const wanted = [...new Set(todos.map(todo => todo.subticketId).filter((id): id is string => Boolean(id) && id !== ticketId))]
   const subtickets = new Map(wanted.length
     ? (db.prepare(`SELECT t.id, t.title, MAX(l.is_done, l.is_live) AS is_done FROM tickets t JOIN lanes l ON l.id = t.lane_id WHERE t.id IN (${wanted.map(() => '?').join(', ')})`)
@@ -3599,11 +3681,38 @@ function setTicketTodos(ticketId: string, todos: TicketTodoInput[]) {
   const seen = new Set<string>()
   const kept = todos.filter(todo => !todo.subticketId || (subtickets.has(todo.subticketId) && !seen.has(todo.subticketId) && seen.add(todo.subticketId)))
   db.prepare('DELETE FROM ticket_todos WHERE ticket_id = ?').run(ticketId)
-  const insert = db.prepare('INSERT INTO ticket_todos (id, ticket_id, text, completed, position, subticket_id) VALUES (?, ?, ?, ?, ?, ?)')
+  const insert = db.prepare('INSERT INTO ticket_todos (id, ticket_id, text, completed, position, subticket_id, decision, decided_by, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
   kept.forEach((todo, position) => {
     const sub = todo.subticketId ? subtickets.get(todo.subticketId) : undefined
-    if (sub) insert.run(randomUUID(), ticketId, sub.title, sub.is_done, position, sub.id)
-    else insert.run(randomUUID(), ticketId, todo.text.trim(), todo.completed ? 1 : 0, position, null)
+    if (sub) return void insert.run(randomUUID(), ticketId, sub.title, sub.is_done, position, sub.id, null, null, null)
+    const text = todo.text.trim()
+    if (!todo.decision) return void insert.run(randomUUID(), ticketId, text, todo.completed ? 1 : 0, position, null, null, null, null)
+    const decision: TicketDecisionInput = {
+      multiple: todo.decision.multiple,
+      options: todo.decision.options.map(option => option.trim()),
+      allowOther: todo.decision.allowOther,
+      chosen: [...todo.decision.chosen].sort((a, b) => a - b),
+      other: todo.decision.allowOther ? todo.decision.other?.trim() || null : null
+    }
+    const previous = earlier.get(text)?.shift()
+    const was = previous ? parseDecision(previous.decision) : null
+    const wasDecided = Boolean(previous?.completed)
+    const sameResult = wasDecided && was !== null && decisionAnswer(was) === decisionAnswer(decision)
+    let decidedBy: string | null = null
+    let decidedAt: string | null = null
+    if (todo.completed) {
+      if (sameResult) {
+        decidedBy = previous!.decided_by
+        decidedAt = previous!.decided_at
+      } else {
+        decidedBy = actor?.principalId ?? null
+        decidedAt = now
+        recordActivity(ticketId, actor, 'decided', { question: text, answer: decisionAnswer(decision) })
+      }
+    } else if (wasDecided) {
+      recordActivity(ticketId, actor, 'reopened', { question: text })
+    }
+    insert.run(randomUUID(), ticketId, text, todo.completed ? 1 : 0, position, null, JSON.stringify(decision), decidedBy, decidedAt)
   })
 }
 
@@ -3802,6 +3911,7 @@ export interface TicketInput {
   /** A type of the board's workspace; the caller has checked that. Null or omitted: untyped. */
   typeId?: string | null
   todos?: TicketTodoInput[]
+  strictOrder?: boolean
   /** Tickets it waits on, checked by the caller: same workspace, no cycle. Replaces the list. */
   waitsOn?: string[]
   assigneeId?: string | null
@@ -3848,12 +3958,14 @@ export function createTicket(boardId: string, input: TicketInput, author: Person
         .map(row => row.id).filter(ticketId => ticketId !== id)
       reindexLane(lane.id, [id, ...rest])
     }
+    // First in the history, so whatever the list records (a decision made at once) comes after.
+    recordActivity(id, actor, 'created', { lane: lane.name })
+    if (input.strictOrder) db.prepare('UPDATE tickets SET strict_order = 1 WHERE id = ?').run(id)
     setTicketLabels(id, boardId, input.labels || [])
-    setTicketTodos(id, input.todos || [])
+    setTicketTodos(id, input.todos || [], actor)
     recordLinkedSubtickets(id, new Set(), actor)
     if (input.waitsOn?.length) setTicketWaitsOn(id, input.waitsOn, actor)
     setTicketLinks(id, input.links ?? linksWithFirst([], input.link ?? null))
-    recordActivity(id, actor, 'created', { lane: lane.name })
     if (input.assigneeId) recordActivity(id, actor, 'assigned', { to: input.assigneeId })
     if (input.typeId) recordActivity(id, actor, 'type', { from: null, to: findTicketType(input.typeId)?.name ?? null })
   })()
@@ -3903,10 +4015,14 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
     if (input.labels) setTicketLabels(id, existing.boardId, input.labels)
     if (input.todos !== undefined) {
       const before = subticketIdsOf(id)
-      setTicketTodos(id, input.todos)
+      setTicketTodos(id, input.todos, actor)
       recordLinkedSubtickets(id, before, actor)
     }
     if (input.waitsOn !== undefined) setTicketWaitsOn(id, input.waitsOn, actor)
+    if (input.strictOrder !== undefined && input.strictOrder !== existing.strictOrder) {
+      getDb().prepare('UPDATE tickets SET strict_order = ? WHERE id = ?').run(input.strictOrder ? 1 : 0, id)
+      recordActivity(id, actor, 'strict_order', { to: input.strictOrder ? 'strict' : 'loose' })
+    }
     const links = input.links ?? (input.link === undefined ? undefined : linksWithFirst(existing.links, input.link))
     if (links) removedThumbnails.push(...setTicketLinks(id, links))
     if (priority !== existing.priority) recordActivity(id, actor, 'priority', { from: existing.priority, to: priority })

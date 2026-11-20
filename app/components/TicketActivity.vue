@@ -38,6 +38,9 @@ const sentences: Record<ActivityKind, (entry: TicketActivityEntry) => string> = 
   commented: () => 'wrote a comment',
   subticket: entry => `added subticket #${entry.payload.number} “${entry.payload.title}” on ${entry.payload.board || 'a board'}`,
   waits_on: entry => entry.payload.change === 'removed' ? `no longer waits on #${entry.payload.number} “${entry.payload.title}”` : `now waits on #${entry.payload.number} “${entry.payload.title}”`,
+  decided: entry => `decided “${entry.payload.question}”: ${entry.payload.answer}`,
+  reopened: entry => `reopened the decision “${entry.payload.question}”`,
+  strict_order: entry => (entry.payload.to === 'strict' ? 'set the to-dos to strict order' : 'set the to-dos to loose order'),
 }
 
 /**

@@ -109,7 +109,8 @@ export const dependencyRefSchema = z.object({
   done: z.boolean().describe('Whether it sits in a done or live lane: then nothing waits on it any more.'),
   archived: z.boolean(),
   startDate: z.string().nullable(),
-  dueDate: z.string().nullable()
+  dueDate: z.string().nullable(),
+  strictOrderOf: z.number().int().nullable().describe('Set when the dependency comes from a strict to-do list, not by hand: the number of the ticket whose list orders the two. Not removable on its own.')
 }).describe('A ticket in a finish-to-start dependency: the waiting ticket starts once this one ends.')
 
 export const timelineNodeSchema = z.object({
@@ -134,13 +135,24 @@ export const timelineNodeSchema = z.object({
   }
 }).describe('A ticket on a timeline, with the open subtickets below it.')
 
+export const ticketDecisionSchema = z.object({
+  multiple: z.boolean().describe('Several answers may be picked; otherwise exactly one.'),
+  options: z.array(z.string()).describe('The answers to pick from, in order.'),
+  allowOther: z.boolean().describe('Whether an answer of one\'s own may be typed in beside the options.'),
+  chosen: z.array(z.number().int()).describe('Indexes into options that are picked: the result once decided.'),
+  other: z.string().nullable().describe('The answer typed in, when allowOther.'),
+  decidedBy: personSchema.nullable().describe('Who decided it; null while open.'),
+  decidedAt: z.string().nullable()
+}).describe('A question to settle by picking from a list of answers.')
+
 export const ticketTodoSchema = z.object({
   id: z.string(),
   text: z.string().describe('For a subticket, its title.'),
   completed: z.boolean().describe('For a subticket, whether it sits in a done lane of its board; it cannot be ticked by hand.'),
   position: z.number().int(),
   subticketId: z.string().nullable().describe('Set when this to-do is a ticket of its own. Send it back with the list to keep the subticket; leaving it out unlinks it, the ticket itself stays. A to-do naming another open ticket of the workspace links that one.'),
-  subticket: subticketRefSchema.nullable()
+  subticket: subticketRefSchema.nullable(),
+  decision: ticketDecisionSchema.nullable().describe('Set when this to-do is a decision: text is its question, completed whether it is decided.')
 })
 
 export const ticketLinkSchema = z.object({
@@ -221,6 +233,7 @@ export const ticketSchema = z.object({
   jira: jiraIssueSchema.nullable(),
   attachments: z.array(attachmentSchema),
   todos: z.array(ticketTodoSchema),
+  strictOrder: z.boolean().describe('The to-dos are worked top to bottom: one is ticked only once those above are done, and each subticket waits on the subticket before it.'),
   waitsOn: z.array(dependencyRefSchema).describe('The tickets it waits on: it starts once they end. Set the whole list with waitsOn on update.')
 })
 
