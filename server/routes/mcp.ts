@@ -35,6 +35,8 @@ export default defineEventHandler(async (event) => {
         'A ticket has two windows. startDate to dueDate is when it is worked on: dueDate is a deadline.',
         'liveFrom to liveUntil is when it is out in the world: a campaign in market, an asset until its',
         'approval expires. A campaign\'s dueDate is its go-live, not the end of its run.',
+        'A ticket can wait on others (waitsOn, finish-to-start: it starts once they end). To move a',
+        'plan, shift the ticket in update_ticket: everything waiting on it moves along. Dry-run it first.',
         '',
         'Start with list_boards, then board_overview for the board you want — lane ids, member ids',
         'and the label and category names all come from there, and inventing one will fail.',

@@ -97,6 +97,90 @@ function liveClass(node: TimelineNode) {
 }
 const hrefOf = (node: TimelineNode) => `/b/${node.boardId}?ticket=${node.ticketNumber}`
 
+// Dependencies as arrows, from the end of what a ticket waits on to its own start. Rows grow
+// with their names, so where each bar sits is measured rather than assumed.
+const body = ref<HTMLElement | null>(null)
+const layout = ref<{ left: number; width: number; height: number; centers: number[] } | null>(null)
+const markerId = `timeline-arrow-${useId()}`
+function measure() {
+  const element = body.value
+  const cells = element ? [...element.querySelectorAll<HTMLElement>('[data-bar-cell]')] : []
+  if (!element || !cells.length) {
+    layout.value = null
+    return
+  }
+  const box = element.getBoundingClientRect()
+  const first = cells[0]!.getBoundingClientRect()
+  layout.value = {
+    left: first.left - box.left,
+    width: first.width,
+    height: box.height,
+    centers: cells.map((cell) => {
+      const rect = cell.getBoundingClientRect()
+      return rect.top - box.top + rect.height / 2
+    })
+  }
+}
+let observer: ResizeObserver | null = null
+onMounted(() => {
+  observer = new ResizeObserver(() => measure())
+  if (body.value) observer.observe(body.value)
+  measure()
+})
+onBeforeUnmount(() => observer?.disconnect())
+watch([rows, range], () => nextTick(measure))
+
+/** Where a ticket's bar or diamond starts and ends across the chart, in pixels, as it is drawn. */
+function barEdges(node: TimelineNode, frame: { left: number; width: number }) {
+  const span = spanOf(node)
+  if (!span) return null
+  const x = (percent: number) => frame.left + (percent / 100) * frame.width
+  if (isMilestone(node)) {
+    const center = x((offset(span.start) + offset(span.end, true)) / 2)
+    return { start: center - 6, end: center + 6, half: 6 }
+  }
+  const from = offset(span.start)
+  const width = Math.max(0.8, offset(span.end, true) - from)
+  return { start: x(from), end: x(from + width), half: full.value ? 8 : 7 }
+}
+
+// Each arrow leaves the blocker's bar from underneath, just inside its end, runs straight down
+// (or up) to the waiting ticket's row and turns into the start of its bar. When the waiting
+// ticket starts before that end, the line drops straight onto it instead: there is where it
+// should have started.
+const arrows = computed(() => {
+  const frame = layout.value
+  if (!frame || frame.centers.length !== rows.value.length) return []
+  const rowsOf = new Map<string, number[]>()
+  rows.value.forEach(({ node }, index) => rowsOf.set(node.id, [...(rowsOf.get(node.id) ?? []), index]))
+  const result: Array<{ key: string; d: string; conflict: boolean }> = []
+  rows.value.forEach(({ node }, index) => {
+    const target = barEdges(node, frame)
+    if (!target) return
+    for (const blocker of node.waitsOn) {
+      // The blocker's nearest row, when it is under two parents.
+      const at = (rowsOf.get(blocker.id) ?? []).reduce<number | null>((best, row) => (best === null || Math.abs(row - index) < Math.abs(best - index) ? row : best), null)
+      if (at === null || at === index) continue
+      const source = barEdges(rows.value[at]!.node, frame)
+      if (!source) continue
+      const down = index > at ? 1 : -1
+      const x1 = Math.max(source.start + 2, source.end - 5)
+      const y1 = frame.centers[at]! + down * source.half
+      const y2 = frame.centers[index]!
+      const conflict = !blocker.done && !node.done && spanOf(node)!.start < spanOf(rows.value[at]!.node)!.end
+      let d: string
+      if (target.start - x1 >= 10) {
+        const radius = Math.min(6, Math.abs(y2 - y1))
+        d = `M ${x1} ${y1} V ${y2 - down * radius} Q ${x1} ${y2} ${x1 + radius} ${y2} H ${target.start - 1}`
+      } else {
+        d = `M ${x1} ${y1} V ${y2 - down * (target.half + 1)}`
+      }
+      result.push({ key: `${at}-${index}-${blocker.id}`, d, conflict })
+    }
+  })
+  return result
+})
+
 </script>
 
 <template>
@@ -116,7 +200,7 @@ const hrefOf = (node: TimelineNode) => `/b/${node.boardId}?ticket=${node.ticketN
       </div>
     </div>
 
-    <div class="relative">
+    <div ref="body" class="relative">
       <!-- Gridlines and today behind every row, drawn once for the whole chart. -->
       <div class="pointer-events-none absolute inset-y-0 right-0 left-[var(--timeline-label)]" aria-hidden="true">
         <span v-for="tick in ticks" :key="tick.date" class="absolute inset-y-0 w-px" :class="tick.major ? 'bg-[var(--line)]' : 'bg-[color-mix(in_srgb,var(--line)_45%,transparent)]'" :style="{ left: `${offset(tick.date)}%` }" />
@@ -161,7 +245,7 @@ const hrefOf = (node: TimelineNode) => `/b/${node.boardId}?ticket=${node.ticketN
           </div>
         </div>
 
-        <div class="relative" :class="full ? 'h-11' : 'h-9'" :title="`#${node.ticketNumber} · ${spanLabel(node)} · ${node.laneName}`">
+        <div data-bar-cell class="relative" :class="full ? 'h-11' : 'h-9'" :title="`#${node.ticketNumber} · ${spanLabel(node)} · ${node.laneName}`">
           <span
             v-if="liveSpanOf(node)"
             class="absolute top-1/2 h-2 -translate-y-1/2 rounded-full"
@@ -186,11 +270,34 @@ const hrefOf = (node: TimelineNode) => `/b/${node.boardId}?ticket=${node.ticketN
           <span v-else-if="!liveSpanOf(node)" class="muted absolute inset-0 flex items-center px-2 text-[10px] italic">No dates</span>
         </div>
       </div>
+
+      <svg v-if="arrows.length && layout" class="pointer-events-none absolute inset-0 overflow-visible" :width="'100%'" :height="layout.height" aria-hidden="true">
+        <defs>
+          <marker :id="`${markerId}-plain`" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M 0 0 L 8 4 L 0 8 z" class="fill-[color-mix(in_srgb,var(--ink)_45%,transparent)]" />
+          </marker>
+          <marker :id="`${markerId}-conflict`" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M 0 0 L 8 4 L 0 8 z" class="fill-orange-500" />
+          </marker>
+        </defs>
+        <path
+          v-for="arrow in arrows"
+          :key="arrow.key"
+          :d="arrow.d"
+          fill="none"
+          stroke-width="1.5"
+          stroke-linejoin="round"
+          :class="arrow.conflict ? 'stroke-orange-500' : 'stroke-[color-mix(in_srgb,var(--ink)_45%,transparent)]'"
+          :stroke-dasharray="arrow.conflict ? '4 3' : undefined"
+          :marker-end="`url(#${markerId}-${arrow.conflict ? 'conflict' : 'plain'})`"
+        />
+      </svg>
     </div>
     <!-- Two kinds of bar once any ticket is out in the world; worth saying which is which. -->
-    <div v-if="hasLiveWindows" class="muted flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-[var(--line)] px-3 py-1.5 text-[10px] font-semibold">
+    <div v-if="hasLiveWindows || arrows.length" class="muted flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-[var(--line)] px-3 py-1.5 text-[10px] font-semibold">
       <span class="flex items-center gap-1.5"><span class="h-2.5 w-5 rounded-full bg-[var(--accent)]" /> Work: start to due date</span>
-      <span class="flex items-center gap-1.5"><span class="h-1.5 w-5 rounded-full bg-sky-500/55" /> Live window</span>
+      <span v-if="hasLiveWindows" class="flex items-center gap-1.5"><span class="h-1.5 w-5 rounded-full bg-sky-500/55" /> Live window</span>
+      <span v-if="arrows.length" class="flex items-center gap-1.5"><span class="relative h-px w-5 bg-[color-mix(in_srgb,var(--ink)_45%,transparent)]"><span class="absolute -right-0.5 -top-[3px] border-y-[3.5px] border-l-[5px] border-y-transparent border-l-[color-mix(in_srgb,var(--ink)_45%,transparent)]" /></span> Waits on</span>
       <span class="flex items-center gap-1.5"><span class="h-0.5 w-3 bg-rose-500/70" /> Today</span>
     </div>
   </div>

@@ -1,4 +1,4 @@
-import type { TimelineNode } from '../types/domain'
+import type { DependencyRef, TimelineNode } from '../types/domain'
 
 /** A node's days on a timeline. One date alone makes a one-day span; neither leaves it off. */
 export interface Span {
@@ -48,7 +48,7 @@ export function timelineBounds(root: TimelineNode): Span | null {
   }
 }
 
-export type TimelineWarningKind = 'overdue' | 'ends_after_plan' | 'starts_before_plan' | 'live_ended'
+export type TimelineWarningKind = 'overdue' | 'ends_after_plan' | 'starts_before_plan' | 'live_ended' | 'starts_before_blocker' | 'waits_on_late'
 
 export interface TimelineWarning {
   kind: TimelineWarningKind
@@ -78,6 +78,7 @@ export function timelineWarnings(root: TimelineNode, today: string): TimelineWar
     if (node.live && node.liveUntil && node.liveUntil < today) {
       warnings.push({ kind: 'live_ended', ticketId: node.id, ticketNumber: node.ticketNumber, message: `#${node.ticketNumber} was live until ${node.liveUntil} and is still in a live lane.` })
     }
+    warnings.push(...dependencyWarnings(node, today))
     if (node !== root && span) {
       if (root.dueDate && span.end > root.dueDate) {
         warnings.push({ kind: 'ends_after_plan', ticketId: node.id, ticketNumber: node.ticketNumber, message: `#${node.ticketNumber} ends ${span.end}, after #${root.ticketNumber} is due (${root.dueDate}).` })
@@ -89,5 +90,35 @@ export function timelineWarnings(root: TimelineNode, today: string): TimelineWar
     node.children.forEach(walk)
   }
   walk(root)
+  return warnings
+}
+
+/** A day plus whole days, YYYY-MM-DD in and out; negative goes back. */
+export function addDays(date: string, days: number): string {
+  const day = new Date(`${date}T00:00:00Z`)
+  day.setUTCDate(day.getUTCDate() + days)
+  return day.toISOString().slice(0, 10)
+}
+
+type Waiting = Pick<TimelineNode, 'id' | 'ticketNumber' | 'startDate' | 'dueDate' | 'done'> & { waitsOn: DependencyRef[] }
+
+/**
+ * What a ticket's dependencies say about its plan: it starts before something it waits on
+ * ends, or something it waits on is late. Finish-to-start allows the same day. A finished
+ * ticket, and a finished or archived blocker, has nothing left to say.
+ */
+export function dependencyWarnings(ticket: Waiting, today: string): TimelineWarning[] {
+  if (ticket.done) return []
+  const start = ticket.startDate ?? ticket.dueDate
+  const warnings: TimelineWarning[] = []
+  for (const blocker of ticket.waitsOn) {
+    if (blocker.done || blocker.archived) continue
+    if (start && blocker.dueDate && start < blocker.dueDate) {
+      warnings.push({ kind: 'starts_before_blocker', ticketId: ticket.id, ticketNumber: ticket.ticketNumber, message: `#${ticket.ticketNumber} starts ${start}, before #${blocker.ticketNumber} it waits on ends (${blocker.dueDate}).` })
+    }
+    if (blocker.dueDate && blocker.dueDate < today) {
+      warnings.push({ kind: 'waits_on_late', ticketId: ticket.id, ticketNumber: ticket.ticketNumber, message: `#${ticket.ticketNumber} waits on #${blocker.ticketNumber}, which was due ${blocker.dueDate} and is not done.` })
+    }
+  }
   return warnings
 }

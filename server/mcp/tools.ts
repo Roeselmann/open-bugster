@@ -10,7 +10,7 @@ import { isServiceIdentity, parentTicketIdsOf, principalDescription } from '~~/s
 import { todoLight } from '~~/shared/utils/todo-progress'
 import { boardToday } from '~~/shared/utils/due-date'
 import { timelineBounds, timelineWarnings } from '~~/shared/utils/timeline'
-import type { BoardSummary, LaneSummary, TimelineNode, Ticket, TicketTodo, TicketActivityEntry, TicketComment, TicketTypeSummary, WorkspaceSummary } from '~~/shared/types/domain'
+import type { BoardSummary, DependencyRef, LaneSummary, ShiftResult, TimelineNode, Ticket, TicketTodo, TicketActivityEntry, TicketComment, TicketTypeSummary, WorkspaceSummary } from '~~/shared/types/domain'
 
 /**
  * The agent-facing surface.
@@ -41,8 +41,15 @@ function slim(ticket: Ticket) {
     liveFrom: ticket.liveFrom,
     liveUntil: ticket.liveUntil,
     commentCount: ticket.commentCount,
-    progress: progressOf(ticket.todos)
+    progress: progressOf(ticket.todos),
+    // Numbers only here; get_ticket spells them out.
+    waitsOn: ticket.waitsOn.map(item => item.ticketNumber)
   }
+}
+
+/** A dependency as an agent reads it: which ticket, where it stands, and its dates. */
+function dependencyOf(item: DependencyRef) {
+  return { id: item.id, number: item.ticketNumber, title: item.title, board: item.boardName, lane: item.laneName, done: item.done, startDate: item.startDate, dueDate: item.dueDate }
 }
 
 /**
@@ -61,6 +68,7 @@ function timelineOf(node: TimelineNode): Record<string, unknown> {
     startDate: node.startDate,
     dueDate: node.dueDate,
     ...(node.liveFrom || node.liveUntil ? { live: node.live, liveFrom: node.liveFrom, liveUntil: node.liveUntil } : {}),
+    ...(node.waitsOn.length ? { waitsOn: node.waitsOn.map(item => item.ticketNumber) } : {}),
     ...(node.readable ? {} : { readable: false }),
     ...(node.children.length ? { subtickets: node.children.map(timelineOf) } : {})
   }
@@ -294,7 +302,10 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       + 'With timeline: true it adds `timeline`, the plan below the ticket: every subticket down through '
       + 'theirs, with board, lane, start and due date, plus `warnings` for open tickets past their due '
       + 'date and subtickets that start before or end after this ticket\'s own window. Use it when the question '
-      + 'is how a campaign or any other bundle of work stands, rather than reading each subticket.',
+      + 'is how a campaign or any other bundle of work stands, rather than reading each subticket. '
+      + '`waitsOn` lists the tickets this one waits on (finish-to-start: it starts once they end) and '
+      + '`waitedOnBy` the ones waiting on it; the warnings include tickets that start before what they '
+      + 'wait on ends, and ones waiting on something late.',
     annotations: readsOnly,
     inputSchema: {
       ticketId: z.string().optional().describe('From search_tickets. Give this or ticketNumber.'),
@@ -313,10 +324,11 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
     const { ticket } = ticketId
       ? await call<{ ticket: Ticket }>(ops.ticketGet, { ticketId })
       : await call<{ ticket: Ticket }>(ops.ticketGetByNumber, { ticketNumber })
-    const [{ comments }, { activity }, parents] = await Promise.all([
+    const [{ comments }, { activity }, parents, { dependents }] = await Promise.all([
       call<{ comments: TicketComment[] }>(ops.commentList, { ticketId: ticket.id }),
       call<{ activity: TicketActivityEntry[] }>(ops.ticketActivity, { ticketId: ticket.id }),
-      readableParents(ticket.id)
+      readableParents(ticket.id),
+      call<{ dependents: DependencyRef[] }>(ops.ticketDependentsList, { ticketId: ticket.id })
     ])
     const plan = withTimeline ? (await call<{ timeline: TimelineNode }>(ops.ticketTimelineGet, { ticketId: ticket.id })).timeline : null
     return reply({
@@ -352,6 +364,9 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       // The other way round: the tickets whose to-do lists hold this one, as far as this token
       // can read them. Moving this ticket into a done lane ticks it off on each of them.
       parents,
+      // Finish-to-start, both ways: what this one waits on, and what waits on it.
+      waitsOn: ticket.waitsOn.map(dependencyOf),
+      waitedOnBy: dependents.map(dependencyOf),
       // The v1 path, not the `url` on the record: that one is the UI's own API and takes a
       // session cookie, so the token this tool holds could see an attachment listed and
       // fetch none of them. This one answers to the same bearer token.
@@ -484,11 +499,27 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
         completed: z.boolean().default(false),
         subticketId: z.string().optional().describe('Send back the subticketId get_ticket showed to keep that subticket in the list. The id of another open ticket of the workspace (from search_tickets) links it as a new subticket. Its text and completion follow the subticket itself.')
       })).max(100).optional()
-        .describe('Replaces the whole to-do list — read the ticket first and send every item back, changed and unchanged alike, subtickets with their subticketId. A subticket left out is unlinked; the ticket itself stays. To file a brand-new subticket use create_ticket with parentTicketId. Omit the field to leave the list alone.')
+        .describe('Replaces the whole to-do list — read the ticket first and send every item back, changed and unchanged alike, subtickets with their subticketId. A subticket left out is unlinked; the ticket itself stays. To file a brand-new subticket use create_ticket with parentTicketId. Omit the field to leave the list alone.'),
+      waitsOn: z.array(z.string()).max(50).optional()
+        .describe('Ids of the tickets this one waits on, finish-to-start: it starts once they end. Replaces the whole list — send back the ids get_ticket showed under waitsOn to keep them; [] removes all. Same workspace only, and never a loop.'),
+      shift: z.object({
+        days: z.number().int().describe('Whole days; negative moves earlier.'),
+        dryRun: z.boolean().default(false).describe('Only report what would move. Do this first and show the person.')
+      }).optional()
+        .describe('Moves this ticket\'s start and due date by days, and with them every ticket waiting on it, directly or through others. Finished work and tickets you may not edit stay put and stop the push; live windows never move. Applied after the other fields; a dry run has to come on its own.')
     }
-  }, async (input) => {
-    const { ticket } = await call<{ ticket: Ticket }>(ops.ticketUpdate, input)
-    return reply(slim(ticket))
+  }, async ({ shift, ...input }) => {
+    const fields = Object.keys(input).filter(key => key !== 'ticketId' && input[key as keyof typeof input] !== undefined)
+    if (shift?.dryRun && fields.length) throw new Error('Send a dry run on its own, without other changes.')
+    const updated = fields.length || !shift ? (await call<{ ticket: Ticket }>(ops.ticketUpdate, input)).ticket : null
+    if (!shift) return reply(slim(updated!))
+    const result = await call<ShiftResult>(ops.ticketShift, { ticketId: input.ticketId, days: shift.days, dryRun: shift.dryRun })
+    return reply({
+      applied: result.applied,
+      days: result.days,
+      moves: result.moves.map(move => ({ number: move.ticketNumber, title: move.title, board: move.boardName, startDate: move.startDate, dueDate: move.dueDate })),
+      skipped: result.skipped.map(item => ({ number: item.ticketNumber, title: item.title, reason: item.reason }))
+    })
   })
 
   server.registerTool('move_ticket', {

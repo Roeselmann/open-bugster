@@ -46,7 +46,9 @@ const ticketShape = {
   categoryName: z.string().trim().max(30).nullable(),
   /** A type of the board's workspace; null leaves the ticket untyped. */
   typeId: idSchema.nullable(),
-  todos: z.array(todoSchema).max(100)
+  todos: z.array(todoSchema).max(100),
+  /** Ids of the tickets it waits on, the whole list; each of the same workspace, none waiting on it in turn. */
+  waitsOn: z.array(idSchema).max(50)
 }
 
 export const ticketCreateSchema = z.object({
@@ -67,6 +69,7 @@ export const ticketCreateSchema = z.object({
   categoryName: ticketShape.categoryName.optional(),
   typeId: ticketShape.typeId.optional(),
   todos: ticketShape.todos.default([]),
+  waitsOn: ticketShape.waitsOn.optional(),
   /** Where in its lane the ticket lands; the bottom unless asked otherwise. */
   placement: z.enum(['top', 'bottom']).default('bottom')
 })
@@ -91,6 +94,13 @@ export const importedTicketUpdateSchema = ticketUpdateSchema.omit({ buildNumber:
   // Board admins only, enforced by the handler: an imported ticket arrives unattributed, and
   // whoever really filed it can be named afterwards.
   authorId: idSchema.nullable().optional()
+})
+
+/** Moves a ticket's start and due date by whole days, and with them everything waiting on it. */
+export const ticketShiftSchema = z.object({
+  days: z.number().int().min(-366).max(366).refine(days => days !== 0, 'Shift by at least one day.'),
+  /** Only report what would move. */
+  dryRun: z.boolean().default(false)
 })
 
 export const ticketMoveSchema = z.object({

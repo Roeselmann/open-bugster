@@ -7,7 +7,7 @@ import {
 import type {
   AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardSummary, Category,
   CategorySummary, JiraIntegration, JiraIssue, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket,
-  SubticketRef, TimelineNode, TicketActivityEntry, TicketComment, TicketTodo, TicketType, TicketTypeIcon, TicketTypeIconRef, TicketTypeRef, TicketTypeSummary,
+  DependencyRef, SubticketRef, TimelineNode, TicketActivityEntry, TicketComment, TicketTodo, TicketType, TicketTypeIcon, TicketTypeIconRef, TicketTypeRef, TicketTypeSummary,
   Workspace, WorkspaceMember, WorkspaceSummary
 } from '../types/domain'
 
@@ -99,6 +99,19 @@ export const subticketRefSchema = z.object({
   archived: z.boolean()
 })
 
+export const dependencyRefSchema = z.object({
+  id: z.string(),
+  ticketNumber: z.number().int(),
+  title: z.string(),
+  boardId: z.string(),
+  boardName: z.string(),
+  laneName: z.string(),
+  done: z.boolean().describe('Whether it sits in a done or live lane: then nothing waits on it any more.'),
+  archived: z.boolean(),
+  startDate: z.string().nullable(),
+  dueDate: z.string().nullable()
+}).describe('A ticket in a finish-to-start dependency: the waiting ticket starts once this one ends.')
+
 export const timelineNodeSchema = z.object({
   id: z.string(),
   ticketNumber: z.number().int(),
@@ -113,6 +126,7 @@ export const timelineNodeSchema = z.object({
   live: z.boolean().describe('Whether it sits in a live lane.'),
   liveFrom: z.string().nullable(),
   liveUntil: z.string().nullable(),
+  waitsOn: z.array(dependencyRefSchema).describe('The tickets it waits on, wherever they are.'),
   readable: z.boolean().describe('False for a ticket on a board the caller cannot read: listed, but its own subtickets are left out.'),
   get children(): z.ZodArray<typeof timelineNodeSchema> {
     return z.array(timelineNodeSchema)
@@ -204,7 +218,8 @@ export const ticketSchema = z.object({
   feedback: appleFeedbackSchema.nullable(),
   jira: jiraIssueSchema.nullable(),
   attachments: z.array(attachmentSchema),
-  todos: z.array(ticketTodoSchema)
+  todos: z.array(ticketTodoSchema),
+  waitsOn: z.array(dependencyRefSchema).describe('The tickets it waits on: it starts once they end. Set the whole list with waitsOn on update.')
 })
 
 export const ticketCommentSchema = z.object({
@@ -374,6 +389,7 @@ const named: Record<string, z.ZodType> = {
   TicketTypeRef: ticketTypeRefSchema,
   Attachment: attachmentSchema,
   SubticketRef: subticketRefSchema,
+  DependencyRef: dependencyRefSchema,
   TicketTodo: ticketTodoSchema,
   AppleFeedback: appleFeedbackSchema,
   Ticket: ticketSchema,
@@ -420,6 +436,7 @@ export type SchemasMatchDomain = [
   Expect<Equal<z.infer<typeof ticketTypeSchema>, TicketType>>,
   Expect<Equal<z.infer<typeof ticketTypeSummarySchema>, TicketTypeSummary>>,
   Expect<Equal<z.infer<typeof timelineNodeSchema>, TimelineNode>>,
+  Expect<Equal<z.infer<typeof dependencyRefSchema>, DependencyRef>>,
   Expect<Equal<z.infer<typeof ticketTypeIconRefSchema>, TicketTypeIconRef>>,
   Expect<Equal<z.infer<typeof ticketTypeRefSchema>, TicketTypeRef>>,
   Expect<Equal<z.infer<typeof attachmentSchema>, Attachment>>,

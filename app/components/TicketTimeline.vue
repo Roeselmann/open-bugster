@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChartGantt, LoaderCircle, Maximize2, Minimize2, TriangleAlert } from '@lucide/vue'
+import { ChartGantt, ChevronDown, LoaderCircle, Maximize2, Minimize2, TriangleAlert } from '@lucide/vue'
 import { DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui'
 import type { TimelineNode } from '~~/shared/types/domain'
 import { boardToday } from '~~/shared/utils/due-date'
@@ -7,7 +7,8 @@ import { timelineBounds, timelineWarnings } from '~~/shared/utils/timeline'
 
 /**
  * The plan below a ticket: it and its subtickets, down through theirs, as bars across their
- * days. Read fresh from the server whenever `refreshKey` changes, because a subticket on
+ * days. The editor shows only its range, a button into it and, folded behind a link, the warnings; the chart itself
+ * opens full screen. Read fresh from the server whenever `refreshKey` changes, because a subticket on
  * another board can move without this ticket knowing. It opens full screen in a dialog of its
  * own, nested in the editor's, so Escape and a click beside it close the chart, not the ticket.
  */
@@ -19,6 +20,8 @@ const failed = ref(false)
 // Shared by both views: a branch folded in the editor stays folded full screen, and back.
 const collapsed = ref(new Set<string>())
 const expanded = ref(false)
+// The warnings sit folded behind a small link; the editor stays calm until someone asks.
+const warningsOpen = ref(false)
 const today = boardToday()
 
 async function load() {
@@ -37,6 +40,7 @@ watch(() => [props.ticketId, props.refreshKey], load, { immediate: true })
 watch(() => props.ticketId, () => {
   collapsed.value = new Set()
   expanded.value = false
+  warningsOpen.value = false
 })
 
 const warnings = computed(() => (timeline.value ? timelineWarnings(timeline.value, today) : []))
@@ -63,28 +67,39 @@ function toggle(path: string) {
     <div class="flex items-center gap-2">
       <h3 id="ticket-timeline-heading" class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><ChartGantt :size="15" /> Timeline</h3>
       <LoaderCircle v-if="loading" :size="13" class="muted animate-spin" aria-label="Loading" />
-      <span v-if="rangeText" class="muted ml-auto text-[11px] font-semibold tabular-nums">{{ rangeText }}</span>
       <button
-        v-if="timeline && bounds"
+        v-if="!failed && warnings.length"
         type="button"
-        class="focus-ring muted grid size-7 shrink-0 place-items-center rounded-lg hover:bg-[var(--panel)] hover:text-[var(--ink)]"
-        :class="rangeText ? '' : 'ml-auto'"
-        aria-label="Open the timeline full screen"
-        title="Full screen"
-        @click="expanded = true"
+        class="focus-ring flex items-center gap-1 rounded-md px-1 text-[11px] font-semibold text-orange-700 hover:underline dark:text-orange-300"
+        :aria-expanded="warningsOpen"
+        aria-controls="ticket-timeline-warnings"
+        data-timeline-warnings-toggle
+        @click="warningsOpen = !warningsOpen"
       >
-        <Maximize2 :size="14" />
+        <TriangleAlert :size="13" aria-hidden="true" />
+        {{ warnings.length }} {{ warnings.length === 1 ? 'warning' : 'warnings' }}
+        <ChevronDown :size="12" class="transition-transform" :class="warningsOpen && 'rotate-180'" aria-hidden="true" />
       </button>
+      <span v-if="rangeText" class="muted ml-auto text-[11px] font-semibold tabular-nums">{{ rangeText }}</span>
     </div>
 
     <p v-if="failed" class="muted text-sm">The timeline could not be loaded.</p>
     <template v-else-if="timeline">
-      <ul v-if="warnings.length" class="space-y-1 rounded-xl bg-orange-400/10 p-2.5 text-xs text-orange-800 dark:text-orange-200">
-        <li v-for="warning in warnings" :key="`${warning.kind}-${warning.ticketId}`" class="flex items-start gap-1.5">
+      <!-- In the editor only the way in; the chart needs the whole window to be read. -->
+      <button
+        v-if="bounds"
+        type="button"
+        class="focus-ring flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]"
+        @click="expanded = true"
+      >
+        <Maximize2 :size="15" aria-hidden="true" /> Open timeline
+      </button>
+      <p v-else class="muted text-sm">Nothing here has a start or due date yet. Give the subtickets dates to see them on a timeline.</p>
+      <ul v-if="warnings.length && warningsOpen" id="ticket-timeline-warnings" class="space-y-1 rounded-xl bg-orange-400/10 p-2.5 text-xs text-orange-800 dark:text-orange-200">
+        <li v-for="warning in warnings" :key="warning.message" class="flex items-start gap-1.5">
           <TriangleAlert :size="13" class="mt-px shrink-0" aria-hidden="true" /> <span>{{ warning.message }}</span>
         </li>
       </ul>
-      <TimelineChart :timeline="timeline" :warned="warned" :collapsed="collapsed" @toggle="toggle" />
     </template>
 
     <DialogRoot v-model:open="expanded">
@@ -116,7 +131,7 @@ function toggle(path: string) {
           </header>
           <div class="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 sm:p-6">
             <ul v-if="warnings.length" class="space-y-1 rounded-xl bg-orange-400/10 p-3 text-sm text-orange-800 dark:text-orange-200">
-              <li v-for="warning in warnings" :key="`${warning.kind}-${warning.ticketId}`" class="flex items-start gap-2">
+              <li v-for="warning in warnings" :key="warning.message" class="flex items-start gap-2">
                 <TriangleAlert :size="15" class="mt-0.5 shrink-0" aria-hidden="true" /> <span>{{ warning.message }}</span>
               </li>
             </ul>

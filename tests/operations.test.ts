@@ -233,6 +233,84 @@ describe('the operation registry', () => {
       db.deleteBoard(other.id)
     })
 
+    it('lets a ticket wait on others of its workspace, never in a loop', async () => {
+      type Result = { ticket: { id: string; waitsOn: Array<{ ticketNumber: number; title: string }> } }
+      const update = (ticketId: string, waitsOn: string[]) => ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId, waitsOn })
+      const production = db.createTicket(boardId, { title: 'Produce fragment', laneId, startDate: '2026-03-01', dueDate: '2026-03-10' })!
+      const review = db.createTicket(boardId, { title: 'Review fragment', laneId, startDate: '2026-03-08', dueDate: '2026-03-14' })!
+      const setup = db.createTicket(boardId, { title: 'Set up mail', laneId, startDate: '2026-03-15', dueDate: '2026-03-16' })!
+
+      const { ticket } = await update(review.id, [production.id]) as Result
+      expect(ticket.waitsOn.map(item => item.title)).toEqual(['Produce fragment'])
+      await update(setup.id, [review.id])
+      // Itself, a loop through another, and a ticket of another workspace are refused.
+      expect(await statusOf(update(production.id, [production.id]))).toBe(422)
+      expect(await statusOf(update(production.id, [setup.id]))).toBe(422)
+      const elsewhere = db.createBoard('Far away', null, db.createWorkspace('Other firm').id)
+      const foreign = db.createTicket(elsewhere.id, { title: 'Foreign' })!
+      db.setBoardMember(elsewhere.id, people.editor!, 'editor', false)
+      expect(await statusOf(update(production.id, [foreign.id]))).toBe(422)
+      // The search offers neither the ticket itself nor anything already waiting on it.
+      const { candidates } = await ops.run(ops.ticketSubticketCandidates, actorOf('editor'), { ticketId: production.id, query: 'fragment', for: 'dependency' }) as { candidates: Array<{ id: string }> }
+      expect(candidates.map(item => item.id)).not.toContain(review.id)
+      expect(candidates.map(item => item.id)).not.toContain(production.id)
+
+      // Who waits on it, and the history on both sides.
+      const { dependents } = await ops.run(ops.ticketDependentsList, actorOf('editor'), { ticketId: production.id }) as { dependents: Array<{ title: string }> }
+      expect(dependents.map(item => item.title)).toEqual(['Review fragment'])
+      expect(db.listActivity(review.id).some(entry => entry.kind === 'waits_on' && entry.payload.change === 'added')).toBe(true)
+
+      // The review starts before production ends: a warning; once production is late, another.
+      const { dependencyWarnings } = await import('../shared/utils/timeline')
+      const waiting = { ...db.findTicket(review.id)!, done: false }
+      expect(dependencyWarnings(waiting, '2026-03-01').map(warning => warning.kind)).toEqual(['starts_before_blocker'])
+      expect(dependencyWarnings(waiting, '2026-03-12').map(warning => warning.kind)).toEqual(['starts_before_blocker', 'waits_on_late'])
+
+      // An empty list lets go of everything; a deleted ticket takes its rows along.
+      await update(setup.id, [])
+      expect(db.findTicket(setup.id)!.waitsOn).toEqual([])
+      db.deleteBoard(elsewhere.id)
+    })
+
+    it('shifts a ticket and everything waiting on it, stopping at finished work', async () => {
+      type Shift = { applied: boolean; moves: Array<{ ticketNumber: number; title: string; startDate: { to: string | null }; dueDate: { to: string | null } }>; skipped: Array<{ title: string | null; reason: string }> }
+      const other = db.createBoard('Shift elsewhere')
+      const otherLane = db.findBoardSummary(other.id)!.lanes.find(lane => !lane.isImport && !lane.isDone)!.id
+      const doneLane = db.findBoardSummary(boardId)!.lanes.find(lane => lane.isDone)!.id
+      const first = db.createTicket(boardId, { title: 'Brief', laneId, startDate: '2026-05-01', dueDate: '2026-05-05' })!
+      const second = db.createTicket(boardId, { title: 'Draft', laneId, startDate: '2026-05-06', dueDate: '2026-05-12', waitsOn: [first.id] })!
+      const third = db.createTicket(boardId, { title: 'Launch', laneId, dueDate: '2026-05-20', waitsOn: [second.id] })!
+      const finished = db.createTicket(boardId, { title: 'Old asset', laneId: doneLane, dueDate: '2026-05-08', waitsOn: [first.id] })!
+      const afterFinished = db.createTicket(boardId, { title: 'Behind the old asset', laneId, dueDate: '2026-05-21', waitsOn: [finished.id] })!
+      const hidden = db.createTicket(other.id, { title: 'Secret follow-up', laneId: otherLane, dueDate: '2026-05-22', waitsOn: [second.id] })!
+
+      const preview = await ops.run(ops.ticketShift, actorOf('editor'), { ticketId: first.id, days: 3, dryRun: true }) as Shift
+      expect(preview.applied).toBe(false)
+      expect(preview.moves.map(move => [move.title, move.startDate.to, move.dueDate.to])).toEqual([
+        ['Brief', '2026-05-04', '2026-05-08'],
+        ['Draft', '2026-05-09', '2026-05-15'],
+        ['Launch', null, '2026-05-23']
+      ])
+      // Finished work stays and stops the push; a board out of reach stays and is not named.
+      expect(preview.skipped).toEqual(expect.arrayContaining([
+        expect.objectContaining({ title: 'Old asset', reason: 'finished' }),
+        expect.objectContaining({ title: null, reason: 'no_access' })
+      ]))
+      expect(db.findTicket(second.id)!.startDate).toBe('2026-05-06')
+
+      const applied = await ops.run(ops.ticketShift, actorOf('editor'), { ticketId: first.id, days: 3 }) as Shift
+      expect(applied.applied).toBe(true)
+      expect(db.findTicket(third.id)!.dueDate).toBe('2026-05-23')
+      expect(db.findTicket(afterFinished.id)!.dueDate).toBe('2026-05-21')
+      expect(db.findTicket(hidden.id)!.dueDate).toBe('2026-05-22')
+      expect(db.listActivity(second.id).some(entry => entry.kind === 'start_date')).toBe(true)
+
+      const dateless = db.createTicket(boardId, { title: 'No dates', laneId })!
+      expect(await statusOf(ops.run(ops.ticketShift, actorOf('editor'), { ticketId: dateless.id, days: 1 }))).toBe(422)
+      expect(await statusOf(ops.run(ops.ticketShift, actorOf('editor'), { ticketId: first.id, days: 0 }))).toBe(422)
+      db.deleteBoard(other.id)
+    })
+
     it('files a subticket on another board of the workspace and ticks it from its lane', async () => {
       type Todo = { text: string; completed: boolean; subticketId: string | null; subticket: { ticketNumber: number; boardName: string; laneName: string; done: boolean } | null }
       type Result = { ticket: { id: string; todos: Todo[] }; subticket: { id: string; boardId: string; laneId: string; ticketNumber: number } }

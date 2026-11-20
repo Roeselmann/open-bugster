@@ -4,8 +4,22 @@ import type { AnyOperation } from '~~/server/operations'
 import {
   boardSummarySchema, categorySummarySchema, laneSummarySchema, labelSummarySchema,
   attachmentSchema, boardMemberSchema, personSchema, syncRunSchema, ticketActivitySchema,
-  subticketRefSchema, ticketCommentSchema, ticketSchema, ticketTypeSummarySchema, timelineNodeSchema, workspaceSummarySchema
+  dependencyRefSchema, subticketRefSchema, ticketCommentSchema, ticketSchema, ticketTypeSummarySchema, timelineNodeSchema, workspaceSummarySchema
 } from '~~/shared/schemas/domain'
+
+const shiftDatesSchema = z.object({ from: z.string().nullable(), to: z.string().nullable() })
+const shiftResultSchema = z.object({
+  days: z.number().int(),
+  applied: z.boolean().describe('False for a dry run: nothing was written.'),
+  moves: z.array(z.object({
+    ticketId: z.string(), ticketNumber: z.number().int(), title: z.string(), boardName: z.string(),
+    startDate: shiftDatesSchema, dueDate: shiftDatesSchema
+  })).describe('The ticket and everything waiting on it that has dates, in the order the push reached them.'),
+  skipped: z.array(z.object({
+    ticketId: z.string(), ticketNumber: z.number().int(), title: z.string().nullable(),
+    reason: z.enum(['finished', 'no_access'])
+  })).describe('Tickets the push stopped at: finished work, or a ticket the caller may not edit.')
+})
 
 export interface V1Route {
   method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
@@ -80,9 +94,11 @@ export const v1Routes: readonly V1Route[] = [
   { method: 'PATCH', path: '/tickets/{ticketId}', operation: ops.ticketUpdate, response: z.object({ ticket: ticketSchema }) },
   { method: 'POST', path: '/tickets/{ticketId}/move', operation: ops.ticketMove, response: z.object({ ticket: ticketSchema }) },
   { method: 'POST', path: '/tickets/{ticketId}/transfer', operation: ops.ticketTransfer, response: z.object({ ticket: ticketSchema, assigneeCleared: z.boolean().describe('True when the assignee was no member of the destination board and was dropped.') }) },
+  { method: 'GET', path: '/tickets/{ticketId}/dependents', operation: ops.ticketDependentsList, response: z.object({ dependents: z.array(dependencyRefSchema).describe('The tickets that wait on this one, on boards the caller can read.') }) },
+  { method: 'POST', path: '/tickets/{ticketId}/shift', operation: ops.ticketShift, response: shiftResultSchema },
   { method: 'GET', path: '/tickets/{ticketId}/parents', operation: ops.ticketParentsList, response: z.object({ parents: z.array(subticketRefSchema).describe('The tickets that hold this one as a subticket, on boards the caller can read.') }) },
   { method: 'GET', path: '/tickets/{ticketId}/timeline', operation: ops.ticketTimelineGet, response: z.object({ timeline: timelineNodeSchema }) },
-  { method: 'GET', path: '/tickets/{ticketId}/subticket-candidates', operation: ops.ticketSubticketCandidates, response: z.object({ candidates: z.array(subticketRefSchema).describe('Open tickets of the workspace that could be linked: send one back in the to-do list with its id as `subticketId`.') }) },
+  { method: 'GET', path: '/tickets/{ticketId}/subticket-candidates', operation: ops.ticketSubticketCandidates, response: z.object({ candidates: z.array(subticketRefSchema).describe('Open tickets of the workspace that could be linked: send one back in the to-do list with its id as `subticketId`. With `for=dependency`, the tickets this one could wait on instead: send ids back as `waitsOn`.') }) },
   { method: 'POST', path: '/tickets/{ticketId}/subtickets', operation: ops.ticketSubticketCreate, status: 201, response: z.object({ ticket: ticketSchema.describe('The parent, with the new subticket at the end of its to-do list.'), subticket: ticketSchema }) },
   { method: 'POST', path: '/tickets/{ticketId}/archive', operation: ops.ticketArchive, response: z.object({ ticket: ticketSchema }) },
   { method: 'POST', path: '/tickets/{ticketId}/restore', operation: ops.ticketRestore, response: z.object({ ticket: ticketSchema }) },

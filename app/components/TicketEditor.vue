@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, CalendarArrowUp, CalendarRange, Check, ChevronDown, Circle, CircleAlert, CircleCheck, CornerDownRight, CornerLeftUp, Download, ExternalLink, FileText, GripVertical, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Radio, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, CalendarArrowUp, CalendarClock, CalendarRange, Check, Circle, CircleAlert, CircleCheck, CornerDownRight, CornerLeftUp, Download, ExternalLink, FileText, Gauge, GripVertical, Link2, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Radio, Shapes, SlidersHorizontal, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogContent,
   DialogDescription,
@@ -7,23 +7,20 @@ import {
   DialogPortal,
   DialogRoot,
   DialogTitle,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuPortal,
-  DropdownMenuRoot,
-  DropdownMenuTrigger,
   VisuallyHidden,
 } from 'reka-ui'
-import type { Attachment, BoardMember, Category, LabelSummary, Lane, SubticketRef, Ticket, TicketLinkInput, TicketPatch, TicketPriority, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
+import type { Attachment, BoardMember, DependencyRef, ShiftResult, Category, LabelSummary, Lane, SubticketRef, Ticket, TicketLinkInput, TicketPatch, TicketPriority, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
 import { TODO_LIGHT_LABELS, todoLight } from '~~/shared/utils/todo-progress'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 import { boardToday, dueDescription, dueLevel, liveDescription, liveLevel } from '~~/shared/utils/due-date'
+import { dependencyWarnings } from '~~/shared/utils/timeline'
 import { cardImageCandidates, cardImages } from '~~/shared/utils/card-images'
 
 const props = withDefaults(defineProps<{ ticket?: Ticket | null; lanes: Lane[]; members?: BoardMember[]; canEdit?: boolean; canModerate?: boolean; categories?: Category[]; labels?: LabelSummary[]; ticketTypes?: TicketType[]; saving?: boolean; /** How the last field-by-field save went; shown in the footer of an existing ticket. */ saveState?: 'idle' | 'saving' | 'saved' | 'error'; deletingAttachmentId?: string | null; initialLaneId?: string | null; initialPlacement?: 'top' | 'bottom'; laneTicketCount?: number; /** Other boards of the workspace the ticket may be moved onto. */ boards?: BoardSummary[]; /** Boards of the workspace a subticket may be filed on, this one included. */ subticketBoards?: BoardSummary[]; /** Whether the board has TestFlight connected; without it a build number has nothing to refer to. */ testflight?: boolean; /** The board's lead times for the due date warning, as on the card. */ dueWarningDays?: number; dueAlertDays?: number }>(), { canEdit: true, testflight: true, dueWarningDays: 7, dueAlertDays: 1, saveState: 'idle', initialLaneId: null, initialPlacement: 'bottom', laneTicketCount: 0, boards: () => [], subticketBoards: () => [] })
 const emit = defineEmits<{
   close: []
+  /** Dates moved by a shift: this ticket and others changed on the server, so the board reloads. */
+  shifted: []
   /** Creates a new ticket. An existing one never comes through here: its fields save themselves via `patch`. */
   save: [payload: TicketPatch & { laneId?: string; placement?: 'top' | 'bottom'; todos: TicketTodoInput[]; attachments: File[]; stayOpen?: boolean }]
   /** One or more fields of an existing ticket, sent the moment they change. */
@@ -62,7 +59,7 @@ const liveText = computed(() => (liveState.value === 'none' || !form.liveUntil ?
 // Lifecycle: a plain ticket has no days at all; switched on, it gets start, due date and live window.
 // Not stored — it is on whenever any of those dates is set, or the ticket sits in a live lane.
 const lifecycleOpen = ref(false)
-const lifecycleOn = computed(() => lifecycleOpen.value || inLiveLane.value || Boolean(form.startDate || form.dueDate || form.liveFrom || form.liveUntil))
+const lifecycleOn = computed(() => lifecycleOpen.value || inLiveLane.value || Boolean(form.startDate || form.dueDate || form.liveFrom || form.liveUntil || props.ticket?.waitsOn.length))
 interface EditableTodo extends TicketTodoInput { key: string; subticket?: SubticketRef | null }
 const todos = ref<EditableTodo[]>([])
 const links = ref<TicketLinkInput[]>([])
@@ -464,12 +461,12 @@ const timelineKey = computed(() => {
 const subticketOpen = ref(false)
 const subticketPending = ref(false)
 const canAddSubticket = computed(() => Boolean(props.ticket && props.canEdit && props.subticketBoards.length))
-function subticketHref(subticket: SubticketRef) {
+function subticketHref(subticket: Pick<SubticketRef, 'boardId' | 'ticketNumber'>) {
   return `/b/${subticket.boardId}?ticket=${subticket.ticketNumber}`
 }
 
-// Where used: read when the ticket opens, for the count, and again whenever the menu opens,
-// since linking it elsewhere does not touch this ticket.
+// Where used: read when the ticket opens. Linking it elsewhere does not touch this ticket,
+// so the line can lag until it is opened again.
 const parents = ref<SubticketRef[]>([])
 async function loadParents() {
   const id = props.ticket?.id
@@ -511,11 +508,6 @@ function commit(changes: TicketPatch) {
   if (props.ticket && props.canEdit) emit('patch', props.ticket, changes)
 }
 
-/**
- * A start past the due date (or a due date before the start) drags the other one along
- * rather than being refused: the span stays whole, and both go out in one save.
- */
-/** The same for the live window: an end before its start drags the start along, and back. */
 function removeLiveWindow() {
   const hadDates = Boolean(props.ticket?.liveFrom || props.ticket?.liveUntil)
   form.liveFrom = ''
@@ -533,9 +525,127 @@ function toggleLifecycle() {
   const hadDates = Boolean(saved?.startDate || saved?.dueDate || saved?.liveFrom || saved?.liveUntil)
   form.startDate = form.dueDate = form.liveFrom = form.liveUntil = ''
   lifecycleOpen.value = false
-  if (hadDates) commit({ startDate: null, dueDate: null, liveFrom: null, liveUntil: null })
+  dependencyPicking.value = false
+  shiftOpen.value = false
+  // What it waits on is part of its plan, so it goes with the dates.
+  const changes: TicketPatch = hadDates ? { startDate: null, dueDate: null, liveFrom: null, liveUntil: null } : {}
+  if (saved?.waitsOn.length) changes.waitsOn = []
+  if (Object.keys(changes).length) commit(changes)
 }
 
+// Dependencies, finish-to-start: what this ticket waits on is part of it; who waits on it is
+// read apart, like the parents, since that is other tickets' business.
+const waitsOn = computed(() => props.ticket?.waitsOn ?? [])
+const dependents = ref<DependencyRef[]>([])
+async function loadDependents() {
+  const id = props.ticket?.id
+  if (!id) return
+  try {
+    const result = await $fetch<{ dependents: DependencyRef[] }>(`/api/tickets/${id}/dependents`)
+    if (props.ticket?.id === id) dependents.value = result.dependents
+  } catch {
+    // Only the hint goes missing.
+  }
+}
+watch(() => props.ticket?.id, () => {
+  dependents.value = []
+  loadDependents()
+}, { immediate: true })
+
+/** Why a ticket this one waits on is worth a look: it is late, or it ends after this one starts. */
+function blockerConcern(blocker: DependencyRef): 'late' | 'overlap' | null {
+  if (blocker.done || blocker.archived || inDoneLane.value) return null
+  if (blocker.dueDate && blocker.dueDate < today) return 'late'
+  const start = form.startDate || form.dueDate
+  return start && blocker.dueDate && start < blocker.dueDate ? 'overlap' : null
+}
+const dependencyIssues = computed(() => props.ticket
+  ? dependencyWarnings({ id: props.ticket.id, ticketNumber: props.ticket.ticketNumber, startDate: form.startDate || null, dueDate: form.dueDate || null, done: inDoneLane.value, waitsOn: waitsOn.value }, today)
+  : [])
+
+const dependencyPicking = ref(false)
+const dependencyQuery = ref('')
+const dependencyCandidates = ref<SubticketRef[]>([])
+const dependencySearching = ref(false)
+let dependencyTimer: ReturnType<typeof setTimeout> | null = null
+let dependencySequence = 0
+async function searchDependencies() {
+  const id = props.ticket?.id
+  if (!id) return
+  const sequence = ++dependencySequence
+  dependencySearching.value = true
+  try {
+    const result = await $fetch<{ candidates: SubticketRef[] }>(`/api/tickets/${id}/subticket-candidates`, { query: { query: dependencyQuery.value.trim(), for: 'dependency' } })
+    if (sequence === dependencySequence) dependencyCandidates.value = result.candidates.slice(0, 8)
+  } catch {
+    if (sequence === dependencySequence) dependencyCandidates.value = []
+  } finally {
+    if (sequence === dependencySequence) dependencySearching.value = false
+  }
+}
+watch(dependencyQuery, () => {
+  if (!dependencyPicking.value) return
+  if (dependencyTimer) clearTimeout(dependencyTimer)
+  dependencyTimer = setTimeout(searchDependencies, 200)
+})
+onBeforeUnmount(() => { if (dependencyTimer) clearTimeout(dependencyTimer) })
+function openDependencyPicker() {
+  dependencyPicking.value = true
+  dependencyQuery.value = ''
+  void searchDependencies()
+  nextTick(() => document.querySelector<HTMLInputElement>('[data-dependency-search]')?.focus())
+}
+function addDependency(candidate: SubticketRef) {
+  dependencyPicking.value = false
+  commit({ waitsOn: [...waitsOn.value.map(item => item.id), candidate.id] })
+}
+function removeDependency(id: string) {
+  commit({ waitsOn: waitsOn.value.filter(item => item.id !== id).map(item => item.id) })
+}
+
+// Shifting the plan: this ticket and everything waiting on it, by the same days. A preview first.
+const shiftOpen = ref(false)
+const shiftDays = ref(7)
+const shiftPreview = ref<ShiftResult | null>(null)
+const shiftBusy = ref(false)
+const shiftError = ref('')
+watch(shiftDays, () => { shiftPreview.value = null })
+watch(() => props.ticket?.id, () => {
+  shiftOpen.value = false
+  shiftPreview.value = null
+})
+async function runShift(dryRun: boolean) {
+  const id = props.ticket?.id
+  if (!id || !Number.isInteger(shiftDays.value) || !shiftDays.value) return
+  shiftBusy.value = true
+  shiftError.value = ''
+  try {
+    const result = await $fetch<ShiftResult>(`/api/tickets/${id}/shift`, { method: 'POST', body: { days: shiftDays.value, dryRun } })
+    if (dryRun) {
+      shiftPreview.value = result
+    } else {
+      shiftOpen.value = false
+      shiftPreview.value = null
+      emit('shifted')
+    }
+  } catch (error) {
+    shiftError.value = (error as { statusMessage?: string })?.statusMessage || 'The shift failed.'
+  } finally {
+    shiftBusy.value = false
+  }
+}
+const shiftDayFormatter = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+/** "Jan 8 – Jan 22 → Jan 4 – Jan 18"; a milestone or a lone date is one day. */
+function shiftText(dates: ShiftResult['moves'][number]) {
+  const day = (value: string) => shiftDayFormatter.format(new Date(`${value}T00:00:00Z`))
+  const span = (start: string | null, due: string | null) => {
+    const days = [...new Set([start, due].filter((value): value is string => Boolean(value)))]
+    return days.map(day).join(' – ')
+  }
+  return `${span(dates.startDate.from, dates.dueDate.from)} → ${span(dates.startDate.to, dates.dueDate.to)}`
+}
+
+/** An end before its start drags the start along, and back, as the span does. */
 function commitLiveWindow(changed: 'liveFrom' | 'liveUntil') {
   if (form.liveFrom && form.liveUntil && form.liveFrom > form.liveUntil) {
     if (changed === 'liveFrom') form.liveUntil = form.liveFrom
@@ -545,6 +655,10 @@ function commitLiveWindow(changed: 'liveFrom' | 'liveUntil') {
   commit(changed === 'liveFrom' ? { liveFrom: payload.liveFrom() } : { liveUntil: payload.liveUntil() })
 }
 
+/**
+ * A start past the due date (or a due date before the start) drags the other one along
+ * rather than being refused: the span stays whole, and both go out in one save.
+ */
 function commitSpan(changed: 'startDate' | 'dueDate') {
   if (form.startDate && form.dueDate && form.startDate > form.dueDate) {
     if (changed === 'startDate') form.dueDate = form.startDate
@@ -863,83 +977,64 @@ function focusTitle(event: Event) {
           <DialogDescription>{{ isEdit ? 'Edit the ticket. Changes are saved as you make them.' : 'Create a new ticket.' }}</DialogDescription>
         </VisuallyHidden>
         <form class="flex min-h-full flex-col" @submit.prevent="submit()">
-          <header class="sticky top-0 z-10 flex items-center gap-3 border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_62%,var(--canvas))] px-5 py-4 sm:px-7">
-            <DialogTitle as-child>
-              <h2 class="shrink-0 text-xl font-bold tracking-[-.03em]">
-                <template v-if="ticket"><span class="hidden sm:inline">Ticket </span>#{{ ticket.ticketNumber }}</template>
-                <template v-else>New ticket</template>
-              </h2>
-            </DialogTitle>
-            <!-- The way up: the tickets that hold this one as a subticket, as the to-dos are the way down. Only there when there are any. -->
-            <DropdownMenuRoot v-if="ticket && parents.length" @update:open="$event && loadParents()">
-              <DropdownMenuTrigger
-                class="focus-ring group flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-[var(--line)] px-2.5 text-xs font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] data-[state=open]:border-[var(--accent)] data-[state=open]:bg-[var(--accent-soft)]"
-                :aria-label="`Where used: in ${parents.length} ${parents.length === 1 ? 'ticket' : 'tickets'}`"
-              >
-                <CornerLeftUp :size="14" aria-hidden="true" />
-                <span class="hidden sm:inline">Where used</span>
-                <span class="rounded-md bg-[var(--accent-soft)] px-1.5 text-[11px] tabular-nums text-[var(--accent)] group-hover:bg-[var(--panel)] group-data-[state=open]:bg-[var(--panel)]">{{ parents.length }}</span>
-                <ChevronDown :size="14" class="muted shrink-0 transition-transform duration-150 group-data-[state=open]:rotate-180" aria-hidden="true" />
-              </DropdownMenuTrigger>
-              <DropdownMenuPortal>
-                <DropdownMenuContent
-                  align="start"
-                  :side-offset="6"
-                  class="ui-popover z-[100] w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel-strong)] p-1 text-[var(--ink)] shadow-[0_18px_45px_rgba(0,0,0,.16),0_3px_12px_rgba(0,0,0,.08)]"
-                >
-                  <DropdownMenuLabel class="muted flex items-center gap-1.5 px-3 pb-1 pt-2 text-[11px] font-bold uppercase tracking-[.08em]">
-                    <CornerLeftUp :size="12" aria-hidden="true" /> Where used
-                  </DropdownMenuLabel>
-                  <DropdownMenuItem
-                    v-for="parent in parents"
-                    :key="parent.id"
-                    class="flex cursor-default select-none flex-col rounded-lg px-3 py-2 outline-none data-[highlighted]:bg-[var(--accent-soft)]"
-                    @select="navigateTo(subticketHref(parent))"
+          <header class="sticky top-0 z-10 border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_62%,var(--canvas))] px-5 py-4 sm:px-7">
+            <div class="flex items-center gap-3">
+              <DialogTitle as-child>
+                <h2 class="shrink-0 text-xl font-bold tracking-[-.03em]">
+                  <template v-if="ticket"><span class="hidden sm:inline">Ticket </span>#{{ ticket.ticketNumber }}</template>
+                  <template v-else>New ticket</template>
+                </h2>
+              </DialogTitle>
+              <!-- The lane, with what moves the ticket within it or off the board, rides in the header. -->
+              <div class="ml-auto flex min-w-0 max-w-xs flex-1 items-center gap-1.5">
+                <div class="min-w-0 flex-1">
+                  <UiSelect
+                    v-if="ticket"
+                    :model-value="ticket.laneId"
+                    :options="laneOptions"
+                    :disabled="!canEdit"
+                    aria-label="Lane"
+                    compact
+                    @update:model-value="emit('move', ticket, $event)"
+                  />
+                  <UiSelect v-else :model-value="form.laneId" :options="laneOptions" aria-label="Lane" compact @update:model-value="form.laneId = $event" />
+                </div>
+                <template v-if="ticket && canEdit">
+                  <button type="button" :class="headerButton" :disabled="atTop" aria-label="Move to top of lane" title="Move to top of lane" @click="emit('reorder', ticket, 'top')">
+                    <ArrowUpToLine :size="15" aria-hidden="true" />
+                  </button>
+                  <button type="button" :class="headerButton" :disabled="atBottom" aria-label="Move to bottom of lane" title="Move to bottom of lane" @click="emit('reorder', ticket, 'bottom')">
+                    <ArrowDownToLine :size="15" aria-hidden="true" />
+                  </button>
+                  <button
+                    v-if="boards.length"
+                    type="button"
+                    :class="[headerButton, transferOpen ? '!border-[var(--ink)] !bg-[var(--ink)] !text-[var(--canvas)]' : '']"
+                    :aria-expanded="transferOpen"
+                    :aria-label="transferOpen ? 'Cancel moving to another board' : 'Move to board'"
+                    :title="transferOpen ? 'Cancel' : 'Move to board'"
+                    @click="toggleTransfer"
                   >
-                    <span class="w-full truncate text-sm font-medium" :class="parent.archived ? 'muted line-through' : ''">{{ parent.title }}</span>
-                    <span class="muted flex w-full min-w-0 items-center gap-1 text-[11px]">
-                      <span class="shrink-0 font-semibold tabular-nums">#{{ parent.ticketNumber }}</span>
-                      <span class="truncate">· {{ parent.boardName }} · {{ parent.laneName }}{{ parent.archived ? ' · archived' : '' }}</span>
-                    </span>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenuPortal>
-            </DropdownMenuRoot>
-            <!-- The lane, with what moves the ticket within it or off the board, rides in the header. -->
-            <div class="ml-auto flex min-w-0 max-w-xs flex-1 items-center gap-1.5">
-              <div class="min-w-0 flex-1">
-                <UiSelect
-                  v-if="ticket"
-                  :model-value="ticket.laneId"
-                  :options="laneOptions"
-                  :disabled="!canEdit"
-                  aria-label="Lane"
-                  compact
-                  @update:model-value="emit('move', ticket, $event)"
-                />
-                <UiSelect v-else :model-value="form.laneId" :options="laneOptions" aria-label="Lane" compact @update:model-value="form.laneId = $event" />
+                    <ArrowRightLeft :size="15" aria-hidden="true" />
+                  </button>
+                </template>
               </div>
-              <template v-if="ticket && canEdit">
-                <button type="button" :class="headerButton" :disabled="atTop" aria-label="Move to top of lane" title="Move to top of lane" @click="emit('reorder', ticket, 'top')">
-                  <ArrowUpToLine :size="15" aria-hidden="true" />
-                </button>
-                <button type="button" :class="headerButton" :disabled="atBottom" aria-label="Move to bottom of lane" title="Move to bottom of lane" @click="emit('reorder', ticket, 'bottom')">
-                  <ArrowDownToLine :size="15" aria-hidden="true" />
-                </button>
-                <button
-                  v-if="boards.length"
-                  type="button"
-                  :class="[headerButton, transferOpen ? '!border-[var(--ink)] !bg-[var(--ink)] !text-[var(--canvas)]' : '']"
-                  :aria-expanded="transferOpen"
-                  :aria-label="transferOpen ? 'Cancel moving to another board' : 'Move to board'"
-                  :title="transferOpen ? 'Cancel' : 'Move to board'"
-                  @click="toggleTransfer"
-                >
-                  <ArrowRightLeft :size="15" aria-hidden="true" />
-                </button>
-              </template>
+              <button type="button" class="focus-ring grid size-10 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]" aria-label="Close" @click="requestClose"><X :size="20" /></button>
             </div>
-            <button type="button" class="focus-ring grid size-10 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]" aria-label="Close" @click="requestClose"><X :size="20" /></button>
+            <!-- The way up: a second line with every ticket holding this one as a subticket, as the to-dos are the way down. -->
+            <nav v-if="ticket && parents.length" class="mt-3 flex flex-wrap gap-1.5" aria-label="Where used: the tickets this one is a subticket of">
+              <NuxtLink
+                v-for="parent in parents"
+                :key="parent.id"
+                :to="subticketHref(parent)"
+                class="focus-ring flex h-8 min-w-0 max-w-full items-center gap-1.5 rounded-xl border border-[var(--line)] px-2.5 text-xs font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] sm:max-w-[22rem]"
+                :title="`Subticket of #${parent.ticketNumber} ${parent.title} · ${parent.boardName} · ${parent.laneName}${parent.archived ? ' · archived' : ''}`"
+              >
+                <CornerLeftUp :size="14" class="shrink-0" aria-hidden="true" />
+                <span class="truncate" :class="parent.archived ? 'muted line-through' : ''">{{ parent.title }}</span>
+                <span class="muted shrink-0 tabular-nums">#{{ parent.ticketNumber }}</span>
+              </NuxtLink>
+            </nav>
           </header>
 
           <!-- Columns stretch to the footer so the lines between them run all the way down; what sticks is inside. -->
@@ -1188,25 +1283,58 @@ function focusTitle(event: Event) {
               </div>
             </div>
 
-            <div class="grid gap-4 sm:grid-cols-2">
+            <label v-if="showBuildNumber" class="block">
+              <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><TestTubeDiagonal :size="14" /> Build number</span>
+              <input v-model="form.buildNumber" maxlength="100" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none" placeholder="e.g. 42 or 1.4.0 (42)" :readonly="!canEdit" @blur="commitBuildNumber" @keydown.enter.prevent="commitBuildNumber">
+            </label>
+
+            <!-- How the ticket is sorted: how urgent, which category, which labels. -->
+            <section class="space-y-4 rounded-2xl border border-[color-mix(in_srgb,var(--accent)_22%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_5%,transparent)] p-4" aria-labelledby="ticket-classification-heading">
+              <h3 id="ticket-classification-heading" class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><SlidersHorizontal :size="14" /> Classification</h3>
+              <div class="grid items-start gap-4 sm:grid-cols-2">
+                <div class="block">
+                  <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Gauge :size="14" /> Priority</span>
+                  <UiSelect
+                    :model-value="form.priority"
+                    :options="priorityOptions"
+                    aria-label="Priority"
+                    :disabled="!canEdit"
+                    @update:model-value="form.priority = $event as TicketPriority; commit({ priority: form.priority })"
+                  />
+                </div>
+                <div class="block">
+                  <label for="ticket-category" class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Tag :size="14" /> Category</label>
+                  <div @focusout="leaveCategory" @keydown.enter.prevent="nextTick(commitCategory)">
+                    <UiCombobox
+                      id="ticket-category"
+                      :model-value="form.categoryName"
+                      :options="categoryOptions"
+                      aria-label="Category"
+                      placeholder="Select or enter a new category"
+                      @update:model-value="form.categoryName = $event"
+                      @select="form.categoryName = $event; commitCategory()"
+                    />
+                  </div>
+                </div>
+              </div>
+
               <div class="block">
-                <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Priority</span>
-                <UiSelect
-                  :model-value="form.priority"
-                  :options="priorityOptions"
-                  aria-label="Priority"
-                  :disabled="!canEdit"
-                  @update:model-value="form.priority = $event as TicketPriority; commit({ priority: form.priority })"
+                <label for="ticket-labels" class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Tags :size="14" /> Labels</label>
+                <UiMultiCombobox
+                  id="ticket-labels"
+                  :model-value="form.labels"
+                  :options="labelOptions"
+                  @update:model-value="form.labels = $event; commit({ labels: payload.labels() })"
+                  allow-create
+                  aria-label="Labels"
+                  placeholder="Select or type a new label"
+                  empty-text="No labels on this board yet."
                 />
               </div>
-              <label v-if="showBuildNumber" class="block">
-                <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><TestTubeDiagonal :size="14" /> Build number</span>
-                <input v-model="form.buildNumber" maxlength="100" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none" placeholder="e.g. 42 or 1.4.0 (42)" :readonly="!canEdit" @blur="commitBuildNumber" @keydown.enter.prevent="commitBuildNumber">
-              </label>
-            </div>
+            </section>
 
             <!-- The ticket's days, kept apart so a plain ticket stays plain: switched off it has none. -->
-            <section class="rounded-2xl border border-[var(--line)]" :class="lifecycleOn ? 'space-y-4 p-4' : 'px-4 py-3'" aria-labelledby="ticket-lifecycle-heading">
+            <section class="rounded-2xl border border-[color-mix(in_srgb,var(--accent)_22%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_5%,transparent)]" :class="lifecycleOn ? 'space-y-4 p-4' : 'px-4 py-3'" aria-labelledby="ticket-lifecycle-heading">
               <div class="flex items-center gap-3">
                 <div class="min-w-0 flex-1">
                   <h3 id="ticket-lifecycle-heading" class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><CalendarRange :size="14" /> Lifecycle</h3>
@@ -1305,39 +1433,127 @@ function focusTitle(event: Event) {
                     >
                   </label>
                 </div>
+
+                <!-- Finish-to-start: it starts once these end. Only an existing ticket can point at others. -->
+                <div v-if="ticket" class="space-y-2 border-t border-[var(--line)] pt-4">
+                  <div class="flex items-center gap-2">
+                    <span class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Link2 :size="14" /> Waits on</span>
+                    <button
+                      v-if="canEdit && !dependencyPicking && waitsOn.length < 50"
+                      type="button"
+                      class="focus-ring muted ml-auto flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-xs font-semibold hover:bg-[var(--panel)] hover:text-[var(--ink)]"
+                      title="Pick a ticket this one can only start once it has ended"
+                      @click="openDependencyPicker"
+                    ><Plus :size="13" /> Add</button>
+                  </div>
+                  <ul v-if="waitsOn.length" class="space-y-1">
+                    <li v-for="blocker in waitsOn" :key="blocker.id" class="surface-strong flex items-center gap-2 rounded-xl px-2.5 py-1.5">
+                      <span class="grid size-4 shrink-0 place-items-center" :class="blocker.done ? 'text-[var(--accent)]' : 'muted'">
+                        <CircleCheck v-if="blocker.done" :size="15" aria-label="Done" />
+                        <Circle v-else :size="15" aria-label="Open" />
+                      </span>
+                      <NuxtLink :to="subticketHref(blocker)" class="focus-ring group/dep flex min-w-0 flex-1 flex-col rounded-md px-1 hover:bg-[var(--panel)]" :title="`Open #${blocker.ticketNumber}`">
+                        <span class="truncate text-sm group-hover/dep:underline" :class="blocker.done ? 'muted line-through' : ''">{{ blocker.title }}</span>
+                        <span class="muted flex min-w-0 items-center gap-1 text-[11px]">
+                          <span class="shrink-0 font-semibold tabular-nums">#{{ blocker.ticketNumber }}</span>
+                          <span class="truncate">· {{ blocker.boardName }} · {{ blocker.laneName }}<template v-if="blocker.dueDate"> · due {{ blocker.dueDate }}</template></span>
+                        </span>
+                      </NuxtLink>
+                      <span
+                        v-if="blockerConcern(blocker)"
+                        class="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold"
+                        :class="blockerConcern(blocker) === 'late' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
+                        :title="blockerConcern(blocker) === 'late' ? 'It is past its due date and not done' : 'It ends after this ticket starts'"
+                      >{{ blockerConcern(blocker) === 'late' ? 'Late' : 'Ends later' }}</span>
+                      <button
+                        v-if="canEdit"
+                        type="button"
+                        class="focus-ring muted grid size-7 shrink-0 place-items-center rounded-lg hover:bg-[var(--panel)] hover:text-rose-600"
+                        :aria-label="`No longer wait on #${blocker.ticketNumber}`"
+                        @click="removeDependency(blocker.id)"
+                      ><X :size="14" /></button>
+                    </li>
+                  </ul>
+                  <p v-else-if="!dependencyPicking" class="muted text-xs">Nothing. Add the tickets that have to end before this one can start.</p>
+
+                  <div v-if="dependencyPicking" class="space-y-1" @keydown.esc.stop.prevent="dependencyPicking = false">
+                    <div class="relative">
+                      <input
+                        v-model="dependencyQuery"
+                        data-dependency-search
+                        class="focus-ring surface-strong h-10 w-full rounded-xl px-3 pr-9 text-sm outline-none"
+                        placeholder="Search by title or #number"
+                        aria-label="Search for a ticket to wait on"
+                      >
+                      <LoaderCircle v-if="dependencySearching" :size="14" class="muted absolute right-3 top-1/2 -translate-y-1/2 animate-spin" aria-hidden="true" />
+                    </div>
+                    <button
+                      v-for="candidate in dependencyCandidates"
+                      :key="candidate.id"
+                      type="button"
+                      class="focus-ring flex w-full items-center gap-2.5 rounded-xl border border-transparent px-3 py-1.5 text-left hover:border-[var(--line)] hover:bg-[var(--panel)]"
+                      @click="addDependency(candidate)"
+                    >
+                      <span class="min-w-0 flex-1">
+                        <span class="block truncate text-sm font-medium">{{ candidate.title }}</span>
+                        <span class="muted block truncate text-[11px]"><span class="font-semibold tabular-nums">#{{ candidate.ticketNumber }}</span> · {{ candidate.boardName }} · {{ candidate.laneName }}</span>
+                      </span>
+                      <CircleCheck v-if="candidate.done" :size="14" class="shrink-0 text-[var(--accent)]" aria-label="Done" />
+                    </button>
+                    <div class="flex items-center gap-2">
+                      <p v-if="!dependencySearching && !dependencyCandidates.length" class="muted text-xs">{{ dependencyQuery.trim() ? 'No open ticket of this workspace matches.' : 'No ticket of this workspace to wait on.' }}</p>
+                      <button type="button" class="focus-ring muted ml-auto rounded-lg px-1.5 py-0.5 text-xs font-semibold hover:text-[var(--ink)]" @click="dependencyPicking = false">Cancel</button>
+                    </div>
+                  </div>
+
+                  <ul v-if="dependencyIssues.length" class="space-y-1 rounded-xl bg-orange-400/10 p-2.5 text-xs text-orange-800 dark:text-orange-200">
+                    <li v-for="issue in dependencyIssues" :key="issue.message" class="flex items-start gap-1.5"><CircleAlert :size="13" class="mt-px shrink-0" aria-hidden="true" /> {{ issue.message }}</li>
+                  </ul>
+
+                  <p v-if="dependents.length" class="muted flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs">
+                    <span>Waited on by</span>
+                    <NuxtLink v-for="item in dependents" :key="item.id" :to="subticketHref(item)" class="focus-ring rounded font-semibold tabular-nums hover:text-[var(--accent)] hover:underline" :title="item.title">#{{ item.ticketNumber }}</NuxtLink>
+                  </p>
+                </div>
+
+                <!-- Moving the plan: these dates and everything waiting on them, by the same days. -->
+                <div v-if="ticket && canEdit && (ticket.startDate || ticket.dueDate)" class="border-t border-[var(--line)] pt-3">
+                  <button
+                    v-if="!shiftOpen"
+                    type="button"
+                    class="focus-ring muted flex items-center gap-1.5 rounded-lg px-1 text-xs font-semibold hover:text-[var(--ink)]"
+                    :title="dependents.length ? 'Move this ticket and everything waiting on it' : 'Move this ticket’s start and due date'"
+                    @click="shiftOpen = true; shiftPreview = null; shiftError = ''"
+                  ><CalendarClock :size="13" /> Shift dates{{ dependents.length ? ' with what waits on it' : '' }}…</button>
+                  <div v-else class="space-y-2">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <label class="flex items-center gap-2 text-xs font-semibold">
+                        <CalendarClock :size="14" aria-hidden="true" /> Shift by
+                        <input v-model.number="shiftDays" type="number" min="-366" max="366" step="1" class="focus-ring surface-strong h-9 w-20 rounded-lg px-2 text-sm tabular-nums outline-none" aria-label="Days to shift by; negative moves earlier">
+                        days
+                      </label>
+                      <button type="button" class="focus-ring h-9 rounded-xl border border-[var(--line)] px-3 text-xs font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:opacity-50" :disabled="shiftBusy || !shiftDays" @click="runShift(true)">Preview</button>
+                      <button type="button" class="focus-ring muted ml-auto rounded-lg px-1.5 text-xs font-semibold hover:text-[var(--ink)]" @click="shiftOpen = false">Cancel</button>
+                    </div>
+                    <div v-if="shiftPreview" class="surface-strong space-y-1.5 rounded-xl p-3 text-xs">
+                      <p class="font-semibold">{{ shiftPreview.moves.length }} {{ shiftPreview.moves.length === 1 ? 'ticket moves' : 'tickets move' }} by {{ shiftPreview.days > 0 ? '+' : '' }}{{ shiftPreview.days }} {{ Math.abs(shiftPreview.days) === 1 ? 'day' : 'days' }}:</p>
+                      <ul class="space-y-0.5">
+                        <li v-for="move in shiftPreview.moves" :key="move.ticketId" class="flex min-w-0 gap-2">
+                          <span class="muted w-10 shrink-0 font-semibold tabular-nums">#{{ move.ticketNumber }}</span>
+                          <span class="min-w-0 flex-1 truncate">{{ move.title }}</span>
+                          <span class="muted shrink-0 tabular-nums">{{ shiftText(move) }}</span>
+                        </li>
+                      </ul>
+                      <p v-if="shiftPreview.skipped.length" class="muted">
+                        Stays put: <template v-for="(item, index) in shiftPreview.skipped" :key="item.ticketId">{{ index ? ', ' : '' }}#{{ item.ticketNumber }} ({{ item.reason === 'finished' ? 'finished' : 'no access' }})</template>
+                      </p>
+                      <button type="button" class="focus-ring h-9 rounded-xl bg-[var(--accent)] px-3 text-xs font-semibold text-white disabled:opacity-50" :disabled="shiftBusy" @click="runShift(false)">Shift {{ shiftPreview.moves.length }} {{ shiftPreview.moves.length === 1 ? 'ticket' : 'tickets' }}</button>
+                    </div>
+                    <p v-if="shiftError" class="text-xs text-rose-600">{{ shiftError }}</p>
+                  </div>
+                </div>
               </template>
             </section>
-
-            <div class="block">
-              <label for="ticket-category" class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Tag :size="14" /> Category</label>
-              <div @focusout="leaveCategory" @keydown.enter.prevent="nextTick(commitCategory)">
-                <UiCombobox
-                  id="ticket-category"
-                  :model-value="form.categoryName"
-                  :options="categoryOptions"
-                  aria-label="Category"
-                  placeholder="Select or enter a new category"
-                  @update:model-value="form.categoryName = $event"
-                  @select="form.categoryName = $event; commitCategory()"
-                />
-              </div>
-              <span class="muted mt-1.5 block text-[11px]">Optional · {{ isEdit ? 'A new name is created as soon as you leave the field.' : 'New names are created when the ticket is created.' }}</span>
-            </div>
-
-            <div class="block">
-              <label for="ticket-labels" class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Tags :size="14" /> Labels</label>
-              <UiMultiCombobox
-                id="ticket-labels"
-                :model-value="form.labels"
-                :options="labelOptions"
-                @update:model-value="form.labels = $event; commit({ labels: payload.labels() })"
-                allow-create
-                aria-label="Labels"
-                placeholder="Select or type a new label"
-                empty-text="No labels on this board yet."
-              />
-              <span class="muted mt-1.5 block text-[11px]">{{ isEdit ? 'New names are created right away' : 'New names are created when the ticket is created' }} · a label no ticket uses any more is removed.</span>
-            </div>
 
             <section v-if="ticket?.feedback" class="rounded-2xl bg-[var(--accent-soft)] p-4 sm:p-5">
               <div class="mb-4 flex items-center gap-2 text-sm font-bold"><TestTubeDiagonal :size="17" /> TestFlight metadata</div>

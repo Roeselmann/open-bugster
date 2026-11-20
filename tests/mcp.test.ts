@@ -189,7 +189,7 @@ describe('the MCP tool surface', () => {
       expect(found.total).toBe(1)
       const entry = found.tickets[0]
       expect(Object.keys(entry).sort()).toEqual(
-        ['assignee', 'boardId', 'category', 'commentCount', 'dueDate', 'id', 'labels', 'laneId', 'liveFrom', 'liveUntil', 'number', 'priority', 'progress', 'startDate', 'title', 'type']
+        ['assignee', 'boardId', 'category', 'commentCount', 'dueDate', 'id', 'labels', 'laneId', 'liveFrom', 'liveUntil', 'number', 'priority', 'progress', 'startDate', 'title', 'type', 'waitsOn']
       )
       // The three fields that make a list expensive are exactly the ones left out.
       expect(entry).not.toHaveProperty('description')
@@ -289,6 +289,25 @@ describe('the MCP tool surface', () => {
       expect(updated.title).toBe('After')
       expect(updated.priority).toBe('low')
       expect(updated.labels).toEqual(['keep'])
+    })
+
+    it('links what a ticket waits on and shifts the chain, a dry run first', async () => {
+      const brief = await call('create_ticket', { boardId, laneId, title: 'Chain brief', startDate: '2026-06-01', dueDate: '2026-06-03' })
+      const mail = await call('create_ticket', { boardId, laneId, title: 'Chain mail', dueDate: '2026-06-10' })
+      const linked = await call('update_ticket', { ticketId: mail.id, waitsOn: [brief.id] })
+      expect(linked.waitsOn).toEqual([brief.number])
+      const full = await call('get_ticket', { ticketId: brief.id })
+      expect(full.waitedOnBy.map((item: { number: number }) => item.number)).toEqual([mail.number])
+
+      // A dry run comes on its own and writes nothing.
+      await expect(call('update_ticket', { ticketId: brief.id, title: 'Renamed', shift: { days: 2, dryRun: true } })).rejects.toThrow()
+      const preview = await call('update_ticket', { ticketId: brief.id, shift: { days: 2, dryRun: true } })
+      expect(preview.applied).toBe(false)
+      expect(preview.moves.map((move: { number: number; dueDate: { to: string } }) => [move.number, move.dueDate.to])).toEqual([[brief.number, '2026-06-05'], [mail.number, '2026-06-12']])
+      expect((await call('get_ticket', { ticketId: mail.id })).dueDate).toBe('2026-06-10')
+      const applied = await call('update_ticket', { ticketId: brief.id, shift: { days: 2 } })
+      expect(applied.applied).toBe(true)
+      expect((await call('get_ticket', { ticketId: mail.id })).dueDate).toBe('2026-06-12')
     })
 
     it('writes to-dos as a whole list, and omitting the field leaves them alone', async () => {

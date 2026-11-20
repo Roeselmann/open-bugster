@@ -4,11 +4,13 @@ import { boardMemberIds, boardViewer, requireBoardAccess, requireTicketAccess } 
 import type { Actor } from '../utils/actor'
 import {
   archiveTicket, createSubticket, createTicket, listActivity, listDueTickets, listBoardActivity, listTickets, listTicketsPage,
-  findBoard, listBoards, moveTicket, parentTicketRefsOf, searchSubticketCandidates, personById, restoreTicket, subticketIdsOf, ticketIdByNumber, ticketTimeline, ticketTypeBelongsToBoard, transferTicket, updateTicket
+  atomically, dependencyRefs, findBoard, findLane, findTicket, listBoards, moveTicket, parentTicketRefsOf, searchSubticketCandidates, personById, restoreTicket, subticketIdsOf, ticketIdByNumber, ticketTimeline, ticketTypeBelongsToBoard, transferTicket, updateTicket, ticketsWaitingOn, waitingTicketIds, waitsOnTransitively
 } from '../utils/db'
-import { importedTicketUpdateSchema, subticketCreateSchema, ticketCreateSchema, ticketMoveSchema, ticketTransferSchema, ticketUpdateSchema } from '../utils/validation'
+import { importedTicketUpdateSchema, subticketCreateSchema, ticketCreateSchema, ticketMoveSchema, ticketShiftSchema, ticketTransferSchema, ticketUpdateSchema } from '../utils/validation'
 import { deleteLinkThumbnails } from '../utils/link-preview'
 import { cardImageCandidates } from '../../shared/utils/card-images'
+import { addDays } from '../../shared/utils/timeline'
+import type { ShiftMove, ShiftResult, ShiftSkip } from '../../shared/types/domain'
 import { createdId, defineOperation } from './types'
 import { orNotFound } from './run'
 
@@ -124,6 +126,7 @@ export const ticketCreate = defineOperation({
     checkSpan(rest.startDate ?? null, rest.dueDate ?? null)
     checkLiveWindow(rest.liveFrom ?? null, rest.liveUntil ?? null)
     checkNewSubtickets(ctx.actor, boardId, null, new Set(), rest.todos)
+    if (rest.waitsOn?.length) checkWaitsOn(ctx.actor, boardId, null, new Set(), rest.waitsOn)
     // The author answers for the ticket, the actor for the write. Identical from the browser,
     // and different the moment a service identity files on somebody's behalf.
     const ticket = createTicket(boardId, rest, personById(ctx.actor.principalId), ctx.actor)
@@ -179,6 +182,7 @@ export const ticketUpdate = defineOperation({
     }
     if (fields.typeId && fields.typeId !== ticket.type?.id && !ticketTypeBelongsToBoard(fields.typeId, ticket.boardId)) throw foreignType()
     if (fields.todos?.some(todo => todo.subticketId)) checkNewSubtickets(ctx.actor, ticket.boardId, ticket.id, subticketIdsOf(ticket.id), fields.todos)
+    if (fields.waitsOn?.length) checkWaitsOn(ctx.actor, ticket.boardId, ticket.id, new Set(ticket.waitsOn.map(item => item.id)), fields.waitsOn)
     if (fields.coverAttachmentId && !ticket.attachments.some(file => file.id === fields.coverAttachmentId && file.mimeType.startsWith('image/'))) {
       throw createError({ statusCode: 422, statusMessage: 'The card image has to be one of this ticket’s image attachments.' })
     }
@@ -241,7 +245,9 @@ export const ticketSubticketCandidates = defineOperation({
     ticketId,
     // Coerced because a query string turns "42" into a number on the way in.
     query: z.coerce.string().trim().max(160).default(''),
-    limit: z.number().int().min(1).max(50).default(20)
+    limit: z.number().int().min(1).max(50).default(20),
+    /** What the pick is for: a subticket, or a ticket this one is to wait on. */
+    for: z.enum(['subticket', 'dependency']).default('subticket')
   }),
   requires: { scope: 'ticket', role: 'editor', ticketId: input => input.ticketId },
   audit: false,
@@ -252,7 +258,10 @@ export const ticketSubticketCandidates = defineOperation({
     const boardIds = listBoards(boardViewer(ctx.account))
       .filter(board => board.workspaceId === workspaceId && readable(ctx.actor, board.id))
       .map(board => board.id)
-    const exclude = new Set([parent.id, ...subticketIdsOf(parent.id)])
+    // A ticket that already waits on this one, however indirectly, would close a loop.
+    const exclude = new Set(input.for === 'dependency'
+      ? [parent.id, ...parent.waitsOn.map(item => item.id), ...ticketsWaitingOn(parent.id)]
+      : [parent.id, ...subticketIdsOf(parent.id)])
     return { candidates: searchSubticketCandidates(boardIds, input.query, exclude, input.limit) }
   }
 })
@@ -282,6 +291,80 @@ export const ticketParentsList = defineOperation({
   requires: { scope: 'ticket', role: 'viewer', ticketId: input => input.ticketId },
   audit: false,
   run: ctx => ({ parents: parentTicketRefsOf(ctx.ticket!.id).filter(parent => readable(ctx.actor, parent.boardId)) })
+})
+
+/**
+ * Who waits on a ticket: the other side of `waitsOn`. A ticket on a board the caller cannot
+ * read is left out, as with the parents.
+ */
+export const ticketDependentsList = defineOperation({
+  name: 'ticket.dependents.list',
+  summary: 'List the tickets that wait on this ticket',
+  input: z.object({ ticketId }),
+  requires: { scope: 'ticket', role: 'viewer', ticketId: input => input.ticketId },
+  audit: false,
+  run: ctx => ({ dependents: dependencyRefs('waitedOnBy', ctx.ticket!.id).filter(item => readable(ctx.actor, item.boardId)) })
+})
+
+/**
+ * Moves a ticket's start and due date by whole days, and those of everything waiting on it,
+ * directly or through others, by the same days. Finished work stays where it is, and so does a
+ * ticket the caller may not edit; either stops the push there. A dry run reports the same
+ * without writing. Live windows stay put: a run that follows the go-live is moved by hand.
+ */
+export const ticketShift = defineOperation({
+  name: 'ticket.shift',
+  summary: 'Move a ticket’s dates by days, and everything waiting on it',
+  input: ticketShiftSchema.extend({ ticketId }),
+  requires: { scope: 'ticket', role: 'editor', ticketId: input => input.ticketId },
+  audit: { targetType: 'ticket', targetId: input => input.ticketId, changes: input => ({ days: input.days, dryRun: input.dryRun }) },
+  run: (ctx, input): ShiftResult => {
+    const root = ctx.ticket!
+    if (!root.startDate && !root.dueDate) throw createError({ statusCode: 422, statusMessage: 'The ticket has no start or due date to shift.' })
+    const moves: ShiftMove[] = []
+    const skipped: ShiftSkip[] = []
+    const seen = new Set<string>([root.id])
+    const queue = [root.id]
+    while (queue.length) {
+      const id = queue.shift()!
+      const ticket = findTicket(id)
+      if (!ticket) continue
+      if (id !== root.id) {
+        if (ticket.archivedAt) continue
+        const lane = findLane(ticket.laneId)
+        let editable = true
+        try {
+          requireTicketAccess(ctx.actor, id, 'editor')
+        } catch {
+          editable = false
+        }
+        if (!editable) {
+          skipped.push({ ticketId: id, ticketNumber: ticket.ticketNumber, title: readable(ctx.actor, ticket.boardId) ? ticket.title : null, reason: 'no_access' })
+          continue
+        }
+        if (lane?.isDone || lane?.isLive) {
+          skipped.push({ ticketId: id, ticketNumber: ticket.ticketNumber, title: ticket.title, reason: 'finished' })
+          continue
+        }
+      }
+      if (ticket.startDate || ticket.dueDate) {
+        const shift = (date: string | null) => (date ? addDays(date, input.days) : null)
+        moves.push({
+          ticketId: id, ticketNumber: ticket.ticketNumber, title: ticket.title, boardName: findBoard(ticket.boardId)?.name ?? '',
+          startDate: { from: ticket.startDate, to: shift(ticket.startDate) },
+          dueDate: { from: ticket.dueDate, to: shift(ticket.dueDate) }
+        })
+      }
+      for (const next of waitingTicketIds(id)) {
+        if (seen.has(next)) continue
+        seen.add(next)
+        queue.push(next)
+      }
+    }
+    // All or nothing: half a chain moved is a plan nobody made.
+    if (!input.dryRun) atomically(() => moves.forEach(move => updateTicket(move.ticketId, { startDate: move.startDate.to, dueDate: move.dueDate.to }, ctx.actor)))
+    return { days: input.days, applied: !input.dryRun, moves, skipped }
+  }
 })
 
 function readable(actor: Actor, boardId: string) {
@@ -367,6 +450,27 @@ function checkNewSubtickets(actor: Actor, boardId: string, parentId: string | nu
     }
     if (parentId && subticketIdsOf(id).has(parentId)) {
       throw createError({ statusCode: 422, statusMessage: `#${ticket.ticketNumber} already lists this ticket as its subticket.` })
+    }
+  }
+}
+
+/**
+ * What a ticket may newly wait on: a ticket the caller can read, open, of the same workspace,
+ * and not one that already waits on this ticket, directly or through others. What it waits on
+ * already stays, whatever has happened to it since.
+ */
+function checkWaitsOn(actor: Actor, boardId: string, waitingId: string | null, held: Set<string>, ids: string[]) {
+  const workspaceId = orNotFound(findBoard(boardId), 'Board').workspaceId
+  for (const id of new Set(ids)) {
+    if (held.has(id)) continue
+    if (id === waitingId) throw createError({ statusCode: 422, statusMessage: 'A ticket cannot wait on itself.' })
+    const { ticket } = requireTicketAccess(actor, id, 'viewer')
+    if (ticket.archivedAt) throw createError({ statusCode: 422, statusMessage: 'A ticket cannot wait on an archived ticket.' })
+    if (orNotFound(findBoard(ticket.boardId), 'Board').workspaceId !== workspaceId) {
+      throw createError({ statusCode: 422, statusMessage: 'A ticket can only wait on a ticket of the same workspace.' })
+    }
+    if (waitingId && waitsOnTransitively(id, waitingId)) {
+      throw createError({ statusCode: 422, statusMessage: `#${ticket.ticketNumber} already waits on this ticket; the other way round would be a loop.` })
     }
   }
 }

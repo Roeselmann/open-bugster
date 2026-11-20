@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import type {
   ActivityKind, AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardRole, BoardSummary, Category, CategoryColor,
   CategorySummary, DueTicket, IntegrationProvider, JiraIntegration, JiraIssue, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
-  LinkDisplay, LinkPreview, TicketLink, TicketLinkInput, TicketPriority, TicketSource, SubticketRef, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary, TimelineNode,
+  LinkDisplay, LinkPreview, TicketLink, TicketLinkInput, TicketPriority, TicketSource, DependencyRef, SubticketRef, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary, TimelineNode,
   AgentAccess, AgentAccessMode, AgentAccount, AgentGrantRole, UserAccount, UserBoardMembership, UserRole, UserStatus, Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
 } from '../../shared/types/domain'
 import type { Actor, ActorChannel } from './actor'
@@ -273,6 +273,11 @@ const legacyStatusLaneNames: Record<string, string> = {
   done: 'Done',
 }
 
+/** Runs `work` in one transaction: everything it writes lands, or none of it. */
+export function atomically<T>(work: () => T): T {
+  return getDb().transaction(work)()
+}
+
 export function getDb() {
   if (database) return database
   const path = process.env.DATABASE_PATH || './data/open-bugster.sqlite'
@@ -354,6 +359,7 @@ export function getDb() {
   ensureTicketStartDate(database)
   ensureTicketLiveWindow(database)
   ensureLaneLive(database)
+  ensureTicketDependencies(database)
   // Not in `boardIndexes`: that block also runs inside `ensureBoards`, before an upgrading
   // database has been given the ticket_activity table. Serves the board-wide digest query.
   database.exec('CREATE INDEX IF NOT EXISTS idx_ticket_activity_created ON ticket_activity(created_at DESC)')
@@ -2117,6 +2123,25 @@ export function ensureLaneLive(db: Database.Database) {
   return true
 }
 
+/**
+ * Finish-to-start dependencies: the blocked ticket starts once the blocker ends. Either side
+ * going takes the row with it; the operations keep both in one workspace and out of cycles.
+ */
+export function ensureTicketDependencies(db: Database.Database) {
+  const exists = db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'ticket_dependencies'").get()
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ticket_dependencies (
+      blocker_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+      blocked_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (blocker_id, blocked_id),
+      CHECK (blocker_id <> blocked_id)
+    );
+    CREATE INDEX IF NOT EXISTS ticket_dependencies_blocked ON ticket_dependencies (blocked_id);
+  `)
+  return !exists
+}
+
 export function ensureTicketSourceJira(db: Database.Database) {
   const definition = db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'tickets'").get() as { sql: string } | undefined
   if (!definition || definition.sql.includes("'jira_issue'")) return false
@@ -3045,7 +3070,8 @@ function hydrateTicket(row: TicketRow): Ticket {
     feedback,
     jira: jiraRow ? toJiraIssue(jiraRow) : null,
     attachments,
-    todos
+    todos,
+    waitsOn: dependencyRefs('waitsOn', row.id)
   }
 }
 
@@ -3432,6 +3458,7 @@ export function ticketTimeline(rootId: string, canRead: (boardId: string) => boo
       live: Boolean(row.is_live),
       liveFrom: row.live_from,
       liveUntil: row.live_until,
+      waitsOn: dependencyRefs('waitsOn', row.id),
       readable: open,
       children: []
     }
@@ -3445,6 +3472,88 @@ export function ticketTimeline(rootId: string, canRead: (boardId: string) => boo
     return node
   }
   return build(rootId, new Set())
+}
+
+type DependencyRow = {
+  id: string; ticket_number: number; title: string; board_id: string; board_name: string; lane_name: string
+  is_done: number; archived_at: string | null; start_date: string | null; due_date: string | null
+}
+
+/**
+ * One side of a ticket's dependencies: the tickets it waits on, or the ones waiting on it.
+ * Ordered by due date, undated last, so the one that holds things up longest comes last.
+ */
+export function dependencyRefs(side: 'waitsOn' | 'waitedOnBy', ticketId: string): DependencyRef[] {
+  const [mine, theirs] = side === 'waitsOn' ? ['blocked_id', 'blocker_id'] : ['blocker_id', 'blocked_id']
+  const rows = getDb().prepare(`
+    SELECT t.id, t.ticket_number, t.title, t.board_id, b.name AS board_name, l.name AS lane_name,
+      MAX(l.is_done, l.is_live) AS is_done, t.archived_at, t.start_date, t.due_date
+    FROM ticket_dependencies d
+    JOIN tickets t ON t.id = d.${theirs} JOIN boards b ON b.id = t.board_id JOIN lanes l ON l.id = t.lane_id
+    WHERE d.${mine} = ?
+    ORDER BY t.due_date IS NULL, t.due_date, t.ticket_number
+  `).all(ticketId) as DependencyRow[]
+  return rows.map(row => ({
+    id: row.id, ticketNumber: row.ticket_number, title: row.title, boardId: row.board_id, boardName: row.board_name,
+    laneName: row.lane_name, done: Boolean(row.is_done), archived: Boolean(row.archived_at), startDate: row.start_date, dueDate: row.due_date
+  }))
+}
+
+/** Whether `fromId` waits on `targetId`, directly or through others: linking them the other way round would close a cycle. */
+export function waitsOnTransitively(fromId: string, targetId: string): boolean {
+  if (fromId === targetId) return true
+  const row = getDb().prepare(`
+    WITH RECURSIVE upstream(id) AS (
+      SELECT blocker_id FROM ticket_dependencies WHERE blocked_id = ?
+      UNION
+      SELECT d.blocker_id FROM ticket_dependencies d JOIN upstream u ON d.blocked_id = u.id
+    )
+    SELECT 1 FROM upstream WHERE id = ? LIMIT 1
+  `).get(fromId, targetId)
+  return Boolean(row)
+}
+
+/** Every ticket waiting on this one, directly or through others. */
+export function ticketsWaitingOn(ticketId: string): Set<string> {
+  const rows = getDb().prepare(`
+    WITH RECURSIVE downstream(id) AS (
+      SELECT blocked_id FROM ticket_dependencies WHERE blocker_id = ?
+      UNION
+      SELECT d.blocked_id FROM ticket_dependencies d JOIN downstream w ON d.blocker_id = w.id
+    )
+    SELECT id FROM downstream
+  `).all(ticketId) as Array<{ id: string }>
+  return new Set(rows.map(row => row.id))
+}
+
+/** The ids of the tickets waiting directly on this one. */
+export function waitingTicketIds(ticketId: string): string[] {
+  return (getDb().prepare('SELECT blocked_id FROM ticket_dependencies WHERE blocker_id = ?').all(ticketId) as Array<{ blocked_id: string }>).map(row => row.blocked_id)
+}
+
+/**
+ * Replaces what a ticket waits on, recording each change on its history. The caller has
+ * checked every new id; a repeat and the ticket itself are dropped here.
+ */
+function setTicketWaitsOn(ticketId: string, ids: string[], actor: Actor | null) {
+  const db = getDb()
+  const wanted = new Set(ids.filter(id => id !== ticketId))
+  const before = new Set((db.prepare('SELECT blocker_id FROM ticket_dependencies WHERE blocked_id = ?').all(ticketId) as Array<{ blocker_id: string }>).map(row => row.blocker_id))
+  const describe = (id: string) => db.prepare('SELECT ticket_number, title FROM tickets WHERE id = ?').get(id) as { ticket_number: number; title: string } | undefined
+  const now = new Date().toISOString()
+  for (const id of before) {
+    if (wanted.has(id)) continue
+    db.prepare('DELETE FROM ticket_dependencies WHERE blocker_id = ? AND blocked_id = ?').run(id, ticketId)
+    const other = describe(id)
+    if (other) recordActivity(ticketId, actor, 'waits_on', { change: 'removed', number: String(other.ticket_number), title: other.title })
+  }
+  for (const id of wanted) {
+    if (before.has(id)) continue
+    const other = describe(id)
+    if (!other) continue
+    db.prepare('INSERT OR IGNORE INTO ticket_dependencies (blocker_id, blocked_id, created_at) VALUES (?, ?, ?)').run(id, ticketId, now)
+    recordActivity(ticketId, actor, 'waits_on', { change: 'added', number: String(other.ticket_number), title: other.title })
+  }
 }
 
 /** The subtickets a ticket's to-do list holds right now, by id. */
@@ -3670,6 +3779,8 @@ export interface TicketInput {
   /** A type of the board's workspace; the caller has checked that. Null or omitted: untyped. */
   typeId?: string | null
   todos?: TicketTodoInput[]
+  /** Tickets it waits on, checked by the caller: same workspace, no cycle. Replaces the list. */
+  waitsOn?: string[]
   assigneeId?: string | null
   /** Admin-only: who a ticket is attributed to, independent of who is editing it. */
   authorId?: string | null
@@ -3717,6 +3828,7 @@ export function createTicket(boardId: string, input: TicketInput, author: Person
     setTicketLabels(id, boardId, input.labels || [])
     setTicketTodos(id, input.todos || [])
     recordLinkedSubtickets(id, new Set(), actor)
+    if (input.waitsOn?.length) setTicketWaitsOn(id, input.waitsOn, actor)
     setTicketLinks(id, input.links ?? linksWithFirst([], input.link ?? null))
     recordActivity(id, actor, 'created', { lane: lane.name })
     if (input.assigneeId) recordActivity(id, actor, 'assigned', { to: input.assigneeId })
@@ -3768,6 +3880,7 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
       setTicketTodos(id, input.todos)
       recordLinkedSubtickets(id, before, actor)
     }
+    if (input.waitsOn !== undefined) setTicketWaitsOn(id, input.waitsOn, actor)
     const links = input.links ?? (input.link === undefined ? undefined : linksWithFirst(existing.links, input.link))
     if (links) removedThumbnails.push(...setTicketLinks(id, links))
     if (priority !== existing.priority) recordActivity(id, actor, 'priority', { from: existing.priority, to: priority })

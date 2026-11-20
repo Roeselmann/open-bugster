@@ -207,7 +207,7 @@ export interface TicketComment {
   updatedAt: string
 }
 
-export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'start_date', 'due_date', 'live_from', 'live_until', 'type', 'archived', 'restored', 'commented', 'subticket'] as const
+export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'start_date', 'due_date', 'live_from', 'live_until', 'type', 'archived', 'restored', 'commented', 'subticket', 'waits_on'] as const
 export type ActivityKind = typeof activityKinds[number]
 
 /** How a change reached the server. Everything written before agents existed reads `web`. */
@@ -408,6 +408,52 @@ export interface SubticketRef {
 }
 
 /**
+ * A ticket another one waits on, or one waiting on another: enough to show it and to check the
+ * plan against it. Waiting means finish-to-start: the waiting ticket starts once this one ends.
+ */
+export interface DependencyRef {
+  id: string
+  ticketNumber: number
+  title: string
+  boardId: string
+  boardName: string
+  laneName: string
+  /** Whether it sits in a done or live lane of its board: then nothing waits on it any more. */
+  done: boolean
+  archived: boolean
+  startDate: string | null
+  dueDate: string | null
+}
+
+/** One ticket a shift moves: its dates before and after. */
+export interface ShiftMove {
+  ticketId: string
+  ticketNumber: number
+  title: string
+  boardName: string
+  startDate: { from: string | null; to: string | null }
+  dueDate: { from: string | null; to: string | null }
+}
+
+/** A ticket a shift stopped at, and why. */
+export interface ShiftSkip {
+  ticketId: string
+  ticketNumber: number
+  /** Null for a ticket on a board the caller cannot read. */
+  title: string | null
+  reason: 'finished' | 'no_access'
+}
+
+/** What `ticket.shift` moved, or would move on a dry run. */
+export interface ShiftResult {
+  days: number
+  /** False for a dry run. */
+  applied: boolean
+  moves: ShiftMove[]
+  skipped: ShiftSkip[]
+}
+
+/**
  * One ticket on a timeline: its span and status, and the subtickets below it. A ticket on a
  * board the caller cannot read stays in the tree, as its parent's to-do list already names
  * it, but is not opened up: its own subtickets are left out.
@@ -428,6 +474,8 @@ export interface TimelineNode {
   live: boolean
   liveFrom: string | null
   liveUntil: string | null
+  /** The tickets it waits on, wherever they are; the timeline draws an arrow from each it shows. */
+  waitsOn: DependencyRef[]
   readable: boolean
   /** Its open subtickets, in to-do order. A subticket held by two parents shows under both. */
   children: TimelineNode[]
@@ -492,6 +540,8 @@ export interface TicketPatch {
   categoryName?: string | null
   typeId?: string | null
   todos?: TicketTodoInput[]
+  /** Ids of the tickets it waits on; the whole list, replacing what it had. */
+  waitsOn?: string[]
 }
 
 export interface TicketTodo extends TicketTodoInput {
@@ -597,6 +647,8 @@ export interface Ticket {
   jira: JiraIssue | null
   attachments: Attachment[]
   todos: TicketTodo[]
+  /** The tickets it waits on: it starts once they end. Who waits on it is a read of its own. */
+  waitsOn: DependencyRef[]
 }
 
 export interface SyncRun {
