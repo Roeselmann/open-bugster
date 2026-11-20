@@ -41,6 +41,9 @@ const sentences: Record<ActivityKind, (entry: TicketActivityEntry) => string> = 
   decided: entry => `decided “${entry.payload.question}”: ${entry.payload.answer}`,
   reopened: entry => `reopened the decision “${entry.payload.question}”`,
   strict_order: entry => (entry.payload.to === 'strict' ? 'set the to-dos to strict order' : 'set the to-dos to loose order'),
+  went_live: entry => `The live window opened on ${entry.payload.date}`,
+  live_ending: entry => `The live window ends on ${entry.payload.date}`,
+  live_ended: entry => `The live window ended on ${entry.payload.date}, but the ticket is still live`,
 }
 
 /**
@@ -57,8 +60,10 @@ function sentence(entry: TicketActivityEntry) {
 }
 
 // An entry without an actor was written by an import; the payload says which one, and the
-// entries from before there was a choice were all TestFlight.
+// entries from before there was a choice were all TestFlight. The server's own notes about a
+// live window have nobody to name and read as a plain sentence.
 function actor(entry: TicketActivityEntry) {
+  if (entry.channel === 'system') return ''
   return entry.actor ? displayName(entry.actor) : providerLabel(entry.payload.provider)
 }
 
@@ -88,7 +93,7 @@ function via(entry: TicketActivityEntry): string | null {
       <li v-for="entry in entries" :key="entry.id" class="muted flex items-baseline gap-2 text-xs leading-relaxed">
         <span class="shrink-0 tabular-nums">{{ timeFormat.format(new Date(entry.createdAt)) }}</span>
         <span>
-          <strong class="font-semibold text-[var(--ink)]">{{ actor(entry) }}</strong>
+          <strong v-if="actor(entry)" class="font-semibold text-[var(--ink)]">{{ actor(entry) }}</strong>
           <span v-if="entry.actor?.isService" class="muted"> (agent)</span>
           <span v-if="via(entry)" class="muted" :title="`Performed by ${via(entry)} on their behalf`"> via {{ via(entry) }}</span>
           {{ sentence(entry) }}

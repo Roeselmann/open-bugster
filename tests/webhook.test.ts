@@ -354,6 +354,36 @@ describe('outgoing webhooks', () => {
     })
   })
 
+  describe('events the calendar raises', () => {
+    it('tells a board when a live window opens, from the system and only once', async () => {
+      const { runLiveSweep } = await import('../server/utils/live-windows')
+      const board = db.createBoard('Clock')
+      const lane = board.lanes.find(item => item.name === 'Backlog')!
+      const { secret: clockSecret } = hooks.createWebhook({ boardId: board.id, url: receiverUrl, events: ['ticket.went_live'] })
+      const ticket = db.createTicket(board.id, { title: 'Campaign', liveFrom: '2026-11-02', liveUntil: '2026-12-31', laneId: lane.id })!
+
+      received.length = 0
+      expect(runLiveSweep('2026-11-02').map(signal => signal.ticketId)).toContain(ticket.id)
+      expect(await waitFor(() => received.length === 1)).toBe(true)
+
+      const delivery = received[0]!
+      expect(delivery.headers['x-bugster-event']).toBe('ticket.went_live')
+      expect(hooks.verifySignature(clockSecret, delivery.body, delivery.headers['x-bugster-signature']!)).toBe(true)
+      expect(JSON.parse(delivery.body)).toMatchObject({
+        event: 'ticket.went_live',
+        boardId: board.id,
+        actor: { principalId: null, agentId: null, channel: 'system' },
+        data: { ticket: { id: ticket.id }, lane: { id: lane.id, isLive: false }, date: '2026-11-02' }
+      })
+
+      // The next pass has nothing new to say.
+      received.length = 0
+      expect(runLiveSweep('2026-11-02')).toEqual([])
+      await settle()
+      expect(received).toHaveLength(0)
+    })
+  })
+
   /**
    * The settings page documents each event from the shared catalogue. If an event is added to
    * the sender without a line here, the page would quietly stop describing what it sends.
@@ -366,10 +396,17 @@ describe('outgoing webhooks', () => {
 
     it('names the operation each event really comes from', async () => {
       const { WEBHOOK_EVENTS } = await import('../shared/utils/webhook-catalogue')
-      for (const entry of WEBHOOK_EVENTS) {
-        expect(hooks.eventForOperation[entry.operation]).toBe(entry.event)
+      const fromOperations = WEBHOOK_EVENTS.filter(entry => entry.operation !== null)
+      for (const entry of fromOperations) {
+        expect(hooks.eventForOperation[entry.operation!]).toBe(entry.event)
       }
-      expect(WEBHOOK_EVENTS.length).toBe(Object.keys(hooks.eventForOperation).length)
+      expect(fromOperations.length).toBe(Object.keys(hooks.eventForOperation).length)
+    })
+
+    it('marks exactly the calendar’s events as coming from no operation', async () => {
+      const { WEBHOOK_EVENTS } = await import('../shared/utils/webhook-catalogue')
+      const fromTheClock = WEBHOOK_EVENTS.filter(entry => entry.operation === null).map(entry => entry.event)
+      expect(fromTheClock).toEqual(Object.values(hooks.clockEvents))
     })
   })
 })

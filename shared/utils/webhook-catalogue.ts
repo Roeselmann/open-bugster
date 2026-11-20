@@ -28,18 +28,22 @@ export const WEBHOOK_DELIVERY = {
 export interface WebhookEventDoc {
   /** The value of `event` in the body and of the `X-Bugster-Event` header. */
   event: string
-  /** The operation that produces it — the same name the audit log and the API use. */
-  operation: string
+  /**
+   * The operation that produces it — the same name the audit log and the API use — or null
+   * for an event the calendar raises rather than a request.
+   */
+  operation: string | null
   /** When it fires, in a sentence. */
   fires: string
-  /** The single key inside `data`. */
+  /** The key inside `data` that holds the subject; the live-window events add two beside it. */
   dataKey: 'ticket' | 'comment' | 'run'
   /** What that key holds. */
   holds: string
 }
 
 /**
- * Every event a board can send, in the order the picker shows them.
+ * Every event a board can send, in the order the picker shows them. Each live-window event
+ * fires once per ticket and date: moving the window signals again for the new date.
  *
  * `ticket.updated` covers every field change rather than splitting per field: a workflow that
  * cares which one moved can read the ticket in the payload.
@@ -100,6 +104,27 @@ export const WEBHOOK_EVENTS: readonly WebhookEventDoc[] = [
     fires: 'A TestFlight or Jira sync finished — including when it finished badly.',
     dataKey: 'run',
     holds: 'The run: which provider it pulled from, how many tickets were imported, skipped and failed, and why it stopped. The imported tickets do not arrive as `ticket.created` — read the import lane if the workflow needs them.'
+  },
+  {
+    event: 'ticket.went_live',
+    operation: null,
+    fires: 'The first day of a ticket’s live window (`liveFrom`) has come. Raised by the calendar, not by a request, at most a few minutes into the day (Europe/Berlin), whatever lane the ticket is in. A go-live more than a week late — the server was down — is not announced.',
+    dataKey: 'ticket',
+    holds: 'The ticket in full; beside it `data.lane` (`id`, `name`, `isLive` — false means the board has not caught up yet) and `data.date`, the day the window opened. `actor` has no principal and the channel `system`.'
+  },
+  {
+    event: 'ticket.live_ending',
+    operation: null,
+    fires: 'A ticket in a live lane is within the board’s due-date warning days of the last day of its live window (`liveUntil`): time to renew an approval or plan the take-down.',
+    dataKey: 'ticket',
+    holds: 'The ticket in full, `data.lane` beside it, and `data.date`, the last day of the window.'
+  },
+  {
+    event: 'ticket.live_ended',
+    operation: null,
+    fires: 'The last day of a live window has passed and the ticket is still in a live lane: a campaign still out or an approval expired, waiting to be taken down. Not sent once the ticket has left the live lane.',
+    dataKey: 'ticket',
+    holds: 'The ticket in full, `data.lane` beside it, and `data.date`, the last day of the window.'
   }
 ] as const
 

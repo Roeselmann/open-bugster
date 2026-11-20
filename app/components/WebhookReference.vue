@@ -178,7 +178,8 @@ function verify(rawBody, header, secret) {
             <code class="font-mono">actor</code> is who answers for the change: <code class="font-mono">principalId</code>
             is the person or service identity, <code class="font-mono">agentId</code> the label of the token that acted
             (null when somebody did it directly), and <code class="font-mono">channel</code> is
-            <code class="font-mono">web</code>, <code class="font-mono">api</code> or <code class="font-mono">mcp</code>.
+            <code class="font-mono">web</code>, <code class="font-mono">api</code> or <code class="font-mono">mcp</code> —
+            or <code class="font-mono">system</code>, with no principal, for the live-window events the calendar raises.
           </p>
         </div>
 

@@ -9,10 +9,10 @@ import type {
   LinkDisplay, LinkPreview, TicketLink, TicketLinkInput, TicketPriority, TicketSchedule, TicketSource, DependencyRef, SubticketRef, TicketDecision, TicketDecisionInput, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary, TimelineNode,
   AgentAccess, AgentAccessMode, AgentAccount, AgentGrantRole, UserAccount, UserBoardMembership, UserRole, UserStatus, Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
 } from '../../shared/types/domain'
-import type { Actor, ActorChannel } from './actor'
+import type { Actor } from './actor'
 import { decisionAnswer } from '../../shared/utils/todo-progress'
 import { DEFAULT_TICKET_TYPES, DEFAULT_WORKSPACE_NAME } from '../../shared/utils/constants'
-import { boardToday, dueLevel } from '../../shared/utils/due-date'
+import { boardToday, daysUntil, dueLevel, liveLevel } from '../../shared/utils/due-date'
 import { decryptSecret, encryptSecret, secretKeyAvailable } from './secret-box'
 import { hashStoredPassword } from './password'
 import { getServerConfig } from './config'
@@ -3139,30 +3139,108 @@ function hydrateTicket(row: TicketRow): Ticket {
 }
 
 /**
- * Every open ticket with a due date on the viewer's boards, each with the colour its board's
- * lead times give it. Finished work — a ticket in a done lane — is left out. Ordered by workspace and board, the most pressing first.
+ * The dates worth watching on the viewer's boards, each with the colour its board's lead
+ * times give it: open work by its due date, and work in a live lane by the end of its live
+ * window — there the due date has gone quiet, and what can still go wrong is a campaign that
+ * outlives its run. Finished work in a done lane is left out. Ordered by workspace and board,
+ * the most pressing first.
  */
 export function listDueTickets(viewer: BoardViewer, today = boardToday()): DueTicket[] {
   const scoped = !viewer.instanceAdmin
   const rows = getDb().prepare(`
-    SELECT t.id, t.ticket_number, t.title, t.due_date, b.id AS board_id, b.name AS board_name,
+    SELECT t.id, t.ticket_number, t.title, l.is_live,
+      CASE WHEN l.is_live = 1 THEN t.live_until ELSE t.due_date END AS watched,
+      b.id AS board_id, b.name AS board_name,
       b.due_warning_days, b.due_alert_days, w.id AS workspace_id, w.name AS workspace_name
     FROM tickets t
     JOIN boards b ON b.id = t.board_id
     JOIN lanes l ON l.id = t.lane_id
     JOIN workspaces w ON w.id = b.workspace_id
     ${scoped ? 'JOIN board_access m ON m.board_id = b.id AND m.user_id = @userId' : ''}
-    WHERE t.archived_at IS NULL AND t.due_date IS NOT NULL AND l.is_done = 0 AND l.is_live = 0
-    ORDER BY w.position, w.created_at, b.position, b.created_at, t.due_date, t.ticket_number
+    WHERE t.archived_at IS NULL AND l.is_done = 0
+      AND CASE WHEN l.is_live = 1 THEN t.live_until ELSE t.due_date END IS NOT NULL
+    ORDER BY w.position, w.created_at, b.position, b.created_at, watched, t.ticket_number
   `).all(scoped ? { userId: viewer.userId } : {}) as Array<{
-    id: string; ticket_number: number; title: string; due_date: string; board_id: string; board_name: string
+    id: string; ticket_number: number; title: string; is_live: number; watched: string; board_id: string; board_name: string
     due_warning_days: number; due_alert_days: number; workspace_id: string; workspace_name: string
   }>
   return rows.map(row => ({
-    id: row.id, ticketNumber: row.ticket_number, title: row.title, dueDate: row.due_date,
-    level: dueLevel(row.due_date, today, { warningDays: row.due_warning_days, alertDays: row.due_alert_days }),
+    id: row.id, ticketNumber: row.ticket_number, title: row.title,
+    kind: row.is_live ? 'live' as const : 'due' as const,
+    date: row.watched,
+    level: row.is_live
+      ? liveLevel(row.watched, today, row.due_warning_days)
+      : dueLevel(row.watched, today, { warningDays: row.due_warning_days, alertDays: row.due_alert_days }),
     boardId: row.board_id, boardName: row.board_name, workspaceId: row.workspace_id, workspaceName: row.workspace_name
   }))
+}
+
+/**
+ * How late a go-live may still be announced: long enough to cover a server that was down over
+ * a weekend, short enough that the first run after an upgrade does not announce every campaign
+ * that went out months ago.
+ */
+export const LIVE_START_GRACE_DAYS = 7
+
+/** What the clock noticed about one ticket's live window, written to its history once. */
+export interface LiveSignal {
+  ticketId: string
+  boardId: string
+  kind: 'went_live' | 'live_ending' | 'live_ended'
+  /** The day the signal is about: `liveFrom` for going live, `liveUntil` for the end. */
+  date: string
+}
+
+/**
+ * Notes, once each, the moments a live window passes on its own, without anybody touching
+ * the ticket: the first day out (`went_live`), the end coming into the board's warning range
+ * (`live_ending`), and the last day gone by while the ticket is still in a live lane
+ * (`live_ended`). Each lands in the ticket's history from the `system` channel, which is what
+ * makes it show up in `whats_new` — and the caller sends the matching webhook.
+ *
+ * Once means once per date: the history entry carries the day it is about, so a window that is
+ * moved signals again for its new date, and one that stays put never repeats itself however
+ * often this runs. Going live does not care about the lane — the world does not wait for the
+ * board to catch up, and a receiver can see from the lane whether it has. The end does: a
+ * ticket already taken out of its live lane was taken down, and needs nobody's attention.
+ * A go-live more than `LIVE_START_GRACE_DAYS` ago, or one whose window has already closed,
+ * is not announced after the fact.
+ */
+export function sweepLiveWindows(today = boardToday()): LiveSignal[] {
+  const db = getDb()
+  const candidates = db.prepare(`
+    SELECT t.id, t.board_id, t.live_from, t.live_until, l.is_live, b.due_warning_days
+    FROM tickets t
+    JOIN lanes l ON l.id = t.lane_id
+    JOIN boards b ON b.id = t.board_id
+    WHERE t.archived_at IS NULL AND (t.live_from IS NOT NULL OR (t.live_until IS NOT NULL AND l.is_live = 1))
+  `).all() as Array<{ id: string; board_id: string; live_from: string | null; live_until: string | null; is_live: number; due_warning_days: number }>
+
+  const noted = db.prepare(`SELECT 1 FROM ticket_activity WHERE ticket_id = ? AND kind = ? AND json_extract(payload, '$.date') = ?`)
+  const signals: LiveSignal[] = []
+  for (const row of candidates) {
+    const wanted: Array<Omit<LiveSignal, 'ticketId' | 'boardId'>> = []
+    const untilDays = row.live_until ? daysUntil(row.live_until, today) : null
+    const fromDays = row.live_from ? daysUntil(row.live_from, today) : null
+    if (row.live_from && fromDays !== null && fromDays <= 0 && fromDays >= -LIVE_START_GRACE_DAYS && (untilDays === null || untilDays >= 0)) {
+      wanted.push({ kind: 'went_live', date: row.live_from })
+    }
+    if (row.is_live && row.live_until && untilDays !== null) {
+      if (untilDays < 0) wanted.push({ kind: 'live_ended', date: row.live_until })
+      else if (untilDays <= row.due_warning_days) wanted.push({ kind: 'live_ending', date: row.live_until })
+    }
+    for (const signal of wanted) {
+      if (noted.get(row.id, signal.kind, signal.date)) continue
+      signals.push({ ticketId: row.id, boardId: row.board_id, ...signal })
+    }
+  }
+
+  const write = db.prepare('INSERT INTO ticket_activity (id, ticket_id, actor_id, agent_id, channel, kind, payload, created_at) VALUES (?, ?, NULL, NULL, \'system\', ?, ?, ?)')
+  db.transaction(() => {
+    const now = new Date().toISOString()
+    for (const signal of signals) write.run(randomUUID(), signal.ticketId, signal.kind, JSON.stringify({ date: signal.date }), now)
+  })()
+  return signals
 }
 
 /**
@@ -4868,7 +4946,7 @@ export function deleteComment(id: string): boolean {
   return getDb().prepare('DELETE FROM ticket_comments WHERE id = ?').run(id).changes > 0
 }
 
-type ActivityRow = { id: string; ticket_id: string; actor_id: string | null; agent_id: string | null; channel: ActorChannel; kind: ActivityKind; payload: string; created_at: string }
+type ActivityRow = { id: string; ticket_id: string; actor_id: string | null; agent_id: string | null; channel: TicketActivityEntry['channel']; kind: ActivityKind; payload: string; created_at: string }
 
 function toActivityEntry(row: ActivityRow): TicketActivityEntry {
   const payload = safeJson(row.payload)

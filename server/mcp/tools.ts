@@ -624,7 +624,9 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
     title: 'What changed on a board',
     description:
       'The board’s recent history in one call, newest first: tickets created, imported, moved, '
-      + 'commented on, (un)assigned, reprioritised, archived and restored. Give `since` to pick '
+      + 'commented on, (un)assigned, reprioritised, archived and restored — and, from the server '
+      + 'itself (`by` null), a live window opening (went_live), nearing its end (live_ending) or '
+      + 'running out while the ticket is still live (live_ended), each with its `date`. Give `since` to pick '
       + 'up where you left off; it defaults to the last seven days. Edits to a ticket’s title, '
       + 'description or labels leave no trace here — this reads the same history get_ticket shows.',
     annotations: readsOnly,

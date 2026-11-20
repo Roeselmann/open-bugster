@@ -13,7 +13,8 @@ const lastBoardId = useLastBoardId()
 const route = useRoute()
 watch(() => route.path, () => refresh())
 
-// Every due date is listed; the clock only turns red, and counts, once one of them is lit.
+// Every due date and every live window's end is listed; the clock only turns red, and
+// counts, once one of them is lit.
 const alertCount = computed(() => tickets.value.filter(ticket => ticket.level === 'alert').length)
 const warningCount = computed(() => tickets.value.filter(ticket => ticket.level === 'warning').length)
 const litCount = computed(() => alertCount.value + warningCount.value)
@@ -41,8 +42,15 @@ const today = boardToday()
 // Far-off dates read better as a date than as a count of days.
 const dateFormatter = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', timeZone: 'UTC' })
 function dueText(ticket: DueTicket) {
-  const days = daysUntil(ticket.dueDate, today) ?? 0
-  if (days > 30) return dateFormatter.format(new Date(`${ticket.dueDate}T00:00:00Z`))
+  const days = daysUntil(ticket.date, today) ?? 0
+  if (ticket.kind === 'live') {
+    if (days > 30) return `live until ${dateFormatter.format(new Date(`${ticket.date}T00:00:00Z`))}`
+    if (days === 0) return 'ends today'
+    if (days === 1) return 'ends tomorrow'
+    if (days > 1) return `ends in ${days} days`
+    return days === -1 ? 'ended yesterday' : `ended ${-days} days ago`
+  }
+  if (days > 30) return dateFormatter.format(new Date(`${ticket.date}T00:00:00Z`))
   if (days === 0) return 'today'
   if (days === 1) return 'tomorrow'
   if (days > 1) return `in ${days} days`
@@ -68,7 +76,7 @@ function openWorkspace(workspaceId: string) {
       :class="litCount
         ? 'border-rose-600/40 bg-rose-600/10 text-rose-600 hover:bg-rose-600/15'
         : 'muted border-[var(--line)] hover:bg-[var(--panel-strong)] hover:text-[var(--ink)]'"
-      :aria-label="`Due dates: ${summary}`"
+      :aria-label="`Dates: ${summary}`"
       :title="summary"
     >
       <AlarmClock :size="18" aria-hidden="true" />
@@ -88,13 +96,13 @@ function openWorkspace(workspaceId: string) {
       >
         <div class="flex items-start gap-2 pb-1 pl-3 pr-1 pt-1">
           <div class="min-w-0 flex-1 pt-1">
-            <p class="text-sm font-bold">Due dates</p>
+            <p class="text-sm font-bold">Due dates and live windows</p>
             <p class="muted text-xs">{{ summary }}.</p>
           </div>
           <!-- A tap outside is easy to miss on a phone, so the popover can always be closed here. -->
           <PopoverClose
             class="focus-ring muted grid size-9 shrink-0 place-items-center rounded-lg hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]"
-            aria-label="Close due dates"
+            aria-label="Close dates"
           >
             <X :size="18" aria-hidden="true" />
           </PopoverClose>
@@ -122,7 +130,9 @@ function openWorkspace(workspaceId: string) {
                 :to="{ path: `/b/${board.id}`, query: { ticket: ticket.ticketNumber } }"
                 class="flex items-center gap-2 rounded-lg py-1.5 pl-5 pr-3 text-sm hover:bg-[var(--accent-soft)]"
               >
-                <span class="size-2 shrink-0 rounded-full" :class="ticket.level === 'alert' ? 'bg-rose-600' : ticket.level === 'warning' ? 'bg-orange-400' : 'bg-[var(--line)]'" aria-hidden="true" />
+                <!-- A live window is drawn as a ring, a due date as a dot: same colours, different question. -->
+                <span v-if="ticket.kind === 'live'" class="size-2 shrink-0 rounded-full border-2" :class="ticket.level === 'alert' ? 'border-rose-600' : ticket.level === 'warning' ? 'border-orange-400' : 'border-[var(--line)]'" aria-hidden="true" />
+                <span v-else class="size-2 shrink-0 rounded-full" :class="ticket.level === 'alert' ? 'bg-rose-600' : ticket.level === 'warning' ? 'bg-orange-400' : 'bg-[var(--line)]'" aria-hidden="true" />
                 <span class="muted shrink-0 text-xs font-semibold tabular-nums">#{{ ticket.ticketNumber }}</span>
                 <span class="min-w-0 flex-1 truncate">{{ ticket.title }}</span>
                 <span

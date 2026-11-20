@@ -13,9 +13,19 @@ import { WEBHOOK_DELIVERY } from '../../shared/utils/webhook-catalogue'
  */
 export const webhookEvents = [
   'ticket.created', 'ticket.updated', 'ticket.moved', 'ticket.transferred', 'ticket.archived', 'ticket.restored',
-  'comment.added', 'import.completed'
+  'comment.added', 'import.completed', 'ticket.went_live', 'ticket.live_ending', 'ticket.live_ended'
 ] as const
 export type WebhookEvent = typeof webhookEvents[number]
+
+/**
+ * The events nobody's request produces: the calendar raises them, through the live-window
+ * sweep (`server/utils/live-windows.ts`), when a live window opens, nears its end or runs out.
+ */
+export const clockEvents = {
+  went_live: 'ticket.went_live',
+  live_ending: 'ticket.live_ending',
+  live_ended: 'ticket.live_ended'
+} as const satisfies Record<string, WebhookEvent>
 
 /** Which operation produces which event. Anything absent sends nothing. */
 export const eventForOperation: Record<string, WebhookEvent> = {

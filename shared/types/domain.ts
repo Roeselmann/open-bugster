@@ -215,11 +215,14 @@ export interface TicketComment {
   updatedAt: string
 }
 
-export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'start_date', 'due_date', 'live_from', 'live_until', 'schedule', 'type', 'archived', 'restored', 'commented', 'subticket', 'waits_on', 'decided', 'reopened', 'strict_order'] as const
+export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'start_date', 'due_date', 'live_from', 'live_until', 'schedule', 'type', 'archived', 'restored', 'commented', 'subticket', 'waits_on', 'decided', 'reopened', 'strict_order', 'went_live', 'live_ending', 'live_ended'] as const
 export type ActivityKind = typeof activityKinds[number]
 
-/** How a change reached the server. Everything written before agents existed reads `web`. */
-export const activityChannels = ['web', 'api', 'mcp'] as const
+/**
+ * How a change reached the server. Everything written before agents existed reads `web`;
+ * `system` is the server itself, noting that a live window began or ran out.
+ */
+export const activityChannels = ['web', 'api', 'mcp', 'system'] as const
 export type ActivityChannel = typeof activityChannels[number]
 
 export interface TicketActivityEntry {
@@ -631,12 +634,17 @@ export interface JiraIssue {
   sourceUpdatedAt: string | null
 }
 
-/** A ticket with a due date and where it lives — for the header's overview. `none` is not lit yet. */
+/**
+ * A ticket with a date to watch and where it lives — for the header's overview. `none` is not
+ * lit yet. `due` is open work and its due date; `live` is a ticket in a live lane and the last
+ * day of its live window, which is the date that matters once the work is out.
+ */
 export interface DueTicket {
   id: string
   ticketNumber: number
   title: string
-  dueDate: string
+  kind: 'due' | 'live'
+  date: string
   level: 'none' | 'warning' | 'alert'
   boardId: string
   boardName: string

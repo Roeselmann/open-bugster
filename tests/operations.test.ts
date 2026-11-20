@@ -215,10 +215,12 @@ describe('the operation registry', () => {
 
       // Overdue while worked on; quiet once live, and done as a subticket.
       const owner = { userId: people.owner!, instanceAdmin: true }
-      expect(db.listDueTickets(owner as never, '2026-03-01').some(due => due.id === ticket.id)).toBe(true)
+      expect(db.listDueTickets(owner as never, '2026-03-01').filter(due => due.id === ticket.id).map(due => due.kind)).toEqual(['due'])
       const parent = db.createTicket(board.id, { title: 'Bundle', laneId: work.id, todos: [{ text: '', completed: false, subticketId: ticket.id }] })!
       db.moveTicket(ticket.id, live.id, 0)
-      expect(db.listDueTickets(owner as never, '2026-03-01').some(due => due.id === ticket.id)).toBe(false)
+      // Live, the due date goes quiet; what the header watches now is the end of the window.
+      const watched = db.listDueTickets(owner as never, '2026-03-01').filter(due => due.id === ticket.id)
+      expect(watched.map(due => [due.kind, due.date])).toEqual([['live', db.findTicket(ticket.id)!.liveUntil]])
       expect(db.findTicket(parent.id)!.todos[0]).toMatchObject({ completed: true, subticket: { done: true } })
 
       const { timelineWarnings } = await import('../shared/utils/timeline')

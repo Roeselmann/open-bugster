@@ -17,6 +17,11 @@ The events:
 | `ticket.archived`, `ticket.restored` | A ticket leaves or returns to the board. |
 | `comment.added` | A comment is posted. |
 | `import.completed` | A TestFlight or Jira sync finishes; `run.provider` says which. |
+| `ticket.went_live` | The first day of a ticket's live window (`liveFrom`) has come, whatever lane it is in. |
+| `ticket.live_ending` | A ticket in a live lane is within the board's warning days of the end of its live window. |
+| `ticket.live_ended` | The live window is over and the ticket is still in a live lane: time to take it down. |
+
+The last three come from the calendar, not from a request: the actor has no principal and the channel `system`, and `data` holds the ticket, its `lane` (with `isLive`) and the `date` the event is about. Each fires once per ticket and date; moving the window makes it fire again for the new date.
 
 Each delivery is a JSON body with the event name, a timestamp, the board, and a `data` object holding the ticket, comment, or import run. The exact shape of each event is documented inside the app under the reference panel next to the event picker.
 
@@ -31,6 +36,7 @@ Deliveries go to private addresses by default, because an n8n is usually on the 
 ## How it works
 
 - **Events come from operations.** `eventForOperation` maps an operation name to an event, and the operation runner calls `dispatch` after a successful run. An operation absent from the map sends nothing; adding an event means adding one line there and one entry to the shared catalogue, and a test checks the two agree.
+- **Live-window events come from the clock.** The `live-windows` plugin runs `runLiveSweep` at startup and every `LIVE_SWEEP_MINUTES`. `sweepLiveWindows` writes each new signal into the ticket's history (kind `went_live`, `live_ending` or `live_ended`, channel `system`, payload `{ date }`) — that entry is what makes it happen once, and what `whats_new` shows. The webhook follows from it through `clockEvents`. A go-live more than seven days late is not announced, so the first run after an upgrade stays quiet about old campaigns.
 - **Dispatch is fire-and-forget.** The runner fans out synchronously to the board's enabled webhooks that subscribe to the event, and each delivery runs asynchronously so a slow receiver never delays the request.
 - **Retries** happen up to five times with a widening backoff of one, four, nine, and sixteen seconds (attempt squared, times a base that tests can shorten). A request times out after ten seconds. A webhook whose deliveries exhaust their retries twenty times in a row is disabled automatically.
 - **Destination screening** (`assertDeliverable`) refuses anything that is not http or https, URLs carrying credentials, and link-local addresses always; private ranges only when `WEBHOOK_ALLOW_PRIVATE` is false. The check runs when the webhook is saved and again before every delivery, since a hostname can change what it resolves to.
@@ -45,6 +51,7 @@ Deliveries go to private addresses by default, because an n8n is usually on the 
 | [shared/utils/webhook-catalogue.ts](../shared/utils/webhook-catalogue.ts) | `WEBHOOK_DELIVERY` (the retry, timeout, and tolerance numbers) and `WEBHOOK_EVENTS` (each event's trigger and `data` key). The single source the UI renders from. |
 | [server/operations/webhooks.ts](../server/operations/webhooks.ts) | `webhook.list`, `webhook.create`, `webhook.update`, `webhook.delete`, `webhook.deliveries`, all board admin. |
 | [server/operations/run.ts](../server/operations/run.ts) | `announce`, the call after a successful mutation. |
+| [server/utils/live-windows.ts](../server/utils/live-windows.ts), [server/plugins/live-windows.ts](../server/plugins/live-windows.ts) | `runLiveSweep` and its schedule; `sweepLiveWindows` itself lives in `db.ts`. |
 | [server/utils/attachment-fetch.ts](../server/utils/attachment-fetch.ts) | Reuses the destination screening for server-side downloads. |
 | [server/utils/db.ts](../server/utils/db.ts) | `ensureWebhooks`; tables `webhooks`, `webhook_deliveries`. |
 | [server/plugins/audit-retention.ts](../server/plugins/audit-retention.ts) | The startup prune of old attempts. |
@@ -59,7 +66,8 @@ Deliveries go to private addresses by default, because an n8n is usually on the 
 
 ## Tests
 
-- `tests/webhook.test.ts`: destination screening, signing and verification, delivery, retry, auto-disable, and that the catalogue matches the server's event list.
+- `tests/webhook.test.ts`: destination screening, signing and verification, delivery, retry, auto-disable, a live-window event end to end, and that the catalogue matches the server's event list.
+- `tests/live-windows.test.ts`: when each live-window signal fires, that it fires once per date, and the header's list of live windows.
 
 ## Configuration
 
@@ -67,3 +75,4 @@ Deliveries go to private addresses by default, because an n8n is usually on the 
 |---|---|
 | `WEBHOOK_ALLOW_PRIVATE` | `true` by default. `false` refuses private address ranges for webhooks and attachment downloads. |
 | `WEBHOOK_RETRY_BASE_MS` | The retry base in milliseconds; a test hook, 1000 by default. |
+| `LIVE_SWEEP_MINUTES` | How often the live-window sweep runs; 15 by default, `0` switches it off. |

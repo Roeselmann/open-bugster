@@ -309,8 +309,9 @@ watch([() => route.query.ticket, tickets], ([requested]) => {
   router.replace({ query: rest })
 }, { immediate: true })
 
-// The header's alarm counts due dates across boards; a change here should reach it.
-watch(() => tickets.value.map(ticket => `${ticket.id}:${ticket.dueDate}`).join(), (now, before) => {
+// The header's alarm counts due dates and live windows across boards; a change here should
+// reach it — the lane too, since a live lane trades the due date for the end of the window.
+watch(() => tickets.value.map(ticket => `${ticket.id}:${ticket.dueDate}:${ticket.liveUntil}:${ticket.laneId}`).join(), (now, before) => {
   if (before !== undefined) refreshDueTickets()
 })
 
