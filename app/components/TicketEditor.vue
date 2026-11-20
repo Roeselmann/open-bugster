@@ -1382,7 +1382,7 @@ function focusTitle(event: Event) {
                   <Check :size="14" /> Save
                 </button>
               </div>
-              <textarea v-if="editingDescription" id="ticket-description" ref="descriptionInput" v-model="form.description" maxlength="10000" rows="7" class="focus-ring surface-strong w-full resize-y rounded-xl px-3.5 py-3 text-sm leading-relaxed outline-none" placeholder="Context, expected behavior, notes… Markdown is supported." />
+              <textarea v-if="editingDescription" id="ticket-description" ref="descriptionInput" v-model="form.description" v-autosize maxlength="10000" rows="5" class="focus-ring surface-strong w-full resize-none rounded-xl px-3.5 py-3 text-sm leading-relaxed outline-none" placeholder="Context, expected behavior, notes… Markdown is supported." />
               <MarkdownView
                 v-else
                 :source="form.description"

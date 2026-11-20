@@ -228,7 +228,7 @@ function updateOpen(value: boolean) {
           </label>
           <label class="block">
             <span class="mb-1.5 block text-xs font-bold uppercase tracking-[.08em]">Description</span>
-            <textarea v-model="form.description" maxlength="10000" rows="5" class="focus-ring surface-strong w-full resize-y rounded-xl px-3 py-2 text-sm leading-relaxed outline-none" placeholder="Details, in Markdown" />
+            <textarea v-model="form.description" v-autosize="'40vh'" maxlength="10000" rows="5" class="focus-ring surface-strong w-full resize-none rounded-xl px-3 py-2 text-sm leading-relaxed outline-none" placeholder="Details, in Markdown" />
           </label>
           <div class="grid gap-4 sm:grid-cols-2">
             <div>

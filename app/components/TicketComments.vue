@@ -127,7 +127,7 @@ async function confirmDelete() {
         </div>
 
         <div v-if="editingId === comment.id" class="mt-2.5">
-          <textarea v-model="editDraft" rows="3" maxlength="10000" class="focus-ring surface w-full resize-y rounded-lg px-3 py-2 text-sm leading-relaxed outline-none" />
+          <textarea v-model="editDraft" v-autosize rows="3" maxlength="10000" class="focus-ring surface w-full resize-none rounded-lg px-3 py-2 text-sm leading-relaxed outline-none" />
           <div class="mt-2 flex justify-end gap-2">
             <button type="button" class="focus-ring flex h-8 items-center gap-1.5 rounded-lg border border-[var(--line)] px-2.5 text-xs font-semibold" @click="editingId = ''">
               <X :size="14" /> Cancel
@@ -144,10 +144,11 @@ async function confirmDelete() {
     <div class="mt-3">
       <textarea
         v-model="draft"
+        v-autosize
         data-comment-input
         rows="3"
         maxlength="10000"
-        class="focus-ring surface-strong w-full resize-y rounded-xl px-3.5 py-3 text-sm leading-relaxed outline-none"
+        class="focus-ring surface-strong w-full resize-none rounded-xl px-3.5 py-3 text-sm leading-relaxed outline-none"
         placeholder="Write a comment… Markdown is supported."
       />
       <div class="mt-2 flex justify-end">
