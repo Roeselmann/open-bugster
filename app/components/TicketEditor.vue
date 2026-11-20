@@ -2038,7 +2038,7 @@ function focusTitle(event: Event) {
               </div>
             </div>
             <template v-if="canEdit">
-              <input ref="fileInput" type="file" multiple class="sr-only" accept=".jpg,.jpeg,.png,.gif,.webp,.heic,.pdf,.txt,.log,.csv,.json,.doc,.docx,.xls,.xlsx,.ppt,.pptx" @change="chooseFiles">
+              <input ref="fileInput" type="file" multiple class="sr-only" accept=".jpg,.jpeg,.png,.gif,.webp,.heic,.pdf,.txt,.log,.md,.markdown,.csv,.json,.doc,.docx,.xls,.xlsx,.ppt,.pptx" @change="chooseFiles">
               <button
                 type="button"
                 class="focus-ring surface-strong flex w-full flex-col items-center justify-center rounded-xl border-dashed px-2 py-4 text-center transition duration-150"

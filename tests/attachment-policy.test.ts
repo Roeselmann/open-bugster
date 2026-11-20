@@ -14,6 +14,9 @@ describe('manual attachment policy', () => {
 
   it('accepts documents and rejects unsafe or mismatched types', () => {
     expect(validateManualAttachment({ filename: 'note.txt', mimeType: 'text/plain', data: Buffer.from('Hello') })).toMatchObject({ mimeType: 'text/plain', isImage: false })
+    expect(validateManualAttachment({ filename: 'README.md', mimeType: 'text/markdown', data: Buffer.from('# Hello') })).toMatchObject({ mimeType: 'text/markdown', isImage: false })
+    expect(validateManualAttachment({ filename: 'notes.md', mimeType: 'text/plain', data: Buffer.from('# Hello') })).toMatchObject({ mimeType: 'text/markdown' })
+    expect(validateManualAttachment({ filename: 'notes.markdown', data: Buffer.from('# Hello') })).toMatchObject({ extension: '.markdown', mimeType: 'text/markdown' })
     expect(() => validateManualAttachment({ filename: 'code.svg', mimeType: 'image/svg+xml', data: Buffer.from('<svg/>') })).toThrow(/not supported/)
     expect(() => validateManualAttachment({ filename: 'note.txt', mimeType: 'text/html', data: Buffer.from('Hello') })).toThrow(/do not match/)
   })
@@ -26,6 +29,8 @@ describe('manual attachment policy', () => {
     expect(extensionForMime('image/jpeg')).toBe('.jpg')
     expect(extensionForMime('application/pdf; charset=binary')).toBe('.pdf')
     // "Unspecified" and unknown both refuse to guess.
+    expect(extensionForMime('text/markdown')).toBe('.md')
+    expect(extensionForMime('text/plain')).toBe('.txt')
     expect(extensionForMime('application/octet-stream')).toBeNull()
     expect(extensionForMime('image/svg+xml')).toBeNull()
     expect(hasAllowedExtension('shot.png')).toBe(true)

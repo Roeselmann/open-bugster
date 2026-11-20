@@ -32,6 +32,8 @@ const rules: Record<string, AttachmentRule> = {
   '.pdf': { mimeTypes: ['application/pdf'], canonicalMimeType: 'application/pdf', signature: data => ascii(data, 0, 5) === '%PDF-' },
   '.txt': { mimeTypes: ['text/plain'], canonicalMimeType: 'text/plain' },
   '.log': { mimeTypes: ['text/plain'], canonicalMimeType: 'text/plain' },
+  '.md': { mimeTypes: ['text/markdown', 'text/x-markdown', 'text/plain'], canonicalMimeType: 'text/markdown' },
+  '.markdown': { mimeTypes: ['text/markdown', 'text/x-markdown', 'text/plain'], canonicalMimeType: 'text/markdown' },
   '.csv': { mimeTypes: ['text/csv', 'application/csv'], canonicalMimeType: 'text/csv' },
   '.json': { mimeTypes: ['application/json', 'text/json'], canonicalMimeType: 'application/json' },
   '.doc': { mimeTypes: ['application/msword'], canonicalMimeType: 'application/msword' },
