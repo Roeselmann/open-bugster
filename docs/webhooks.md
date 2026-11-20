@@ -20,6 +20,8 @@ The events:
 | `ticket.went_live` | The first day of a ticket's live window (`liveFrom`) has come, whatever lane it is in. |
 | `ticket.live_ending` | A ticket in a live lane is within the board's warning days of the end of its live window. |
 | `ticket.live_ended` | The live window is over and the ticket is still in a live lane: time to take it down. |
+| `ticket.new_round` | A recurring ticket's round closed done or skipped and the next one started — by hand, or by the clock when the next round is due. `data.round` holds `date`, `outcome` and `next`. |
+| `ticket.round_missed` | The next round of a recurring ticket came while the last one was still open. Same `data.round`, with `outcome` `missed`. |
 
 The last three come from the calendar, not from a request: the actor has no principal and the channel `system`, and `data` holds the ticket, its `lane` (with `isLive`) and the `date` the event is about. Each fires once per ticket and date; moving the window makes it fire again for the new date.
 
@@ -36,7 +38,7 @@ Deliveries go to private addresses by default, because an n8n is usually on the 
 ## How it works
 
 - **Events come from operations.** `eventForOperation` maps an operation name to an event, and the operation runner calls `dispatch` after a successful run. An operation absent from the map sends nothing; adding an event means adding one line there and one entry to the shared catalogue, and a test checks the two agree.
-- **Live-window events come from the clock.** The `live-windows` plugin runs `runLiveSweep` at startup and every `LIVE_SWEEP_MINUTES`. `sweepLiveWindows` writes each new signal into the ticket's history (kind `went_live`, `live_ending` or `live_ended`, channel `system`, payload `{ date }`) — that entry is what makes it happen once, and what `whats_new` shows. The webhook follows from it through `clockEvents`. A go-live more than seven days late is not announced, so the first run after an upgrade stays quiet about old campaigns.
+- **Live-window events come from the clock.** The `live-windows` plugin runs `runLiveSweep` at startup and every `LIVE_SWEEP_MINUTES`. `sweepLiveWindows` writes each new signal into the ticket's history (kind `went_live`, `live_ending` or `live_ended`, channel `system`, payload `{ date }`) — that entry is what makes it happen once, and what `whats_new` shows. The webhook follows from it through `clockEvents`. A go-live more than seven days late is not announced, so the first run after an upgrade stays quiet about old campaigns. The same pass runs `runRoundSweep`: `sweepRounds` closes each recurring ticket's round once its next round has come, writing a `ticket_rounds` row and a `new_round` or `round_missed` entry, then sends the matching event.
 - **Dispatch is fire-and-forget.** The runner fans out synchronously to the board's enabled webhooks that subscribe to the event, and each delivery runs asynchronously so a slow receiver never delays the request.
 - **Retries** happen up to five times with a widening backoff of one, four, nine, and sixteen seconds (attempt squared, times a base that tests can shorten). A request times out after ten seconds. A webhook whose deliveries exhaust their retries twenty times in a row is disabled automatically.
 - **Destination screening** (`assertDeliverable`) refuses anything that is not http or https, URLs carrying credentials, and link-local addresses always; private ranges only when `WEBHOOK_ALLOW_PRIVATE` is false. The check runs when the webhook is saved and again before every delivery, since a hostname can change what it resolves to.
@@ -51,7 +53,7 @@ Deliveries go to private addresses by default, because an n8n is usually on the 
 | [shared/utils/webhook-catalogue.ts](../shared/utils/webhook-catalogue.ts) | `WEBHOOK_DELIVERY` (the retry, timeout, and tolerance numbers) and `WEBHOOK_EVENTS` (each event's trigger and `data` key). The single source the UI renders from. |
 | [server/operations/webhooks.ts](../server/operations/webhooks.ts) | `webhook.list`, `webhook.create`, `webhook.update`, `webhook.delete`, `webhook.deliveries`, all board admin. |
 | [server/operations/run.ts](../server/operations/run.ts) | `announce`, the call after a successful mutation. |
-| [server/utils/live-windows.ts](../server/utils/live-windows.ts), [server/plugins/live-windows.ts](../server/plugins/live-windows.ts) | `runLiveSweep` and its schedule; `sweepLiveWindows` itself lives in `db.ts`. |
+| [server/utils/live-windows.ts](../server/utils/live-windows.ts), [server/plugins/live-windows.ts](../server/plugins/live-windows.ts) | `runLiveSweep` and `runRoundSweep` and their schedule; `sweepLiveWindows`, `sweepRounds` and `closeRound` live in `db.ts`. |
 | [server/utils/attachment-fetch.ts](../server/utils/attachment-fetch.ts) | Reuses the destination screening for server-side downloads. |
 | [server/utils/db.ts](../server/utils/db.ts) | `ensureWebhooks`; tables `webhooks`, `webhook_deliveries`. |
 | [server/plugins/audit-retention.ts](../server/plugins/audit-retention.ts) | The startup prune of old attempts. |

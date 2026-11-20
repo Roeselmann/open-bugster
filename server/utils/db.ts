@@ -6,11 +6,25 @@ import { randomUUID } from 'node:crypto'
 import type {
   ActivityKind, AppleFeedback, Attachment, Board, BoardCredentials, BoardMember, BoardRole, BoardSummary, Category, CategoryColor,
   CategorySummary, DueTicket, IntegrationProvider, JiraIntegration, JiraIssue, Label, LabelSummary, Lane, LaneSummary, Person, SyncRun, Ticket, TicketActivityEntry, TicketAuthor, TicketComment,
-  LinkDisplay, LinkPreview, TicketLink, TicketLinkInput, TicketPriority, TicketSchedule, TicketSource, DependencyRef, SubticketRef, TicketDecision, TicketDecisionInput, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary, TimelineNode,
+  LinkDisplay, LinkPreview, TicketLink, TicketLinkInput, TicketPriority, TicketRecurrence, TicketRound, RecurrenceFrequency, RoundOutcome, TicketSchedule, TicketSource, DependencyRef, SubticketRef, TicketDecision, TicketDecisionInput, TicketTodo, TicketTodoInput, TicketType, TicketTypeColor, TicketTypeIcon, TicketTypeIconName, TicketTypeRef, TicketTypeSummary, TimelineNode,
   AgentAccess, AgentAccessMode, AgentAccount, AgentGrantRole, UserAccount, UserBoardMembership, UserRole, UserStatus, Workspace, WorkspaceMember, WorkspaceRole, WorkspaceSummary
 } from '../../shared/types/domain'
 import type { Actor } from './actor'
+
+/**
+ * Whoever a history entry is written for: an actor, or the server itself — `system`, with
+ * nobody behind it — when the calendar moves something on its own.
+ */
+export interface ActivityAuthor {
+  principalId: string | null
+  agentId: string | null
+  channel: TicketActivityEntry['channel']
+}
+
+/** The calendar, as the author of what it does: a live window passing, a new round starting. */
+export const SYSTEM_AUTHOR: ActivityAuthor = { principalId: null, agentId: null, channel: 'system' }
 import { decisionAnswer } from '../../shared/utils/todo-progress'
+import { nextRound as nextRoundOf, occurrenceOnOrBefore, roundCloses } from '../../shared/utils/recurrence'
 import { DEFAULT_TICKET_TYPES, DEFAULT_WORKSPACE_NAME } from '../../shared/utils/constants'
 import { boardToday, daysUntil, dueLevel, liveLevel } from '../../shared/utils/due-date'
 import { decryptSecret, encryptSecret, secretKeyAvailable } from './secret-box'
@@ -364,6 +378,7 @@ export function getDb() {
   ensureTicketDependencies(database)
   ensureTicketSchedule(database)
   ensureTicketStrictOrder(database)
+  ensureTicketRecurrence(database)
   // Not in `boardIndexes`: that block also runs inside `ensureBoards`, before an upgrading
   // database has been given the ticket_activity table. Serves the board-wide digest query.
   database.exec('CREATE INDEX IF NOT EXISTS idx_ticket_activity_created ON ticket_activity(created_at DESC)')
@@ -2186,6 +2201,41 @@ export function ensureTicketStrictOrder(db: Database.Database) {
 }
 
 /**
+ * Recurring tickets: the rule beside the ticket, and a row per round gone by. The schedule
+ * column keeps saying `milestone` for them — its check predates recurring tickets, and a
+ * recurring ticket is a milestone that comes round again — so a rule is what tells them
+ * apart (see `domainSchedule`). The return lane goes with its lane; the rounds with their ticket.
+ */
+export function ensureTicketRecurrence(db: Database.Database) {
+  const columns = tableColumns(db, 'tickets')
+  const existed = columns.has('recurrence_frequency')
+  db.transaction(() => {
+    if (!columns.has('recurrence_frequency')) db.exec("ALTER TABLE tickets ADD COLUMN recurrence_frequency TEXT CHECK (recurrence_frequency IN ('daily', 'weekly', 'monthly', 'yearly'))")
+    if (!columns.has('recurrence_interval')) db.exec('ALTER TABLE tickets ADD COLUMN recurrence_interval INTEGER NOT NULL DEFAULT 1 CHECK (recurrence_interval >= 1)')
+    if (!columns.has('recurrence_anchor')) db.exec('ALTER TABLE tickets ADD COLUMN recurrence_anchor TEXT')
+    if (!columns.has('recurrence_until')) db.exec('ALTER TABLE tickets ADD COLUMN recurrence_until TEXT')
+    if (!columns.has('recurrence_reset_todos')) db.exec('ALTER TABLE tickets ADD COLUMN recurrence_reset_todos INTEGER NOT NULL DEFAULT 1 CHECK (recurrence_reset_todos IN (0, 1))')
+    if (!columns.has('recurrence_lane_id')) db.exec('ALTER TABLE tickets ADD COLUMN recurrence_lane_id TEXT REFERENCES lanes(id) ON DELETE SET NULL')
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS ticket_rounds (
+        id TEXT PRIMARY KEY,
+        ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+        due_date TEXT NOT NULL,
+        outcome TEXT NOT NULL CHECK (outcome IN ('done', 'missed', 'skipped')),
+        todos_done INTEGER NOT NULL DEFAULT 0,
+        todos_total INTEGER NOT NULL DEFAULT 0,
+        open_todos TEXT NOT NULL DEFAULT '[]',
+        closed_at TEXT NOT NULL,
+        closed_by TEXT,
+        UNIQUE (ticket_id, due_date)
+      );
+      CREATE INDEX IF NOT EXISTS idx_ticket_rounds_ticket ON ticket_rounds (ticket_id, due_date DESC);
+    `)
+  })()
+  return !existed
+}
+
+/**
  * Every finish-to-start dependency, as rows of (blocker_id, blocked_id, via_id): the ones set by
  * hand, with via_id null, and the ones a strict to-do list implies, with via_id the ticket
  * holding the list — there each subticket waits on the subticket before it. The latter are
@@ -2251,6 +2301,58 @@ type TicketRow = {
   source: TicketSource; external_id: string | null; created_at: string; updated_at: string; archived_at: string | null
   category_id: string | null; author_id: string | null; assignee_id: string | null; type_id: string | null
   strict_order?: number
+  recurrence_frequency?: RecurrenceFrequency | null; recurrence_interval?: number; recurrence_anchor?: string | null
+  recurrence_until?: string | null; recurrence_reset_todos?: number; recurrence_lane_id?: string | null
+}
+
+/** The rule stored beside a ticket; null for one that does not recur. */
+function recurrenceOf(row: Pick<TicketRow, 'recurrence_frequency' | 'recurrence_interval' | 'recurrence_anchor' | 'recurrence_until' | 'recurrence_reset_todos' | 'recurrence_lane_id'>): TicketRecurrence | null {
+  if (!row.recurrence_frequency || !row.recurrence_anchor) return null
+  return {
+    frequency: row.recurrence_frequency,
+    interval: row.recurrence_interval ?? 1,
+    anchor: row.recurrence_anchor,
+    until: row.recurrence_until ?? null,
+    resetTodos: row.recurrence_reset_todos !== 0,
+    returnLaneId: row.recurrence_lane_id ?? null
+  }
+}
+
+/** A recurring ticket is stored as a milestone with a rule; see `ensureTicketRecurrence`. */
+function domainSchedule(row: { schedule?: TicketSchedule; recurrence_frequency?: string | null }): TicketSchedule {
+  return row.recurrence_frequency ? 'recurring' : row.schedule ?? 'none'
+}
+
+function storedSchedule(schedule: TicketSchedule): TicketSchedule {
+  return schedule === 'recurring' ? 'milestone' : schedule
+}
+
+/** The rule's columns in the order the writes below list them. */
+function recurrenceColumns(recurrence: TicketRecurrence | null): [string | null, number, string | null, string | null, number, string | null] {
+  return recurrence
+    ? [recurrence.frequency, recurrence.interval, recurrence.anchor, recurrence.until, recurrence.resetTodos ? 1 : 0, recurrence.returnLaneId]
+    : [null, 1, null, null, 1, null]
+}
+
+/** How many past rounds a ticket carries; older ones stay in the table and the history. */
+const ROUNDS_SHOWN = 12
+
+type RoundRow = { due_date: string; outcome: RoundOutcome; todos_done: number; todos_total: number; open_todos: string; closed_at: string; closed_by: string | null }
+
+function toRound(row: RoundRow): TicketRound {
+  let open: string[] = []
+  try {
+    const parsed = JSON.parse(row.open_todos)
+    if (Array.isArray(parsed)) open = parsed.map(String)
+  } catch {
+    // An unreadable list shows as none; the counts still stand.
+  }
+  return { date: row.due_date, outcome: row.outcome, todosDone: row.todos_done, todosTotal: row.todos_total, openTodos: open, closedAt: row.closed_at, closedBy: personById(row.closed_by) }
+}
+
+export function listRounds(ticketId: string, limit = ROUNDS_SHOWN): TicketRound[] {
+  return (getDb().prepare('SELECT due_date, outcome, todos_done, todos_total, open_todos, closed_at, closed_by FROM ticket_rounds WHERE ticket_id = ? ORDER BY due_date DESC LIMIT ?')
+    .all(ticketId, limit) as RoundRow[]).map(toRound)
 }
 
 type TicketTypeRow = {
@@ -2647,8 +2749,9 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
       // once — the per-row MAX subquery `createTicket` uses would rescan for every ticket.
       let nextNumber = (db.prepare('SELECT COALESCE(MAX(ticket_number), 0) AS value FROM tickets').get() as { value: number }).value
       const insertTicket = db.prepare(`
-        INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, start_date, due_date, live_from, live_until, build_number, source, external_id, created_at, updated_at, archived_at, author_id, assignee_id, category_id, type_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, schedule, start_date, due_date, live_from, live_until, build_number, source, external_id, created_at, updated_at, archived_at, author_id, assignee_id, category_id, type_id,
+          strict_order, recurrence_frequency, recurrence_interval, recurrence_anchor, recurrence_until, recurrence_reset_todos, recurrence_lane_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       const labelsOf = db.prepare('SELECT label_id FROM ticket_labels WHERE ticket_id = ?')
       const attachLabel = db.prepare('INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)')
@@ -2677,10 +2780,13 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
         nextNumber += 1
         insertTicket.run(
           ticketId, nextNumber, id, laneIds.get(ticket.lane_id)!, ticket.title, ticket.description,
-          ticket.position, ticket.priority, ticket.start_date, ticket.due_date, ticket.live_from, ticket.live_until, ticket.build_number, ticket.source,
+          ticket.position, ticket.priority, ticket.schedule ?? 'none', ticket.start_date, ticket.due_date, ticket.live_from, ticket.live_until, ticket.build_number, ticket.source,
           ticket.external_id, ticket.created_at, ticket.updated_at, ticket.archived_at,
           ticket.author_id, ticket.assignee_id, ticket.category_id ? categoryIds.get(ticket.category_id) ?? null : null,
-          ticket.type_id
+          ticket.type_id,
+          // The series comes along, its return lane mapped onto the copy's lanes; past rounds stay behind.
+          ticket.strict_order ?? 0, ticket.recurrence_frequency ?? null, ticket.recurrence_interval ?? 1, ticket.recurrence_anchor ?? null, ticket.recurrence_until ?? null,
+          ticket.recurrence_reset_todos ?? 1, ticket.recurrence_lane_id ? laneIds.get(ticket.recurrence_lane_id) ?? null : null
         )
         for (const row of labelsOf.all(ticket.id) as Array<{ label_id: string }>) {
           const labelId = labelIds.get(row.label_id)
@@ -3099,6 +3205,7 @@ function hydrateTicket(row: TicketRow): Ticket {
   const author: TicketAuthor | null = personById(row.author_id)
   const todos: TicketTodo[] = todoRows.map(toTicketTodo)
   const cardImageIds = pickedCardImages(row.card_images, [...attachments, ...links])
+  const recurrence = recurrenceOf(row)
   return {
     id: row.id,
     ticketNumber: row.ticket_number,
@@ -3108,11 +3215,14 @@ function hydrateTicket(row: TicketRow): Ticket {
     description: row.description,
     position: row.position,
     priority: row.priority,
-    schedule: row.schedule ?? 'none',
+    schedule: domainSchedule(row),
     startDate: row.start_date ?? null,
     dueDate: row.due_date,
     liveFrom: row.live_from ?? null,
     liveUntil: row.live_until ?? null,
+    recurrence,
+    nextRound: recurrence && row.due_date ? nextRoundOf(recurrence, row.due_date) : null,
+    rounds: recurrence ? listRounds(row.id) : [],
     buildNumber: row.build_number || feedback?.buildVersion || null,
     link: links[0]?.url ?? null,
     links,
@@ -3240,6 +3350,99 @@ export function sweepLiveWindows(today = boardToday()): LiveSignal[] {
     const now = new Date().toISOString()
     for (const signal of signals) write.run(randomUUID(), signal.ticketId, signal.kind, JSON.stringify({ date: signal.date }), now)
   })()
+  return signals
+}
+
+/** What closing a round did: which one ended, how, and which started — null once the series is over. */
+export interface RoundSignal {
+  ticketId: string
+  boardId: string
+  kind: 'new_round' | 'round_missed'
+  /** The day the round that closed was due. */
+  date: string
+  outcome: RoundOutcome
+  next: string | null
+}
+
+/**
+ * Ends the round of a recurring ticket that is on now and starts the next: the round is kept
+ * with how far its to-do list got, the plain to-dos are unticked and the decisions opened again
+ * (unless the series keeps them), the card goes back to its return lane, and the due date moves
+ * on. Subtickets are tickets of their own and are left as they are.
+ *
+ * `outcome` is a person's: `done` or `skipped`, closed now, and the next round is the first one
+ * after today (or after the current round, when that is still ahead). Without it the calendar
+ * closes the round because the next one has come: it was done if the card sits in a done or live
+ * lane or every to-do is ticked, and missed otherwise; the round that starts is the one due on
+ * the latest day up to today, so a server that was down does not stack up rounds nobody saw.
+ * Null for a ticket that does not recur, or whose round the calendar has closed already.
+ */
+export function closeRound(ticketId: string, outcome: Exclude<RoundOutcome, 'missed'> | null, actor: ActivityAuthor | null, today = boardToday()): RoundSignal | null {
+  const db = getDb()
+  const ticket = findTicket(ticketId)
+  if (!ticket || ticket.archivedAt || !ticket.recurrence || !ticket.dueDate) return null
+  const rule = ticket.recurrence
+  const due = ticket.dueDate
+  if (!outcome && db.prepare('SELECT 1 FROM ticket_rounds WHERE ticket_id = ? AND due_date = ?').get(ticketId, due)) return null
+  const lane = findLane(ticket.laneId)
+  const finished = Boolean(lane?.isDone || lane?.isLive) || (ticket.todos.length > 0 && ticket.todos.every(todo => todo.completed))
+  const result: RoundOutcome = outcome ?? (finished ? 'done' : 'missed')
+  let next: string | null
+  if (outcome) {
+    next = nextRoundOf(rule, due > today ? due : today)
+  } else {
+    const on = occurrenceOnOrBefore(rule, rule.until && rule.until < today ? rule.until : today)
+    next = on && on > due ? on : null
+  }
+
+  const now = new Date().toISOString()
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO ticket_rounds (id, ticket_id, due_date, outcome, todos_done, todos_total, open_todos, closed_at, closed_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (ticket_id, due_date) DO UPDATE SET outcome = excluded.outcome, todos_done = excluded.todos_done,
+        todos_total = excluded.todos_total, open_todos = excluded.open_todos, closed_at = excluded.closed_at, closed_by = excluded.closed_by
+    `).run(
+      randomUUID(), ticketId, due, result, ticket.todos.filter(todo => todo.completed).length, ticket.todos.length,
+      JSON.stringify(ticket.todos.filter(todo => !todo.completed).map(todo => todo.text)), now, actor?.principalId ?? null
+    )
+    recordActivity(ticketId, actor, result === 'missed' ? 'round_missed' : 'new_round', { date: due, outcome: result, next })
+    if (!next) return
+    if (rule.resetTodos) {
+      db.prepare('UPDATE ticket_todos SET completed = 0, decided_by = NULL, decided_at = NULL WHERE ticket_id = ? AND subticket_id IS NULL').run(ticketId)
+      const decisions = db.prepare('SELECT id, decision FROM ticket_todos WHERE ticket_id = ? AND decision IS NOT NULL').all(ticketId) as Array<{ id: string; decision: string }>
+      const reopen = db.prepare('UPDATE ticket_todos SET decision = ? WHERE id = ?')
+      for (const row of decisions) {
+        const decision = parseDecision(row.decision)
+        if (decision) reopen.run(JSON.stringify({ ...decision, chosen: [], other: null }), row.id)
+      }
+    }
+    db.prepare('UPDATE tickets SET due_date = ?, updated_at = ? WHERE id = ?').run(next, now, ticketId)
+    const home = rule.returnLaneId ? findLane(rule.returnLaneId) : null
+    if (home && home.boardId === ticket.boardId && home.id !== ticket.laneId) moveTicket(ticketId, home.id, 0, actor)
+  })()
+  return { ticketId, boardId: ticket.boardId, kind: result === 'missed' ? 'round_missed' : 'new_round', date: due, outcome: result, next }
+}
+
+/**
+ * Closes every round whose time is up: the next round of its series has come, or, for the
+ * last round of a series, the day after it. Each round closes once — the row it leaves behind
+ * is what keeps a later pass from closing it again.
+ */
+export function sweepRounds(today = boardToday()): RoundSignal[] {
+  const rows = getDb().prepare(`
+    SELECT t.id, t.due_date, t.recurrence_frequency, t.recurrence_interval, t.recurrence_anchor, t.recurrence_until, t.recurrence_reset_todos, t.recurrence_lane_id
+    FROM tickets t
+    WHERE t.archived_at IS NULL AND t.recurrence_frequency IS NOT NULL AND t.due_date IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM ticket_rounds r WHERE r.ticket_id = t.id AND r.due_date = t.due_date)
+  `).all() as Array<Pick<TicketRow, 'id' | 'due_date' | 'recurrence_frequency' | 'recurrence_interval' | 'recurrence_anchor' | 'recurrence_until' | 'recurrence_reset_todos' | 'recurrence_lane_id'>>
+  const signals: RoundSignal[] = []
+  for (const row of rows) {
+    const rule = recurrenceOf(row)
+    if (!rule || !row.due_date || today < roundCloses(rule, row.due_date)) continue
+    const signal = closeRound(row.id, null, SYSTEM_AUTHOR, today)
+    if (signal) signals.push(signal)
+  }
   return signals
 }
 
@@ -3580,6 +3783,7 @@ export function ticketTimeline(rootId: string, canRead: (boardId: string) => boo
   const db = getDb()
   const readNode = db.prepare(`
     SELECT t.id, t.ticket_number, t.title, t.board_id, t.type_id, t.schedule, t.start_date, t.due_date, t.live_from, t.live_until, t.archived_at,
+      t.recurrence_frequency, t.recurrence_interval, t.recurrence_anchor, t.recurrence_until, t.recurrence_reset_todos, t.recurrence_lane_id,
       b.name AS board_name, l.name AS lane_name, MAX(l.is_done, l.is_live) AS is_done, l.is_live
     FROM tickets t JOIN boards b ON b.id = t.board_id JOIN lanes l ON l.id = t.lane_id
     WHERE t.id = ?
@@ -3605,7 +3809,7 @@ export function ticketTimeline(rootId: string, canRead: (boardId: string) => boo
       id: string; ticket_number: number; title: string; board_id: string; type_id: string | null; schedule: TicketSchedule
       start_date: string | null; due_date: string | null; live_from: string | null; live_until: string | null; archived_at: string | null
       board_name: string; lane_name: string; is_done: number; is_live: number
-    } | undefined
+    } & Pick<TicketRow, 'recurrence_frequency' | 'recurrence_interval' | 'recurrence_anchor' | 'recurrence_until' | 'recurrence_reset_todos' | 'recurrence_lane_id'> | undefined
     if (!row || budget <= 0) return null
     // Archived subtickets are out of the plan, as they are off the board. The root is shown as asked.
     if (row.archived_at && ancestors.size) return null
@@ -3620,12 +3824,14 @@ export function ticketTimeline(rootId: string, canRead: (boardId: string) => boo
       laneName: row.lane_name,
       done: Boolean(row.is_done),
       type: typeOf(row.type_id),
-      schedule: row.schedule,
+      schedule: domainSchedule(row),
       startDate: row.start_date,
       dueDate: row.due_date,
       live: Boolean(row.is_live),
       liveFrom: row.live_from,
       liveUntil: row.live_until,
+      recurrence: recurrenceOf(row),
+      rounds: row.recurrence_frequency ? listRounds(row.id, 60).map(round => ({ date: round.date, outcome: round.outcome })) : [],
       waitsOn: dependencyRefs('waitsOn', row.id),
       readable: open,
       children: []
@@ -3975,6 +4181,8 @@ export interface TicketInput {
   dueDate?: string | null
   liveFrom?: string | null
   liveUntil?: string | null
+  /** A recurring ticket's rule, settled with the schedule; its return lane checked by the caller. */
+  recurrence?: TicketRecurrence | null
   buildNumber?: string | null
   /** The first of the links, for callers that only know one; `links` wins when both are given. */
   link?: string | null
@@ -4008,7 +4216,7 @@ function nextPosition(laneId: string): number {
  * transaction. Person-valued payload keys hold ids, never addresses — an entry that spelled
  * out an email would keep naming somebody the moment their account is anonymized.
  */
-function recordActivity(ticketId: string, actor: Actor | null, kind: ActivityKind, payload: Record<string, string | null> = {}) {
+function recordActivity(ticketId: string, actor: ActivityAuthor | null, kind: ActivityKind, payload: Record<string, string | null> = {}) {
   getDb().prepare('INSERT INTO ticket_activity (id, ticket_id, actor_id, agent_id, channel, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
     .run(randomUUID(), ticketId, actor?.principalId ?? null, actor?.agentId ?? null, actor?.channel ?? 'web', kind, JSON.stringify(payload), new Date().toISOString())
 }
@@ -4025,11 +4233,14 @@ export function createTicket(boardId: string, input: TicketInput, author: Person
     const categoryId = resolveCategoryId(boardId, input.categoryName)
     // Appended first either way; a ticket asked to the top is then shuffled with the lane.
     const position = nextPosition(lane.id)
-    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, schedule, start_date, due_date, live_from, live_until, build_number, source, created_at, updated_at, author_id, assignee_id, category_id, type_id)
-      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?)`).run(
-      id, boardId, lane.id, input.title, input.description || '', position, input.priority || 'medium', input.schedule ?? (input.startDate || input.dueDate || input.liveFrom || input.liveUntil ? 'lifecycle' : 'none'),
+    const recurrence = input.schedule === 'recurring' ? input.recurrence ?? null : null
+    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, schedule, start_date, due_date, live_from, live_until, build_number, source, created_at, updated_at, author_id, assignee_id, category_id, type_id,
+        recurrence_frequency, recurrence_interval, recurrence_anchor, recurrence_until, recurrence_reset_todos, recurrence_lane_id)
+      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      id, boardId, lane.id, input.title, input.description || '', position, input.priority || 'medium',
+      storedSchedule(input.schedule ?? (input.startDate || input.dueDate || input.liveFrom || input.liveUntil ? 'lifecycle' : 'none')),
       input.startDate || null, input.dueDate || null, input.liveFrom || null, input.liveUntil || null, input.buildNumber || null, now, now,
-      author?.id || null, input.assigneeId || null, categoryId, input.typeId || null
+      author?.id || null, input.assigneeId || null, categoryId, input.typeId || null, ...recurrenceColumns(recurrence)
     )
     if (input.placement === 'top') {
       const rest = (db.prepare('SELECT id FROM tickets WHERE lane_id = ? AND archived_at IS NULL ORDER BY position, created_at').all(lane.id) as Array<{ id: string }>)
@@ -4062,16 +4273,19 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
   const liveUntil = input.liveUntil === undefined ? existing.liveUntil : input.liveUntil || null
   // A caller that only knows dates (an import, a sync) gives an undated ticket a lifecycle.
   const schedule = input.schedule ?? (existing.schedule === 'none' && (startDate || dueDate || liveFrom || liveUntil) ? 'lifecycle' : existing.schedule)
+  // The rule lives as long as the schedule says recurring; any other schedule has none.
+  const recurrence = schedule !== 'recurring' ? null : input.recurrence === undefined ? existing.recurrence : input.recurrence
   const assigneeId = input.assigneeId === undefined ? existing.assignee?.id || null : input.assigneeId || null
   const authorId = input.authorId === undefined ? existing.author?.id || null : input.authorId || null
   const typeId = input.typeId === undefined ? existing.type?.id || null : input.typeId || null
   getDb().transaction(() => {
     const categoryId = input.categoryName === undefined ? existing.category?.id || null : resolveCategoryId(existing.boardId, input.categoryName)
-    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, schedule = ?, start_date = ?, due_date = ?, live_from = ?, live_until = ?, build_number = ?, assignee_id = ?, author_id = ?, category_id = ?, type_id = ?, updated_at = ? WHERE id = ?`).run(
+    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, schedule = ?, start_date = ?, due_date = ?, live_from = ?, live_until = ?, build_number = ?, assignee_id = ?, author_id = ?, category_id = ?, type_id = ?, updated_at = ?,
+        recurrence_frequency = ?, recurrence_interval = ?, recurrence_anchor = ?, recurrence_until = ?, recurrence_reset_todos = ?, recurrence_lane_id = ? WHERE id = ?`).run(
       input.title ?? existing.title,
       input.description ?? existing.description,
       priority,
-      schedule,
+      storedSchedule(schedule),
       startDate,
       dueDate,
       liveFrom,
@@ -4082,6 +4296,7 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
       categoryId,
       typeId,
       now,
+      ...recurrenceColumns(recurrence),
       id
     )
     // The single pick of older callers is a list of one; the old column keeps the first picture.
@@ -4105,6 +4320,10 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
     if (links) removedThumbnails.push(...setTicketLinks(id, links))
     if (priority !== existing.priority) recordActivity(id, actor, 'priority', { from: existing.priority, to: priority })
     if (schedule !== existing.schedule) recordActivity(id, actor, 'schedule', { from: existing.schedule, to: schedule })
+    // A rule set or changed; its end of the series by `schedule` above. The sentence is the rule's own.
+    if (recurrence && JSON.stringify(recurrence) !== JSON.stringify(existing.recurrence)) {
+      recordActivity(id, actor, 'recurrence', { frequency: recurrence.frequency, interval: String(recurrence.interval), anchor: recurrence.anchor, until: recurrence.until })
+    }
     if (startDate !== existing.startDate) recordActivity(id, actor, 'start_date', { from: existing.startDate, to: startDate })
     if (dueDate !== existing.dueDate) recordActivity(id, actor, 'due_date', { from: existing.dueDate, to: dueDate })
     if (liveFrom !== existing.liveFrom) recordActivity(id, actor, 'live_from', { from: existing.liveFrom, to: liveFrom })
@@ -4132,7 +4351,7 @@ function reindexLane(laneId: string, orderedIds?: string[]) {
   ids.forEach((id, index) => update.run(laneId, index, now, id))
 }
 
-export function moveTicket(id: string, targetLaneId: string, targetIndex: number, actor: Actor | null = null): Ticket | null {
+export function moveTicket(id: string, targetLaneId: string, targetIndex: number, actor: ActivityAuthor | null = null): Ticket | null {
   const current = findTicket(id)
   if (!current || current.archivedAt) return null
   const targetLane = findLane(targetLaneId)
@@ -4185,7 +4404,8 @@ export function transferTicket(id: string, targetBoardId: string, targetLaneId: 
     const sourceIds = (db.prepare('SELECT id FROM tickets WHERE lane_id = ? AND archived_at IS NULL ORDER BY position, created_at').all(current.laneId) as Array<{ id: string }>)
       .map(row => row.id).filter(ticketId => ticketId !== id)
     const categoryId = resolveCategoryId(targetBoardId, current.category?.name)
-    db.prepare('UPDATE tickets SET board_id = ?, lane_id = ?, position = ?, category_id = ?, assignee_id = ?, updated_at = ? WHERE id = ?')
+    // A recurring ticket's return lane was one of the old board's; over there it stays where it lands.
+    db.prepare('UPDATE tickets SET board_id = ?, lane_id = ?, position = ?, category_id = ?, assignee_id = ?, recurrence_lane_id = NULL, updated_at = ? WHERE id = ?')
       .run(targetBoardId, targetLane.id, nextPosition(targetLane.id), categoryId, assigneeCleared ? null : current.assignee?.id ?? null, now, id)
     // Re-resolves every label against the destination and prunes what the source no longer uses.
     setTicketLabels(id, targetBoardId, current.labels.map(label => label.name))

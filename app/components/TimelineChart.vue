@@ -2,7 +2,7 @@
 import { ArrowRightToLine, ChevronDown, ChevronRight, Diamond, EyeOff } from '@lucide/vue'
 import type { TimelineNode } from '~~/shared/types/domain'
 import { boardToday, daysUntil } from '~~/shared/utils/due-date'
-import { flattenTimeline, isMilestone, liveSpanOf, spanOf, timelineBounds } from '~~/shared/utils/timeline'
+import { flattenTimeline, isMilestone, liveSpanOf, roundMarks, spanOf, timelineBounds } from '~~/shared/utils/timeline'
 
 /**
  * The chart of a timeline: one row per ticket, its bar across the days. Drawn the same in the
@@ -35,6 +35,18 @@ const range = computed(() => {
   if (today > end && (daysUntil(today, end) ?? 0) <= 14) end = today
   return { start: shift(start, -1), end: shift(end, 1) }
 })
+// A recurring ticket's other rounds in view: past ones by how they went, coming ones hollow.
+function marksOf(node: TimelineNode) {
+  return range.value ? roundMarks(node, range.value.start, range.value.end) : []
+}
+const ROUND_MARK_CLASSES = {
+  done: 'fill-emerald-500 text-emerald-500',
+  missed: 'fill-rose-600 text-rose-600',
+  skipped: 'fill-transparent text-[var(--muted,currentColor)] opacity-60',
+  upcoming: 'fill-transparent text-[var(--accent)] opacity-70'
+} as const
+const ROUND_MARK_TITLES = { done: 'Round done', missed: 'Round missed', skipped: 'Round skipped', upcoming: 'Coming round' } as const
+
 const totalDays = computed(() => (range.value ? (daysUntil(range.value.end, range.value.start) ?? 0) + 1 : 0))
 
 function shift(date: string, days: number) {
@@ -291,6 +303,14 @@ const arrows = computed(() => {
             :class="liveClass(node)"
             :style="{ left: `${offset(liveSpanOf(node)!.start)}%`, width: `${Math.max(0.8, offset(liveSpanOf(node)!.end, true) - offset(liveSpanOf(node)!.start))}%` }"
           />
+          <span
+            v-for="mark in marksOf(node)"
+            :key="mark.date"
+            class="absolute top-1/2 grid -translate-x-1/2 -translate-y-1/2 place-items-center"
+            :style="{ left: `${(offset(mark.date) + offset(mark.date, true)) / 2}%` }"
+            :title="`${ROUND_MARK_TITLES[mark.kind]} · ${mark.date}`"
+            :data-round-mark="mark.kind"
+          ><Diamond :size="full ? 11 : 9" :class="ROUND_MARK_CLASSES[mark.kind]" aria-hidden="true" /></span>
           <template v-if="spanOf(node)">
             <!-- The icon's line sits on the close of the due day; the arrow runs into it. -->
             <ArrowRightToLine
@@ -302,14 +322,14 @@ const arrows = computed(() => {
               :style="{ left: `calc(${offset(spanOf(node)!.end, true)}% - ${full ? 23 : 20}px)` }"
             />
             <Diamond
-              v-else-if="isMilestone(node)"
+              v-if="!isDeadline(node) && isMilestone(node)"
               :size="full ? 16 : 14"
               class="absolute top-1/2 -translate-x-1/2 -translate-y-1/2"
               :class="node.done ? 'fill-emerald-500 text-emerald-500' : 'fill-[var(--accent)] text-[var(--accent)]'"
               :style="{ left: `${(offset(spanOf(node)!.start) + offset(spanOf(node)!.end, true)) / 2}%` }"
             />
             <span
-              v-else
+              v-else-if="!isDeadline(node)"
               class="absolute top-1/2 -translate-y-1/2 rounded-full"
               :class="[barClass(node), full ? 'h-4' : 'h-3.5']"
               :style="{ left: `${offset(spanOf(node)!.start)}%`, width: `${Math.max(0.8, offset(spanOf(node)!.end, true) - offset(spanOf(node)!.start))}%` }"

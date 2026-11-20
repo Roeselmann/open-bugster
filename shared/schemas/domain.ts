@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { agentIcons } from '../utils/agent-icons'
 import {
-  activityChannels, activityKinds, boardMemberSources, boardRoles, categoryColors, integrationProviders, ticketPriorities, ticketSchedules, ticketSources,
+  activityChannels, activityKinds, boardMemberSources, boardRoles, categoryColors, integrationProviders, recurrenceFrequencies, roundOutcomes, ticketPriorities, ticketSchedules, ticketSources,
   ticketTypeColors, ticketTypeIconNames, userRoles, userStatuses, workspaceRoles
 } from '../types/domain'
 import type {
@@ -113,6 +113,25 @@ export const dependencyRefSchema = z.object({
   strictOrderOf: z.number().int().nullable().describe('Set when the dependency comes from a strict to-do list, not by hand: the number of the ticket whose list orders the two. Not removable on its own.')
 }).describe('A ticket in a finish-to-start dependency: the waiting ticket starts once this one ends.')
 
+export const ticketRecurrenceSchema = z.object({
+  frequency: z.enum(recurrenceFrequencies),
+  interval: z.number().int().describe('Every so many of frequency: 2 weekly is every other week, 3 monthly a quarter.'),
+  anchor: z.string().describe('The day of the first round, YYYY-MM-DD. Weekly rounds keep its weekday, monthly ones its day of the month (the last day in a shorter month).'),
+  until: z.string().nullable().describe('The last day a round may fall on; null for a series without end.'),
+  resetTodos: z.boolean().describe('Each new round starts with the plain to-dos unticked and the decisions open; subtickets are left alone.'),
+  returnLaneId: z.string().nullable().describe('The lane the card goes back to at each new round; null leaves it where it is.')
+}).describe('The rule of a recurring ticket.')
+
+export const ticketRoundSchema = z.object({
+  date: z.string().describe('The day the round was due.'),
+  outcome: z.enum(roundOutcomes).describe('done (in a done or live lane, every to-do ticked, or closed by hand), missed (the next round came first) or skipped (by hand).'),
+  todosDone: z.number().int(),
+  todosTotal: z.number().int(),
+  openTodos: z.array(z.string()).describe('The to-dos left open, by their text.'),
+  closedAt: z.string(),
+  closedBy: personSchema.nullable().describe('Who closed it; null when the calendar did.')
+}).describe('A past round of a recurring ticket.')
+
 export const timelineNodeSchema = z.object({
   id: z.string(),
   ticketNumber: z.number().int(),
@@ -122,12 +141,14 @@ export const timelineNodeSchema = z.object({
   laneName: z.string(),
   done: z.boolean().describe('Whether it sits in a done or live lane of its board.'),
   type: ticketTypeRefSchema.nullable(),
-  schedule: z.enum(ticketSchedules).describe('none, milestone (one day, drawn as a diamond) or lifecycle (a bar from start to due).'),
+  schedule: z.enum(ticketSchedules).describe('none, milestone (one day, drawn as a diamond), lifecycle (a bar from start to due) or recurring (a diamond for each round).'),
   startDate: z.string().nullable(),
   dueDate: z.string().nullable(),
   live: z.boolean().describe('Whether it sits in a live lane.'),
   liveFrom: z.string().nullable(),
   liveUntil: z.string().nullable(),
+  recurrence: ticketRecurrenceSchema.nullable(),
+  rounds: z.array(ticketRoundSchema.pick({ date: true, outcome: true })).describe('A recurring ticket\'s past rounds, newest first.'),
   waitsOn: z.array(dependencyRefSchema).describe('The tickets it waits on, wherever they are.'),
   readable: z.boolean().describe('False for a ticket on a board the caller cannot read: listed, but its own subtickets are left out.'),
   get children(): z.ZodArray<typeof timelineNodeSchema> {
@@ -208,11 +229,14 @@ export const ticketSchema = z.object({
   description: z.string(),
   position: z.number().int(),
   priority: z.enum(ticketPriorities),
-  schedule: z.enum(ticketSchedules).describe('How the ticket sits in time: `none` has no dates; `milestone` is one day, an event, kept in `dueDate`, with no start and no live window; `lifecycle` spans start to due and may have a live window, and a due date alone is a deadline.'),
+  schedule: z.enum(ticketSchedules).describe('How the ticket sits in time: `none` has no dates; `milestone` is one day, an event, kept in `dueDate`, with no start and no live window; `lifecycle` spans start to due and may have a live window, and a due date alone is a deadline; `recurring` comes round again by `recurrence`, and its `dueDate` is the round that is on now.'),
   startDate: z.string().nullable().describe('The day work starts, YYYY-MM-DD. With `dueDate` it spans the ticket on a timeline; never after it. Always null for a milestone.'),
   dueDate: z.string().nullable(),
   liveFrom: z.string().nullable().describe('The first day it is out in the world, YYYY-MM-DD: a campaign\'s start in market, an asset\'s release.'),
   liveUntil: z.string().nullable().describe('The last day it is out, YYYY-MM-DD: a campaign\'s end, an approval\'s expiry. Warns while the ticket sits in a live lane.'),
+  recurrence: ticketRecurrenceSchema.nullable().describe('Set for a recurring ticket: when its rounds come. Null for every other schedule.'),
+  nextRound: z.string().nullable().describe('The day the round after the current one is due; null when the ticket does not recur or its series ends with this round.'),
+  rounds: z.array(ticketRoundSchema).describe('A recurring ticket\'s last twelve rounds, newest first.'),
   buildNumber: z.string().nullable(),
   link: z.string().nullable().describe('The first of `links`, kept for callers from the time a ticket had only one.'),
   links: z.array(ticketLinkSchema).describe('References elsewhere, in order; a Jira import starts with the issue.'),

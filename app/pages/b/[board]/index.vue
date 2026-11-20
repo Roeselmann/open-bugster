@@ -523,6 +523,23 @@ async function shiftedFromEditor() {
   notify('success', 'Dates shifted.')
 }
 
+/**
+ * Ends the round of a recurring ticket that is on now and starts the next. The card may go back
+ * to its return lane, which reorders two lanes, so the board reloads after.
+ */
+async function closeRoundFromEditor(ticket: Ticket, outcome: 'done' | 'skipped') {
+  await patchQueue
+  try {
+    const response = await $fetch<{ ticket: Ticket; round: { date: string; next: string | null } }>(`/api/tickets/${ticket.id}/round`, { method: 'POST', body: { outcome } })
+    replaceTicket(response.ticket)
+    await refresh()
+    const what = outcome === 'skipped' ? 'Round skipped' : 'Round completed'
+    notify('success', response.round.next ? `${what}. The next one is due ${response.round.next}.` : `${what}. That was the last round of the series.`)
+  } catch (error) {
+    notify('error', errorText(error))
+  }
+}
+
 // Title and description have their own Save button, so they also say when it worked.
 function saveTitleFromEditor(ticket: Ticket, title: string) {
   return patchTicketFromEditor(ticket, { title }, 'Title saved.')
@@ -694,7 +711,7 @@ async function sync(provider: IntegrationProvider) {
       <div v-else class="scrollbar-thin overflow-x-auto max-md:hidden"><KanbanBoard :board-id="board.id" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" @open="openTicket" @move="moveTicket" @create="newTicket" @upload="uploadAttachmentsFromCard" /></div>
     </main>
 
-    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :save-state="saveState" :deleting-attachment-id="deletingAttachmentId" :initial-lane-id="newTicketLaneId" :initial-placement="newTicketPlacement" :lane-ticket-count="selectedLaneTicketCount" :boards="transferableBoards" :subticket-boards="subticketBoards" :testflight="board.credentials.complete" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @reorder="reorderTicketFromEditor" @transfer="transferTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @save-description="saveDescriptionFromEditor" @save-title="saveTitleFromEditor" @patch="patchTicketFromEditor" @upload="uploadAttachmentsFromEditor" @create-subticket="createSubticketFromEditor" @commented="refresh()" @shifted="shiftedFromEditor" @notify="notify" />
+    <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :save-state="saveState" :deleting-attachment-id="deletingAttachmentId" :initial-lane-id="newTicketLaneId" :initial-placement="newTicketPlacement" :lane-ticket-count="selectedLaneTicketCount" :boards="transferableBoards" :subticket-boards="subticketBoards" :testflight="board.credentials.complete" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @reorder="reorderTicketFromEditor" @transfer="transferTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @save-description="saveDescriptionFromEditor" @save-title="saveTitleFromEditor" @patch="patchTicketFromEditor" @upload="uploadAttachmentsFromEditor" @create-subticket="createSubticketFromEditor" @commented="refresh()" @shifted="shiftedFromEditor" @close-round="closeRoundFromEditor" @notify="notify" />
 
     <UiConfirmDialog
       v-if="confirmation"

@@ -1,6 +1,6 @@
 import { createError } from 'h3'
 import { z } from 'zod'
-import { boardRoles, categoryColors, linkDisplays, integrationProviders, ticketSchedules, ticketTypeColors, ticketTypeIconNames, userRoles, userStatuses, workspaceRoles } from '../../shared/types/domain'
+import { boardRoles, categoryColors, linkDisplays, integrationProviders, recurrenceFrequencies, roundOutcomes, ticketSchedules, ticketTypeColors, ticketTypeIconNames, userRoles, userStatuses, workspaceRoles } from '../../shared/types/domain'
 import { TICKET_TYPE_ICON_DATA_URL_MAX } from '../../shared/utils/constants'
 import { isJiraSiteUrl, normalizeSiteUrl } from './jira-policy'
 
@@ -46,6 +46,19 @@ const linkSchema = z.object({
   display: z.enum(linkDisplays).default('text')
 })
 
+/** A recurring ticket's rule; what is left out takes the everyday defaults. */
+const recurrenceSchema = z.object({
+  frequency: z.enum(recurrenceFrequencies),
+  /** Every so many of `frequency`: 2 weekly is every other week, 3 monthly a quarter. */
+  interval: z.number().int().min(1).max(99).default(1),
+  /** The day of the first round; later rounds keep its weekday or day of the month. */
+  anchor: z.iso.date(),
+  until: z.iso.date().nullable().default(null),
+  resetTodos: z.boolean().default(true),
+  /** A lane of the ticket's own board; the caller checks that. */
+  returnLaneId: idSchema.nullable().default(null)
+})
+
 const ticketShape = {
   title: z.string().trim().min(1, 'Title is required.').max(160),
   description: z.string().max(10000),
@@ -56,6 +69,7 @@ const ticketShape = {
   dueDate: z.iso.date().nullable(),
   liveFrom: z.iso.date().nullable(),
   liveUntil: z.iso.date().nullable(),
+  recurrence: recurrenceSchema.nullable(),
   buildNumber: z.string().trim().max(100).nullable(),
   /** The first link, for callers that know only one. A web address or nothing; an empty string reads as nothing. */
   link: z.string().trim().max(2000).transform(value => value || null).nullable()
@@ -85,6 +99,7 @@ export const ticketCreateSchema = z.object({
   dueDate: ticketShape.dueDate.optional(),
   liveFrom: ticketShape.liveFrom.optional(),
   liveUntil: ticketShape.liveUntil.optional(),
+  recurrence: ticketShape.recurrence.optional(),
   buildNumber: ticketShape.buildNumber.optional(),
   link: ticketShape.link.optional(),
   links: ticketShape.links.optional(),
@@ -125,6 +140,12 @@ export const ticketShiftSchema = z.object({
   days: z.number().int().min(-366).max(366).refine(days => days !== 0, 'Shift by at least one day.'),
   /** Only report what would move. */
   dryRun: z.boolean().default(false)
+})
+
+/** Ends the round of a recurring ticket that is on now, by hand, and starts the next one. */
+export const ticketRoundCloseSchema = z.object({
+  /** `done` finishes the round; `skipped` lets it go on purpose. A miss is the calendar's to note. */
+  outcome: z.enum(roundOutcomes).exclude(['missed']).default('done')
 })
 
 export const ticketMoveSchema = z.object({

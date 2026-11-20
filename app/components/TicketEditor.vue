@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ComponentPublicInstance } from 'vue'
-import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, CalendarArrowUp, CalendarClock, CalendarRange, Check, ChevronDown, Flag, Circle, CircleAlert, CircleCheck, CornerDownRight, CornerLeftUp, Download, ExternalLink, FileText, Gauge, GripVertical, History, Link2, ListOrdered, ListTodo, Lock, LoaderCircle, MessageSquare, Paperclip, PenLine, Pin, PinOff, Plus, Radio, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, Vote, X } from '@lucide/vue'
+import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, CalendarArrowUp, CalendarClock, CalendarRange, Check, ChevronDown, Flag, Circle, CircleAlert, CircleCheck, CornerDownRight, CornerLeftUp, Download, Repeat, SkipForward, CircleX, ExternalLink, FileText, Gauge, GripVertical, History, Link2, ListOrdered, ListTodo, Lock, LoaderCircle, MessageSquare, Paperclip, PenLine, Pin, PinOff, Plus, Radio, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, Vote, X } from '@lucide/vue'
 import {
   DialogContent,
   DialogDescription,
@@ -15,7 +15,8 @@ import {
   DropdownMenuTrigger,
   VisuallyHidden,
 } from 'reka-ui'
-import type { Attachment, BoardMember, DependencyRef, ShiftResult, Category, LabelSummary, Lane, Person, SubticketRef, Ticket, TicketDecisionInput, TicketLinkInput, TicketPatch, TicketPriority, TicketSchedule, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
+import type { Attachment, BoardMember, DependencyRef, ShiftResult, Category, LabelSummary, Lane, Person, RecurrenceFrequency, SubticketRef, Ticket, TicketDecisionInput, TicketLinkInput, TicketPatch, TicketPriority, TicketRecurrence, TicketSchedule, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
+import { describeRecurrence, isOccurrence, nextRound as nextRoundOf, occurrenceOnOrAfter } from '~~/shared/utils/recurrence'
 import { TODO_LIGHT_LABELS, todoLight } from '~~/shared/utils/todo-progress'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 import { boardToday, dueDescription, dueLevel, liveDescription, liveLevel } from '~~/shared/utils/due-date'
@@ -42,6 +43,8 @@ const emit = defineEmits<{
   removeAttachment: [attachment: Attachment]
   saveDescription: [ticket: Ticket, description: string]
   saveTitle: [ticket: Ticket, title: string]
+  /** Ends the round of a recurring ticket that is on now and starts the next. */
+  closeRound: [ticket: Ticket, outcome: 'done' | 'skipped']
   /** A new ticket filed as a to-do of this one; `done` says whether it worked, so the dialog can close. */
   createSubticket: [ticket: Ticket, input: { boardId: string; laneId: string; title: string; description: string }, done: (ok: boolean) => void]
 }>()
@@ -72,8 +75,69 @@ const lifecycleOn = computed(() => schedule.value !== 'none')
 const SCHEDULE_OPTIONS: Array<{ value: TicketSchedule; label: string; title: string }> = [
   { value: 'none', label: 'None', title: 'No dates: removes every date and what it waits on' },
   { value: 'milestone', label: 'Milestone', title: 'One day, an event: a meeting, a go-live' },
-  { value: 'lifecycle', label: 'Lifecycle', title: 'Work from start to due date, then a live window; a due date alone is a deadline' }
+  { value: 'lifecycle', label: 'Lifecycle', title: 'Work from start to due date, then a live window; a due date alone is a deadline' },
+  { value: 'recurring', label: 'Recurring', title: 'The same card comes round again, like a series in the calendar' }
 ]
+
+// A recurring ticket's rule as the form holds it. Saved whole, the moment a part of it changes.
+const rule = reactive<TicketRecurrence>({ frequency: 'weekly', interval: 1, anchor: '', until: null, resetTodos: true, returnLaneId: null })
+const FREQUENCY_UNITS: Array<{ value: RecurrenceFrequency; one: string; many: string }> = [
+  { value: 'daily', one: 'day', many: 'days' },
+  { value: 'weekly', one: 'week', many: 'weeks' },
+  { value: 'monthly', one: 'month', many: 'months' },
+  { value: 'yearly', one: 'year', many: 'years' }
+]
+const frequencyOptions = computed(() => FREQUENCY_UNITS.map(unit => ({ value: unit.value, label: rule.interval === 1 ? unit.one : unit.many })))
+const NO_RETURN_LANE = 'stay'
+const returnLaneOptions = computed(() => [
+  { value: NO_RETURN_LANE, label: 'Stays where it is' },
+  ...props.lanes.filter(lane => !lane.isImport).map(lane => ({ value: lane.id, label: lane.name }))
+])
+const ruleText = computed(() => (rule.anchor ? describeRecurrence(rule) : ''))
+// The round after this one, as the server will count it; the rule decides, not the moved round.
+const nextRoundDate = computed(() => (schedule.value === 'recurring' && rule.anchor && form.dueDate ? nextRoundOf(rule, form.dueDate) : null))
+const offRule = computed(() => schedule.value === 'recurring' && rule.anchor && form.dueDate ? !isOccurrence(rule, form.dueDate) : false)
+const rounds = computed(() => (schedule.value === 'recurring' ? props.ticket?.rounds ?? [] : []))
+const seriesOver = computed(() => Boolean(props.ticket && schedule.value === 'recurring' && !props.ticket.nextRound && props.ticket.rounds[0]?.date === props.ticket.dueDate))
+
+function loadRule(recurrence: TicketRecurrence | null | undefined) {
+  Object.assign(rule, recurrence ?? { frequency: 'weekly', interval: 1, anchor: '', until: null, resetTodos: true, returnLaneId: null })
+}
+function ruleInput(): TicketRecurrence {
+  return { frequency: rule.frequency, interval: Math.max(1, Math.min(99, Math.floor(Number(rule.interval) || 1))), anchor: rule.anchor, until: rule.until || null, resetTodos: rule.resetTodos, returnLaneId: rule.returnLaneId }
+}
+/** Saves the rule whole. A rule that moves the rounds to other days puts this round on the first of them from today. */
+function commitRule() {
+  if (!rule.anchor) return
+  rule.interval = ruleInput().interval
+  if (rule.until && rule.until < rule.anchor) rule.until = null
+  const before = props.ticket?.recurrence
+  const moves = !before || before.frequency !== rule.frequency || before.interval !== rule.interval || before.anchor !== rule.anchor
+  if (moves) {
+    const first = occurrenceOnOrAfter(rule, today)
+    form.dueDate = rule.until && first > rule.until ? form.dueDate : first
+  }
+  commit(withSchedule({ recurrence: ruleInput() }))
+}
+function commitReturnLane(value: string) {
+  rule.returnLaneId = value === NO_RETURN_LANE ? null : value
+  commitRule()
+}
+/** Moves only the round that is on now; clearing it puts the saved day back. */
+function commitRound() {
+  if (!form.dueDate) {
+    form.dueDate = props.ticket?.dueDate || ''
+    return
+  }
+  commit(withSchedule({ dueDate: form.dueDate }))
+}
+const roundDay = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+const roundDayOf = (date: string) => roundDay.format(new Date(`${date}T00:00:00Z`))
+function roundTitle(round: Ticket['rounds'][number]) {
+  const how = { done: 'Done', missed: 'Missed', skipped: 'Skipped' }[round.outcome]
+  const open = round.openTodos.length ? ` · open: ${round.openTodos.join(', ')}` : ''
+  return `${how} · ${round.date} · ${round.todosDone}/${round.todosTotal} to-dos${open}`
+}
 interface EditableTodo extends TicketTodoInput { key: string; subticket?: SubticketRef | null; decidedBy?: Pick<Person, 'firstName' | 'lastName' | 'email'> | null; decidedAt?: string | null }
 const todos = ref<EditableTodo[]>([])
 const links = ref<TicketLinkInput[]>([])
@@ -264,6 +328,7 @@ const dateText = (date: string) => shortDate.format(new Date(`${date}T00:00:00Z`
 const scheduleSummary = computed(() => {
   if (schedule.value === 'none') return 'No schedule'
   if (schedule.value === 'milestone') return form.dueDate ? `Milestone · ${dateText(form.dueDate)}` : 'Milestone · no date yet'
+  if (schedule.value === 'recurring') return ruleText.value ? `${ruleText.value}${form.dueDate ? ` · this round ${dateText(form.dueDate)}` : ''}` : 'Recurring · no rule yet'
   const work = form.startDate && form.dueDate ? `${dateText(form.startDate)} – ${dateText(form.dueDate)}`
     : form.dueDate ? `Due ${dateText(form.dueDate)}`
     : form.startDate ? `From ${dateText(form.startDate)}` : null
@@ -497,6 +562,8 @@ watch(() => props.ticket, (ticket, previous) => {
   form.liveFrom = ticket?.liveFrom || ''
   form.liveUntil = ticket?.liveUntil || ''
   if (!sameTicket || ticket?.schedule === scheduleChoice.value) scheduleChoice.value = null
+  // The saved rule, or the one being set up while the switch to recurring is on its way.
+  if (ticket?.recurrence || scheduleChoice.value !== 'recurring') loadRule(ticket?.recurrence)
   form.buildNumber = ticket?.buildNumber || ''
   links.value = (ticket?.links || []).map(link => ({ url: link.url, display: link.display }))
   form.assigneeId = ticket?.assignee?.id || UNASSIGNED
@@ -701,6 +768,18 @@ function setSchedule(next: TicketSchedule) {
     return
   }
   const parked = parkedSchedules.get(key)
+  if (next === 'recurring') {
+    parkSchedule(key)
+    // Weekly from the day the ticket had, or from today, and back to where the card is now.
+    loadRule({
+      frequency: 'weekly', interval: 1, anchor: form.dueDate || form.startDate || parked?.dueDate || today, until: null, resetTodos: true,
+      returnLaneId: currentLane.value && !currentLane.value.isDone && !currentLane.value.isLive && !currentLane.value.isImport ? currentLane.value.id : null
+    })
+    form.startDate = form.liveFrom = form.liveUntil = ''
+    form.dueDate = occurrenceOnOrAfter(rule, today)
+    commit({ schedule: 'recurring', recurrence: ruleInput() })
+    return
+  }
   if (next === 'milestone') {
     parkSchedule(key)
     const restored = !form.dueDate && !form.startDate && Boolean(parked?.dueDate || parked?.startDate)
@@ -926,7 +1005,7 @@ function submit(options: { stayOpen?: boolean } = {}) {
   const manualFields = isManual.value ? { buildNumber: payload.buildNumber() } : {}
   // Sent only by somebody allowed to set it — the API rejects it from anyone else.
   const authorFields = canAttribute.value ? { authorId: payload.authorId() } : {}
-  emit('save', { ...shared, ...manualFields, ...authorFields, laneId: form.laneId || undefined, placement: form.placement, title: form.title.trim(), description: form.description, priority: form.priority, schedule: schedule.value === 'milestone' && !form.dueDate ? 'none' : schedule.value, startDate: payload.startDate(), dueDate: payload.dueDate(), liveFrom: payload.liveFrom(), liveUntil: payload.liveUntil(), links: [...links.value], labels: payload.labels(), categoryName: payload.categoryName(), typeId: payload.typeId(), stayOpen: options.stayOpen === true })
+  emit('save', { ...shared, ...manualFields, ...authorFields, laneId: form.laneId || undefined, placement: form.placement, title: form.title.trim(), description: form.description, priority: form.priority, schedule: schedule.value === 'milestone' && !form.dueDate ? 'none' : schedule.value, startDate: payload.startDate(), dueDate: payload.dueDate(), liveFrom: payload.liveFrom(), liveUntil: payload.liveUntil(), recurrence: schedule.value === 'recurring' && rule.anchor ? ruleInput() : undefined, links: [...links.value], labels: payload.labels(), categoryName: payload.categoryName(), typeId: payload.typeId(), stayOpen: options.stayOpen === true })
 }
 
 // Links save as soon as one is added, removed or switched between preview and text.
@@ -1692,6 +1771,7 @@ function focusTitle(event: Event) {
                   >
                     <Flag v-if="option.value === 'milestone'" :size="13" aria-hidden="true" />
                     <CalendarRange v-else-if="option.value === 'lifecycle'" :size="13" aria-hidden="true" />
+                    <Repeat v-else-if="option.value === 'recurring'" :size="13" aria-hidden="true" />
                     {{ option.label }}
                   </button>
                 </div>
@@ -1718,6 +1798,159 @@ function focusTitle(event: Event) {
                     @change="commitMilestone"
                   >
                 </label>
+                <!-- A recurring ticket: the rule, the round that is on now, and how the last rounds went. -->
+                <div v-else-if="schedule === 'recurring'" class="space-y-4" data-recurrence-block>
+                  <div class="grid gap-4 sm:grid-cols-2">
+                    <div class="block">
+                      <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Repeat :size="14" /> Repeats every</span>
+                      <div class="flex items-center gap-2">
+                        <input
+                          v-model.number="rule.interval"
+                          type="number"
+                          min="1"
+                          max="99"
+                          step="1"
+                          class="focus-ring surface-strong h-11 w-20 rounded-xl px-3 text-sm tabular-nums outline-none"
+                          aria-label="Every how many"
+                          :readonly="!canEdit"
+                          data-recurrence-interval
+                          @change="commitRule"
+                        >
+                        <div class="min-w-0 flex-1">
+                          <UiSelect
+                            :model-value="rule.frequency"
+                            :options="frequencyOptions"
+                            aria-label="Repeats by"
+                            :disabled="!canEdit"
+                            data-recurrence-frequency
+                            @update:model-value="rule.frequency = $event as RecurrenceFrequency; commitRule()"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    <label class="block">
+                      <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><CalendarArrowUp :size="14" /> First round</span>
+                      <input
+                        v-model="rule.anchor"
+                        type="date"
+                        class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
+                        :readonly="!canEdit"
+                        data-recurrence-anchor
+                        @change="commitRule"
+                      >
+                    </label>
+                  </div>
+                  <p v-if="ruleText" class="muted -mt-2 text-xs" data-recurrence-summary>{{ ruleText }}{{ rule.until ? `, until ${dateText(rule.until)}` : '' }}. Later rounds keep the first round’s {{ rule.frequency === 'weekly' ? 'weekday' : rule.frequency === 'daily' ? 'rhythm' : rule.frequency === 'monthly' ? 'day of the month' : 'date' }}.</p>
+
+                  <div class="grid gap-4 sm:grid-cols-2">
+                    <label class="block">
+                      <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]">
+                        <Calendar :size="14" /> This round
+                        <span
+                          v-if="dueText"
+                          class="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal"
+                          :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
+                        ><AlarmClock :size="11" /> {{ dueText }}</span>
+                      </span>
+                      <!-- Moving it moves this round alone; the series carries on from its rule. -->
+                      <input
+                        v-model="form.dueDate"
+                        type="date"
+                        class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
+                        :class="dueState === 'alert' ? 'ring-2 ring-rose-600' : dueState === 'warning' ? 'ring-2 ring-orange-400' : ''"
+                        :readonly="!canEdit"
+                        data-round-date
+                        @change="commitRound"
+                      >
+                      <span class="muted mt-1 block text-[11px]">
+                        <template v-if="seriesOver">The series is over.</template>
+                        <template v-else-if="nextRoundDate">Next round {{ dateText(nextRoundDate) }}{{ offRule ? ' · this one is moved' : '' }}</template>
+                        <template v-else>This is the last round of the series.</template>
+                      </span>
+                    </label>
+                    <label class="block">
+                      <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Flag :size="14" /> Ends after</span>
+                      <input
+                        v-model="rule.until"
+                        type="date"
+                        class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
+                        :min="rule.anchor || undefined"
+                        :readonly="!canEdit"
+                        data-recurrence-until
+                        @change="commitRule"
+                      >
+                      <span class="muted mt-1 block text-[11px]">Empty: no end.</span>
+                    </label>
+                  </div>
+
+                  <div class="grid gap-4 sm:grid-cols-2">
+                    <div class="block">
+                      <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><SquareKanban :size="14" /> Each new round goes to</span>
+                      <UiSelect
+                        :model-value="rule.returnLaneId ?? NO_RETURN_LANE"
+                        :options="returnLaneOptions"
+                        aria-label="Lane for each new round"
+                        :disabled="!canEdit"
+                        data-recurrence-lane
+                        @update:model-value="commitReturnLane($event)"
+                      />
+                    </div>
+                    <label class="flex items-start gap-2.5 self-end rounded-xl px-1 py-2 text-sm">
+                      <input
+                        v-model="rule.resetTodos"
+                        type="checkbox"
+                        class="focus-ring mt-0.5 size-4 shrink-0 cursor-pointer accent-[var(--accent)]"
+                        :disabled="!canEdit"
+                        data-recurrence-reset
+                        @change="commitRule"
+                      >
+                      <span>
+                        <span class="font-semibold">Fresh to-dos each round</span>
+                        <span class="muted block text-xs">Unticks the to-dos and reopens the decisions when the next round starts.</span>
+                      </span>
+                    </label>
+                  </div>
+
+                  <!-- How the rounds went, newest last, and the way to end this one early. -->
+                  <div v-if="ticket" class="space-y-2 border-t border-[var(--line)] pt-3">
+                    <div class="flex flex-wrap items-center gap-1.5" aria-label="Past rounds" data-rounds>
+                      <span class="muted mr-1 text-xs font-bold uppercase tracking-[.08em]">Rounds</span>
+                      <span v-if="!rounds.length" class="muted text-xs">None closed yet. A round closes when the next one is due: done if the card is in a done lane or every to-do is ticked, missed otherwise.</span>
+                      <span
+                        v-for="round in [...rounds].reverse()"
+                        :key="round.date"
+                        class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums"
+                        :class="round.outcome === 'done' ? 'tone tone-emerald' : round.outcome === 'missed' ? 'bg-rose-600 text-white' : 'tone tone-neutral'"
+                        :title="roundTitle(round)"
+                        :data-round-outcome="round.outcome"
+                      >
+                        <CircleCheck v-if="round.outcome === 'done'" :size="11" aria-hidden="true" />
+                        <CircleX v-else-if="round.outcome === 'missed'" :size="11" aria-hidden="true" />
+                        <SkipForward v-else :size="11" aria-hidden="true" />
+                        {{ roundDayOf(round.date) }}
+                      </span>
+                    </div>
+                    <p v-if="rounds[0]?.outcome === 'missed' && !inDoneLane" class="flex items-center gap-1.5 text-xs font-semibold text-rose-600" data-missed-warning>
+                      <CircleAlert :size="13" aria-hidden="true" /> The round of {{ dateText(rounds[0].date) }} was missed{{ rounds[0].openTodos.length ? ` with ${rounds[0].openTodos.length} to-do${rounds[0].openTodos.length === 1 ? '' : 's'} open` : '' }}.
+                    </p>
+                    <div v-if="canEdit && !seriesOver" class="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        class="focus-ring flex h-9 items-center gap-1.5 rounded-xl border border-[var(--line)] px-3 text-xs font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]"
+                        title="Close this round as done and start the next one now"
+                        data-complete-round
+                        @click="emit('closeRound', ticket, 'done')"
+                      ><CircleCheck :size="13" aria-hidden="true" /> Complete round</button>
+                      <button
+                        type="button"
+                        class="focus-ring muted flex h-9 items-center gap-1.5 rounded-xl px-3 text-xs font-semibold hover:bg-[var(--panel)] hover:text-[var(--ink)]"
+                        title="Let this round go and start the next one now"
+                        data-skip-round
+                        @click="emit('closeRound', ticket, 'skipped')"
+                      ><SkipForward :size="13" aria-hidden="true" /> Skip round</button>
+                    </div>
+                  </div>
+                </div>
                 <template v-else>
                 <div class="grid gap-4 sm:grid-cols-2">
                   <label class="block">
@@ -1799,7 +2032,7 @@ function focusTitle(event: Event) {
                 </template>
 
                 <!-- Moving the plan: these dates and everything waiting on them, by the same days. -->
-                <div v-if="ticket && canEdit && (ticket.startDate || ticket.dueDate)" class="border-t border-[var(--line)] pt-3">
+                <div v-if="ticket && canEdit && schedule !== 'recurring' && (ticket.startDate || ticket.dueDate)" class="border-t border-[var(--line)] pt-3">
                   <button
                     v-if="!shiftOpen"
                     type="button"

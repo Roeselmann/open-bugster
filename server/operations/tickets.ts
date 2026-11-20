@@ -3,10 +3,10 @@ import { z } from 'zod'
 import { boardMemberIds, boardViewer, requireBoardAccess, requireTicketAccess } from '../utils/access'
 import type { Actor } from '../utils/actor'
 import {
-  archiveTicket, createSubticket, createTicket, listActivity, listDueTickets, listBoardActivity, listTickets, listTicketsPage,
+  archiveTicket, closeRound, createSubticket, createTicket, listActivity, listDueTickets, listBoardActivity, listTickets, listTicketsPage,
   atomically, dependencyRefs, findBoard, findLane, findTicket, listBoards, moveTicket, parentTicketRefsOf, searchSubticketCandidates, personById, restoreTicket, subticketIdsOf, ticketIdByNumber, ticketTimeline, ticketTypeBelongsToBoard, transferTicket, updateTicket, ticketsWaitingOn, waitingTicketIds, waitsOnTransitively
 } from '../utils/db'
-import { importedTicketUpdateSchema, subticketCreateSchema, ticketCreateSchema, ticketMoveSchema, ticketShiftSchema, ticketTransferSchema, ticketUpdateSchema } from '../utils/validation'
+import { importedTicketUpdateSchema, subticketCreateSchema, ticketCreateSchema, ticketMoveSchema, ticketRoundCloseSchema, ticketShiftSchema, ticketTransferSchema, ticketUpdateSchema } from '../utils/validation'
 import { deleteLinkThumbnails } from '../utils/link-preview'
 import { cardImageCandidates } from '../../shared/utils/card-images'
 import { addDays } from '../../shared/utils/timeline'
@@ -124,7 +124,8 @@ export const ticketCreate = defineOperation({
       throw createError({ statusCode: 422, statusMessage: 'A ticket can only be assigned to a member of this board.' })
     }
     if (rest.typeId && !ticketTypeBelongsToBoard(rest.typeId, boardId)) throw foreignType()
-    Object.assign(rest, settled({ schedule: 'none', startDate: null, dueDate: null, liveFrom: null, liveUntil: null }, rest))
+    Object.assign(rest, settled({ schedule: 'none', startDate: null, dueDate: null, liveFrom: null, liveUntil: null, recurrence: null }, rest))
+    checkReturnLane(boardId, rest.recurrence)
     checkNewSubtickets(ctx.actor, boardId, null, new Set(), rest.todos)
     keepDecisionsOpenFor(ctx.actor, [], rest.todos)
     if (rest.strictOrder) checkStrictOrder([], rest.todos)
@@ -147,6 +148,14 @@ function settled(before: ScheduleFields, patch: Partial<ScheduleFields>): Schedu
   checkSpan(outcome.value.startDate, outcome.value.dueDate)
   checkLiveWindow(outcome.value.liveFrom, outcome.value.liveUntil)
   return outcome.value
+}
+
+/** A recurring ticket goes back to a lane of its own board at each new round, or stays put. */
+function checkReturnLane(boardId: string, recurrence: { returnLaneId: string | null } | null | undefined) {
+  if (!recurrence?.returnLaneId) return
+  if (findLane(recurrence.returnLaneId)?.boardId !== boardId) {
+    throw createError({ statusCode: 422, statusMessage: 'The return lane has to be a lane of the ticket’s own board.' })
+  }
 }
 
 /** A start after the due date would draw a bar backwards; either one alone is fine. Both are YYYY-MM-DD, so they compare as text. */
@@ -186,6 +195,7 @@ export const ticketUpdate = defineOperation({
     // The dates are checked as they will stand: a new start against the due date already set,
     // a switch to a milestone dropping the start, and so on. Untouched, they are left alone.
     if (touchesSchedule(fields)) Object.assign(fields, settled(ticket, fields))
+    if (fields.recurrence && fields.recurrence.returnLaneId !== ticket.recurrence?.returnLaneId) checkReturnLane(ticket.boardId, fields.recurrence)
     const members = boardMemberIds(ticket.boardId)
     if (fields.assigneeId && fields.assigneeId !== ticket.assignee?.id && !members.has(fields.assigneeId)) {
       throw createError({ statusCode: 422, statusMessage: 'A ticket can only be assigned to a member of this board.' })
@@ -387,6 +397,29 @@ function readable(actor: Actor, boardId: string) {
     return false
   }
 }
+
+/**
+ * Ends the round of a recurring ticket that is on now, by hand — done, or skipped on purpose —
+ * and starts the next: to-dos reset, the card back in its return lane, the due date on to the
+ * next round after today. The calendar does the same by itself once the next round is due.
+ */
+export const ticketRoundClose = defineOperation({
+  name: 'ticket.round.close',
+  summary: 'Close the current round of a recurring ticket and start the next',
+  input: ticketRoundCloseSchema.extend({ ticketId }),
+  requires: { scope: 'ticket', role: 'editor', ticketId: input => input.ticketId },
+  audit: { targetType: 'ticket', targetId: input => input.ticketId, changes: ['outcome'] },
+  run: (ctx, input) => {
+    const ticket = ctx.ticket!
+    if (ticket.schedule !== 'recurring') throw createError({ statusCode: 422, statusMessage: 'Only a recurring ticket has rounds to close.' })
+    if (ticket.archivedAt) throw createError({ statusCode: 422, statusMessage: 'An archived ticket has no round on.' })
+    if (!ticket.nextRound && ticket.rounds[0]?.date === ticket.dueDate) {
+      throw createError({ statusCode: 409, statusMessage: 'This series is over: its last round has closed.' })
+    }
+    const signal = orNotFound(closeRound(ticket.id, input.outcome, ctx.actor), 'Ticket')
+    return { ticket: orNotFound(findTicket(ticket.id), 'Ticket'), round: { date: signal.date, outcome: signal.outcome, next: signal.next } }
+  }
+})
 
 export const ticketMove = defineOperation({
   name: 'ticket.move',

@@ -27,8 +27,50 @@ export type TicketPriority = typeof ticketPriorities[number]
  * How a ticket sits in time. `none`: no dates at all. `milestone`: one day, an event — a
  * meeting, a go-live — kept in `dueDate`, with no start and no live window. `lifecycle`: work
  * across days, start to due, and the live window after; a due date alone is a deadline.
+ * `recurring`: the same card comes round again and again, like a series in a calendar; its
+ * `dueDate` is the round that is on now, and `recurrence` says when the next one is.
  */
-export const ticketSchedules = ['none', 'milestone', 'lifecycle'] as const
+export const ticketSchedules = ['none', 'milestone', 'lifecycle', 'recurring'] as const
+
+/** How often a recurring ticket comes round; a quarter is three months, a fortnight two weeks. */
+export const recurrenceFrequencies = ['daily', 'weekly', 'monthly', 'yearly'] as const
+export type RecurrenceFrequency = typeof recurrenceFrequencies[number]
+
+/**
+ * The rule of a recurring ticket. Rounds count from `anchor`, the day of the first one: weekly
+ * keeps its weekday, monthly its day of the month (the last day in a shorter month).
+ */
+export interface TicketRecurrence {
+  frequency: RecurrenceFrequency
+  /** Every so many of `frequency`: 2 with weekly is every other week, 3 with monthly a quarter. */
+  interval: number
+  /** The day of the first round, YYYY-MM-DD. */
+  anchor: string
+  /** The last day a round may fall on; null for a series without end. */
+  until: string | null
+  /** Each new round starts with the plain to-dos unticked and the decisions open again. */
+  resetTodos: boolean
+  /** The lane the card goes back to when a new round starts; null leaves it where it is. */
+  returnLaneId: string | null
+}
+
+/** How a round ended: finished, gone by unfinished, or skipped on purpose. */
+export const roundOutcomes = ['done', 'missed', 'skipped'] as const
+export type RoundOutcome = typeof roundOutcomes[number]
+
+/** One past round of a recurring ticket, as it stood when it closed. */
+export interface TicketRound {
+  /** The day the round was due. */
+  date: string
+  outcome: RoundOutcome
+  todosDone: number
+  todosTotal: number
+  /** The to-dos left open, by their text. */
+  openTodos: string[]
+  closedAt: string
+  /** Who closed it; null when the calendar did. */
+  closedBy: Person | null
+}
 export type TicketSchedule = typeof ticketSchedules[number]
 export type TicketSource = typeof ticketSources[number]
 export type IntegrationProvider = typeof integrationProviders[number]
@@ -215,12 +257,13 @@ export interface TicketComment {
   updatedAt: string
 }
 
-export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'start_date', 'due_date', 'live_from', 'live_until', 'schedule', 'type', 'archived', 'restored', 'commented', 'subticket', 'waits_on', 'decided', 'reopened', 'strict_order', 'went_live', 'live_ending', 'live_ended'] as const
+export const activityKinds = ['created', 'moved', 'assigned', 'unassigned', 'author', 'priority', 'start_date', 'due_date', 'live_from', 'live_until', 'schedule', 'type', 'archived', 'restored', 'commented', 'subticket', 'waits_on', 'decided', 'reopened', 'strict_order', 'went_live', 'live_ending', 'live_ended', 'recurrence', 'new_round', 'round_missed'] as const
 export type ActivityKind = typeof activityKinds[number]
 
 /**
  * How a change reached the server. Everything written before agents existed reads `web`;
- * `system` is the server itself, noting that a live window began or ran out.
+ * `system` is the server itself, noting that a live window began or ran out, or starting the
+ * next round of a recurring ticket.
  */
 export const activityChannels = ['web', 'api', 'mcp', 'system'] as const
 export type ActivityChannel = typeof activityChannels[number]
@@ -516,6 +559,10 @@ export interface TimelineNode {
   live: boolean
   liveFrom: string | null
   liveUntil: string | null
+  /** The rule of a recurring ticket; null for every other schedule. */
+  recurrence: TicketRecurrence | null
+  /** A recurring ticket's past rounds, newest first, with how each ended. */
+  rounds: Array<Pick<TicketRound, 'date' | 'outcome'>>
   /** The tickets it waits on, wherever they are; the timeline draws an arrow from each it shows. */
   waitsOn: DependencyRef[]
   readable: boolean
@@ -560,8 +607,13 @@ export interface TicketPatch {
   title?: string
   description?: string
   priority?: TicketPriority
-  /** None, milestone or lifecycle; switching clears the dates the new one has no room for. */
+  /** None, milestone, lifecycle or recurring; switching clears the dates the new one has no room for. */
   schedule?: TicketSchedule
+  /**
+   * The rule of a recurring ticket, whole. Sending one makes the ticket recurring; null stops
+   * the series and leaves the current round as a milestone.
+   */
+  recurrence?: TicketRecurrenceInput | null
   /** The day work starts, YYYY-MM-DD; never after `dueDate`. */
   startDate?: string | null
   dueDate?: string | null
@@ -588,6 +640,16 @@ export interface TicketPatch {
   strictOrder?: boolean
   /** Ids of the tickets it waits on; the whole list, replacing what it had. */
   waitsOn?: string[]
+}
+
+/** What a caller sends for a recurring ticket's rule; left out, `interval` is 1 and `resetTodos` true. */
+export interface TicketRecurrenceInput {
+  frequency: RecurrenceFrequency
+  interval?: number
+  anchor: string
+  until?: string | null
+  resetTodos?: boolean
+  returnLaneId?: string | null
 }
 
 export interface TicketTodo extends TicketTodoInput {
@@ -674,6 +736,12 @@ export interface Ticket {
    */
   liveFrom: string | null
   liveUntil: string | null
+  /** The rule of a recurring ticket; null for every other schedule. */
+  recurrence: TicketRecurrence | null
+  /** The round after the one that is on now; null when the ticket does not recur or its series ends. */
+  nextRound: string | null
+  /** A recurring ticket's last rounds, newest first: how each ended, and what was left open. */
+  rounds: TicketRound[]
   buildNumber: string | null
   /** The first of `links`, kept for callers from the time a ticket had only one. */
   link: string | null

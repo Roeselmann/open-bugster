@@ -1,4 +1,5 @@
 import type { DependencyRef, TimelineNode } from '../types/domain'
+import { occurrencesBetween } from './recurrence'
 
 /** A node's days on a timeline. One date alone makes a one-day span; neither leaves it off. */
 export interface Span {
@@ -20,9 +21,29 @@ export function liveSpanOf(node: Pick<TimelineNode, 'liveFrom' | 'liveUntil' | '
   return start && end && start <= end ? { start, end } : null
 }
 
-/** Whether the ticket is an event on one day, drawn as a diamond. A one-day lifecycle is a short bar. */
+/**
+ * Whether the ticket is an event on one day, drawn as a diamond. A one-day lifecycle is a short
+ * bar. A recurring ticket's round that is on now is one too; its other rounds sit beside it.
+ */
 export function isMilestone(node: Pick<TimelineNode, 'schedule'>): boolean {
-  return node.schedule === 'milestone'
+  return node.schedule === 'milestone' || node.schedule === 'recurring'
+}
+
+/**
+ * A recurring ticket's other rounds within `from`–`to`: the past ones with how they went, the
+ * coming ones as `upcoming`. The round that is on now is the node's own diamond and left out.
+ */
+export function roundMarks(node: Pick<TimelineNode, 'recurrence' | 'rounds' | 'dueDate'>, from: string, to: string): Array<{ date: string; kind: 'done' | 'missed' | 'skipped' | 'upcoming' }> {
+  if (!node.recurrence) return []
+  const marks: Array<{ date: string; kind: 'done' | 'missed' | 'skipped' | 'upcoming' }> = node.rounds
+    .filter(round => round.date >= from && round.date <= to && round.date !== node.dueDate)
+    .map(round => ({ date: round.date, kind: round.outcome }))
+  if (node.dueDate) {
+    const until = node.recurrence.until && node.recurrence.until < to ? node.recurrence.until : to
+    const after = addDays(node.dueDate, 1)
+    for (const date of occurrencesBetween(node.recurrence, after > from ? after : from, until, 60)) marks.push({ date, kind: 'upcoming' })
+  }
+  return marks
 }
 
 /** Every node of the tree in display order, each with how deep it sits; the root is depth 0. */

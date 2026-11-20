@@ -13,18 +13,22 @@ import { WEBHOOK_DELIVERY } from '../../shared/utils/webhook-catalogue'
  */
 export const webhookEvents = [
   'ticket.created', 'ticket.updated', 'ticket.moved', 'ticket.transferred', 'ticket.archived', 'ticket.restored',
-  'comment.added', 'import.completed', 'ticket.went_live', 'ticket.live_ending', 'ticket.live_ended'
+  'comment.added', 'import.completed', 'ticket.went_live', 'ticket.live_ending', 'ticket.live_ended',
+  'ticket.new_round', 'ticket.round_missed'
 ] as const
 export type WebhookEvent = typeof webhookEvents[number]
 
 /**
- * The events nobody's request produces: the calendar raises them, through the live-window
- * sweep (`server/utils/live-windows.ts`), when a live window opens, nears its end or runs out.
+ * The events nobody's request produces: the calendar raises them, through the sweep in
+ * `server/utils/live-windows.ts`, when a live window opens, nears its end or runs out, and
+ * when a recurring ticket's next round comes and the last one closes, done or missed.
  */
 export const clockEvents = {
   went_live: 'ticket.went_live',
   live_ending: 'ticket.live_ending',
-  live_ended: 'ticket.live_ended'
+  live_ended: 'ticket.live_ended',
+  new_round: 'ticket.new_round',
+  round_missed: 'ticket.round_missed'
 } as const satisfies Record<string, WebhookEvent>
 
 /** Which operation produces which event. Anything absent sends nothing. */
@@ -35,6 +39,8 @@ export const eventForOperation: Record<string, WebhookEvent> = {
   'ticket.transfer': 'ticket.transferred',
   'ticket.archive': 'ticket.archived',
   'ticket.restore': 'ticket.restored',
+  // A round closed by hand is done or skipped, never missed: that is the calendar's to note.
+  'ticket.round.close': 'ticket.new_round',
   'comment.add': 'comment.added',
   'import.run': 'import.completed'
 }

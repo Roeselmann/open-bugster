@@ -406,7 +406,9 @@ describe('outgoing webhooks', () => {
     it('marks exactly the calendar’s events as coming from no operation', async () => {
       const { WEBHOOK_EVENTS } = await import('../shared/utils/webhook-catalogue')
       const fromTheClock = WEBHOOK_EVENTS.filter(entry => entry.operation === null).map(entry => entry.event)
-      expect(fromTheClock).toEqual(Object.values(hooks.clockEvents))
+      // A new round is the calendar's and a person's alike: it names the operation, as the clock sends it too.
+      const byHandToo = new Set(Object.values(hooks.eventForOperation))
+      expect(fromTheClock).toEqual(Object.values(hooks.clockEvents).filter(event => !byHandToo.has(event)))
     })
   })
 })

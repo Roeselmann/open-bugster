@@ -10,6 +10,7 @@ import { isServiceIdentity, parentTicketIdsOf, principalDescription } from '~~/s
 import { todoLight } from '~~/shared/utils/todo-progress'
 import { boardToday } from '~~/shared/utils/due-date'
 import { timelineBounds, timelineWarnings } from '~~/shared/utils/timeline'
+import { describeRecurrence } from '~~/shared/utils/recurrence'
 import type { BoardSummary, DependencyRef, LaneSummary, ShiftResult, TimelineNode, Ticket, TicketTodo, TicketActivityEntry, TicketComment, TicketTypeSummary, WorkspaceSummary } from '~~/shared/types/domain'
 
 /**
@@ -24,7 +25,16 @@ import type { BoardSummary, DependencyRef, LaneSummary, ShiftResult, TimelineNod
  * `get_ticket` is the one tool that returns everything, which is the point of it.
  */
 
-const SCHEDULE_FIELD = 'How the ticket sits in time. "milestone": an event on one day — a meeting, a go-live — given as dueDate, with no start and no live window. "lifecycle": work from startDate to dueDate, then optionally a live window; a dueDate alone is a plain deadline. "none": no dates. Sending dates without it to an undated ticket makes it a lifecycle.'
+const SCHEDULE_FIELD = 'How the ticket sits in time. "milestone": an event on one day — a meeting, a go-live — given as dueDate, with no start and no live window. "lifecycle": work from startDate to dueDate, then optionally a live window; a dueDate alone is a plain deadline. "recurring": the same card comes round again, like a calendar series — give its rule as recurrence; dueDate is then the round that is on now. "none": no dates. Sending dates without it to an undated ticket makes it a lifecycle.'
+
+const RECURRENCE_INPUT = z.object({
+  frequency: z.enum(['daily', 'weekly', 'monthly', 'yearly']),
+  interval: z.number().int().min(1).max(99).optional().describe('Every so many of frequency; defaults to 1. 2 weekly is every other week, 3 monthly is quarterly.'),
+  anchor: z.string().describe('YYYY-MM-DD: the day of the first round. Weekly rounds keep its weekday, monthly ones its day of the month.'),
+  until: z.string().nullable().optional().describe('YYYY-MM-DD: the last day a round may fall on; omit for a series without end.'),
+  resetTodos: z.boolean().optional().describe('Untick the plain to-dos and reopen the decisions at each new round. Defaults to true.'),
+  returnLaneId: z.string().nullable().optional().describe('A lane of this board the card goes back to at each new round, e.g. "Weekly", so it can sit in a done lane until then. Omit to leave it where it is.')
+}).describe('The rule of a recurring ticket, whole; it makes the ticket recurring. dueDate becomes the first round from today on unless given. On the day the next round is due the server closes the current one — done if the card is in a done or live lane or every to-do is ticked, otherwise missed (a warning) — and starts the next.')
 
 /** What a ticket looks like in a list: enough to choose one, and no more. */
 function slim(ticket: Ticket) {
@@ -43,6 +53,8 @@ function slim(ticket: Ticket) {
     dueDate: ticket.dueDate,
     liveFrom: ticket.liveFrom,
     liveUntil: ticket.liveUntil,
+    // Only for a recurring ticket: how it repeats, when the next round is, how the last one went.
+    ...(ticket.recurrence ? { repeats: describeRecurrence(ticket.recurrence), nextRound: ticket.nextRound, lastRound: ticket.rounds[0] ? { date: ticket.rounds[0].date, outcome: ticket.rounds[0].outcome } : null } : {}),
     commentCount: ticket.commentCount,
     progress: progressOf(ticket.todos),
     // Numbers only here; get_ticket spells them out.
@@ -72,6 +84,7 @@ function timelineOf(node: TimelineNode): Record<string, unknown> {
     startDate: node.startDate,
     dueDate: node.dueDate,
     ...(node.liveFrom || node.liveUntil ? { live: node.live, liveFrom: node.liveFrom, liveUntil: node.liveUntil } : {}),
+    ...(node.recurrence ? { repeats: describeRecurrence(node.recurrence), rounds: node.rounds.slice(0, 6) } : {}),
     ...(node.waitsOn.length ? { waitsOn: node.waitsOn.map(item => item.ticketNumber) } : {}),
     ...(node.readable ? {} : { readable: false }),
     ...(node.children.length ? { subtickets: node.children.map(timelineOf) } : {})
@@ -329,6 +342,7 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       + 'the answers, `completed` whether it is decided, and then `decision.answer` what was decided, by whom and when. '
       + 'Decisions are made by people in Bugster; you can ask one and read it, not answer it. '
       + '`parents` lists the tickets that hold this one as a subticket; `progress` sums up the list. '
+      + 'A recurring ticket carries `repeats`, `nextRound`, its `recurrence` rule and its last `rounds`, each done, missed or skipped with the to-dos it left open. '
       + 'With timeline: true it adds `timeline`, the plan below the ticket: every subticket down through '
       + 'theirs, with board, lane, start and due date, plus `warnings` for open tickets past their due '
       + 'date and subtickets that start before or end after this ticket\'s own window. Use it when the question '
@@ -403,6 +417,12 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
           : { text: todo.text, completed: todo.completed }),
       strictOrder: ticket.strictOrder,
       progress: progressOf(ticket.todos),
+      ...(ticket.recurrence
+        ? {
+            recurrence: ticket.recurrence,
+            rounds: ticket.rounds.map(round => ({ date: round.date, outcome: round.outcome, todos: `${round.todosDone}/${round.todosTotal}`, ...(round.openTodos.length ? { openTodos: round.openTodos } : {}), closedBy: nameOf(round.closedBy) }))
+          }
+        : {}),
       // The other way round: the tickets whose to-do lists hold this one, as far as this token
       // can read them. Moving this ticket into a done lane ticks it off on each of them.
       parents,
@@ -483,7 +503,8 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       laneId: z.string().optional().describe('Defaults to the board’s first non-import lane.'),
       priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
       assigneeId: z.string().optional().describe('Must be a member of this board.'),
-      schedule: z.enum(['none', 'milestone', 'lifecycle']).optional().describe(SCHEDULE_FIELD),
+      schedule: z.enum(['none', 'milestone', 'lifecycle', 'recurring']).optional().describe(SCHEDULE_FIELD),
+      recurrence: RECURRENCE_INPUT.optional(),
       startDate: z.string().optional().describe('YYYY-MM-DD: the day work starts. With dueDate it spans the ticket on a timeline; never after dueDate. Not for a milestone.'),
       dueDate: z.string().optional().describe('YYYY-MM-DD: the day the work has to be done — for a campaign its go-live, not the end of its run.'),
       liveFrom: z.string().optional().describe('YYYY-MM-DD: the first day it is out in the world, e.g. a campaign\'s start in market.'),
@@ -526,7 +547,10 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       description: z.string().max(10000).optional().describe(MARKDOWN_FIELD),
       priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
       assigneeId: z.string().nullable().optional(),
-      schedule: z.enum(['none', 'milestone', 'lifecycle']).optional().describe(`${SCHEDULE_FIELD} Switching clears what the new one has no room for: none every date, milestone the start and the live window (the due date stays as its day).`),
+      schedule: z.enum(['none', 'milestone', 'lifecycle', 'recurring']).optional().describe(`${SCHEDULE_FIELD} Switching clears what the new one has no room for: none every date, milestone and recurring the start and the live window (the due date stays as its day), and every schedule but recurring the rule.`),
+      recurrence: RECURRENCE_INPUT.nullable().optional().describe('Replaces the rule of a recurring ticket, whole; null stops the series and leaves the current round as a milestone. A rule that moves the rounds to other days puts dueDate on the first of them from today on; dueDate given alone moves only the current round.'),
+      closeRound: z.enum(['done', 'skipped']).optional()
+        .describe('For a recurring ticket: end the round that is on now — done, or skipped on purpose — and start the next one right away (to-dos reset, back to the return lane, dueDate the next round after today). Applied after the other fields. Leave it to the calendar when the work is simply finished on time: moving the card to a done lane is enough.'),
       startDate: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. Never after dueDate; not for a milestone.'),
       dueDate: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. The deadline of the work, not the end of a run.'),
       liveFrom: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. First day out in the world.'),
@@ -555,10 +579,15 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       }).optional()
         .describe('Moves this ticket\'s start and due date by days, and with them every ticket waiting on it, directly or through others. Finished work and tickets you may not edit stay put and stop the push; live windows never move. Applied after the other fields; a dry run has to come on its own.')
     }
-  }, async ({ shift, ...input }) => {
+  }, async ({ shift, closeRound, ...input }) => {
     const fields = Object.keys(input).filter(key => key !== 'ticketId' && input[key as keyof typeof input] !== undefined)
     if (shift?.dryRun && fields.length) throw new Error('Send a dry run on its own, without other changes.')
-    const updated = fields.length || !shift ? (await call<{ ticket: Ticket }>(ops.ticketUpdate, input)).ticket : null
+    if (shift && closeRound) throw new Error('Shift the dates or close the round, not both at once.')
+    const updated = fields.length || (!shift && !closeRound) ? (await call<{ ticket: Ticket }>(ops.ticketUpdate, input)).ticket : null
+    if (closeRound) {
+      const closed = await call<{ ticket: Ticket; round: { date: string; outcome: string; next: string | null } }>(ops.ticketRoundClose, { ticketId: input.ticketId, outcome: closeRound })
+      return reply({ ...slim(closed.ticket), closedRound: closed.round })
+    }
     if (!shift) return reply(slim(updated!))
     const result = await call<ShiftResult>(ops.ticketShift, { ticketId: input.ticketId, days: shift.days, dryRun: shift.dryRun })
     return reply({
@@ -626,7 +655,9 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       'The board’s recent history in one call, newest first: tickets created, imported, moved, '
       + 'commented on, (un)assigned, reprioritised, archived and restored — and, from the server '
       + 'itself (`by` null), a live window opening (went_live), nearing its end (live_ending) or '
-      + 'running out while the ticket is still live (live_ended), each with its `date`. Give `since` to pick '
+      + 'running out while the ticket is still live (live_ended), each with its `date`, and a recurring '
+      + 'ticket\'s round closing as it starts the next: new_round (done or skipped) or round_missed '
+      + '(the next round came while it was still open — worth a look), each with the `date` of the round and `next`. Give `since` to pick '
       + 'up where you left off; it defaults to the last seven days. Edits to a ticket’s title, '
       + 'description or labels leave no trace here — this reads the same history get_ticket shows.',
     annotations: readsOnly,

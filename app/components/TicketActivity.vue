@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { History } from '@lucide/vue'
-import type { ActivityKind, TicketActivityEntry } from '~~/shared/types/domain'
+import type { ActivityKind, RecurrenceFrequency, TicketActivityEntry } from '~~/shared/types/domain'
+import { describeRecurrence } from '~~/shared/utils/recurrence'
 import { providerLabel } from '~~/shared/utils/ticket-source'
 
 const props = defineProps<{ ticketId: string; refreshKey?: number }>()
@@ -30,7 +31,7 @@ const sentences: Record<ActivityKind, (entry: TicketActivityEntry) => string> = 
   start_date: entry => (entry.payload.to ? `set the start date to ${entry.payload.to}` : 'removed the start date'),
   live_from: entry => (entry.payload.to ? `set the live window to start ${entry.payload.to}` : 'removed the start of the live window'),
   live_until: entry => (entry.payload.to ? `set the live window to end ${entry.payload.to}` : 'removed the end of the live window'),
-  schedule: entry => ({ none: 'removed the schedule', milestone: 'made it a milestone', lifecycle: 'gave it a lifecycle' } as Record<string, string>)[entry.payload.to ?? ''] ?? 'changed the schedule',
+  schedule: entry => ({ none: 'removed the schedule', milestone: 'made it a milestone', lifecycle: 'gave it a lifecycle', recurring: 'made it recurring' } as Record<string, string>)[entry.payload.to ?? ''] ?? 'changed the schedule',
   due_date: entry => (entry.payload.to ? `set the due date to ${entry.payload.to}` : 'removed the due date'),
   type: entry => (entry.payload.to ? `set the type to ${entry.payload.to}` : 'removed the type'),
   archived: () => 'archived it',
@@ -44,6 +45,15 @@ const sentences: Record<ActivityKind, (entry: TicketActivityEntry) => string> = 
   went_live: entry => `The live window opened on ${entry.payload.date}`,
   live_ending: entry => `The live window ends on ${entry.payload.date}`,
   live_ended: entry => `The live window ended on ${entry.payload.date}, but the ticket is still live`,
+  recurrence: entry => `set it to repeat ${describeRecurrence({ frequency: (entry.payload.frequency ?? 'weekly') as RecurrenceFrequency, interval: Number(entry.payload.interval) || 1, anchor: entry.payload.anchor ?? '' }).replace(/^./, letter => letter.toLowerCase())}, from ${entry.payload.anchor}${entry.payload.until ? ` until ${entry.payload.until}` : ''}`,
+  new_round: entry => {
+    const how = entry.payload.outcome === 'skipped' ? 'skipped' : 'done'
+    const next = entry.payload.next ? `; the next round is due ${entry.payload.next}` : '; that was the last round of the series'
+    return entry.channel === 'system'
+      ? `The round of ${entry.payload.date} was ${how}${next}`
+      : `closed the round of ${entry.payload.date} as ${how}${next}`
+  },
+  round_missed: entry => `The round of ${entry.payload.date} was missed${entry.payload.next ? `; the next round is due ${entry.payload.next}` : ''}`,
 }
 
 /**

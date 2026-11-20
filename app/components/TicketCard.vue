@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { AlarmClock, ArrowDownToLine, ArrowUpToLine, Check, ChevronDown, ChevronUp, CornerDownRight, Flag, Image, Link as LinkIcon, ListTodo, MessageSquare, Paperclip, Radio, SquareKanban, ListOrdered, Tag, TriangleAlert, Vote } from '@lucide/vue'
+import { AlarmClock, ArrowDownToLine, ArrowUpToLine, Check, ChevronDown, ChevronUp, CornerDownRight, Diamond, Image, Repeat, Link as LinkIcon, ListTodo, MessageSquare, Paperclip, Radio, SquareKanban, ListOrdered, Tag, TriangleAlert, Vote } from '@lucide/vue'
 import type { Lane, Ticket } from '~~/shared/types/domain'
 import { CATEGORY_TONE_CLASSES } from '~~/shared/utils/constants'
 import { boardToday, daysUntil, dueDescription, dueLevel, liveDescription, liveLevel } from '~~/shared/utils/due-date'
 import { cardImages } from '~~/shared/utils/card-images'
 import { TODO_LIGHT_LABELS, decisionAnswer, todoLight } from '~~/shared/utils/todo-progress'
+import { describeRecurrence } from '~~/shared/utils/recurrence'
 
 const props = withDefaults(defineProps<{
   ticket: Ticket
@@ -73,6 +74,8 @@ const dueText = computed(() => {
     return liveFrom ? `Live since ${dayOf(liveFrom)}` : 'Live'
   }
   if (!dueDate) return startDate ? `Starts ${dayOf(startDate)}` : null
+  // A round finished early waits in its done lane for the next one.
+  if (recurring.value && inDoneLane.value) return props.ticket.nextRound ? `Next ${dayOf(props.ticket.nextRound)}` : 'Series over'
   const days = daysUntil(dueDate, today)
   if (days === null) return null
   const span = startDate && startDate !== dueDate ? `${dayOf(startDate)} – ${dayOf(dueDate)}` : null
@@ -85,8 +88,28 @@ const dueTitle = computed(() => {
   const { startDate, dueDate, liveFrom, liveUntil } = props.ticket
   if (inLiveLane.value) return `Live ${liveFrom ?? '…'} to ${liveUntil ?? '…'}`
   if (props.ticket.schedule === 'milestone') return `Milestone ${dueDate}`
+  if (recurring.value) return `${describeRecurrence(props.ticket.recurrence!)} · this round is due ${dueDate}${props.ticket.nextRound ? `, the next one ${props.ticket.nextRound}` : ', the last of the series'}`
   if (startDate && dueDate) return startDate === dueDate ? `Due ${dueDate}` : `${startDate} to ${dueDate}`
   return startDate ? `Starts ${startDate}` : `Due ${dueDate}`
+})
+
+/**
+ * What kind of date the card carries, told by the icon in its date: a card that comes round
+ * again, an event on one day (a diamond, as on the timeline), work with a live window, or a
+ * plain deadline.
+ */
+const recurring = computed(() => props.ticket.schedule === 'recurring' && Boolean(props.ticket.recurrence))
+const scheduleKind = computed(() => {
+  const { schedule, recurrence, liveFrom, liveUntil } = props.ticket
+  if (recurring.value && recurrence) return { icon: Repeat, label: describeRecurrence(recurrence) }
+  if (schedule === 'milestone') return { icon: Diamond, label: 'Milestone' }
+  if (inLiveLane.value || liveFrom || liveUntil) return { icon: Radio, label: `Live ${liveFrom ?? '…'} to ${liveUntil ?? '…'}` }
+  return { icon: AlarmClock, label: 'Deadline' }
+})
+// The last round went by unfinished, and the one on now is not finished either: worth a red mark.
+const missedRound = computed(() => {
+  const last = props.ticket.rounds[0]
+  return recurring.value && last?.outcome === 'missed' && !inDoneLane.value ? last : null
 })
 
 // The pictures ticked in the editor, or one picked by default (see `cardImages`). A link
@@ -164,6 +187,12 @@ const reorderButtons = computed(() => [
       <div class="px-4 pb-4 pt-3">
         <div class="flex flex-wrap items-center gap-2">
           <PriorityPill :priority="ticket.priority" />
+          <span
+            v-if="missedRound"
+            class="inline-flex items-center gap-1 rounded-md bg-rose-600 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+            :title="`The round of ${missedRound.date} went by with ${missedRound.todosTotal - missedRound.todosDone} of ${missedRound.todosTotal} to-dos open`"
+            data-missed-round
+          ><TriangleAlert :size="11" aria-hidden="true" /> Missed {{ dayOf(missedRound.date) }}</span>
           <span v-if="ticket.category" class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold" :class="CATEGORY_TONE_CLASSES[ticket.category.color]"><Tag :size="11" /> {{ ticket.category.name }}</span>
           <span v-if="ticket.source !== 'manual'" class="muted flex items-center gap-1 text-[11px] font-semibold" :title="ticket.jira?.url || ''">
             <TriangleAlert v-if="ticket.source === 'testflight_crash'" :size="13" />
@@ -295,8 +324,8 @@ const reorderButtons = computed(() => [
               :class="dueState === 'alert' ? 'bg-rose-600 text-white'
                 : dueState === 'warning' ? 'bg-orange-400/20 text-orange-700 dark:text-orange-300'
                   : 'bg-[var(--panel)]'"
-              :title="dueTitle"
-            ><component :is="inLiveLane ? Radio : ticket.schedule === 'milestone' ? Flag : AlarmClock" :size="12" class="shrink-0" aria-hidden="true" /> <span class="truncate">{{ dueText }}</span></span>
+              :title="`${dueTitle}${recurring || ticket.schedule === 'milestone' ? '' : ` · ${scheduleKind.label}`}`"
+            ><component :is="scheduleKind.icon" :size="12" class="shrink-0" :aria-label="scheduleKind.label" data-schedule-icon /> <span class="sr-only">{{ scheduleKind.label }}:</span> <span class="truncate">{{ dueText }}</span></span>
             <span class="ml-auto flex shrink-0 items-center gap-2">
               <UiAvatar v-if="ticket.assignee" :person="ticket.assignee" size="sm" :muted="ticket.assignee.status !== 'active'" />
               <span class="font-semibold tabular-nums">#{{ ticket.ticketNumber }}</span>

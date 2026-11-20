@@ -35,7 +35,7 @@ export interface WebhookEventDoc {
   operation: string | null
   /** When it fires, in a sentence. */
   fires: string
-  /** The key inside `data` that holds the subject; the live-window events add two beside it. */
+  /** The key inside `data` that holds the subject; the calendar's events add more beside it. */
   dataKey: 'ticket' | 'comment' | 'run'
   /** What that key holds. */
   holds: string
@@ -125,6 +125,20 @@ export const WEBHOOK_EVENTS: readonly WebhookEventDoc[] = [
     fires: 'The last day of a live window has passed and the ticket is still in a live lane: a campaign still out or an approval expired, waiting to be taken down. Not sent once the ticket has left the live lane.',
     dataKey: 'ticket',
     holds: 'The ticket in full, `data.lane` beside it, and `data.date`, the last day of the window.'
+  },
+  {
+    event: 'ticket.new_round',
+    operation: 'ticket.round.close',
+    fires: 'A recurring ticket’s round closed done or skipped and the next one started: by hand, or by the calendar on the day the next round is due when the card sat in a done or live lane or had every to-do ticked. Also sent for the last round of a series, with no next one.',
+    dataKey: 'ticket',
+    holds: 'The ticket in full as the new round starts (to-dos reset, back in its return lane, `dueDate` the new round), and beside it `data.round`: `date` of the round that closed, its `outcome` (`done` or `skipped`) and `next`, the new round’s day, or null when the series is over.'
+  },
+  {
+    event: 'ticket.round_missed',
+    operation: null,
+    fires: 'The next round of a recurring ticket has come while the last one was still open: not in a done or live lane, with to-dos left. Raised by the calendar; the new round starts all the same.',
+    dataKey: 'ticket',
+    holds: 'The ticket in full as the new round starts, and `data.round` with `date`, `outcome` `missed` and `next`. `actor` has no principal and the channel `system`.'
   }
 ] as const
 
