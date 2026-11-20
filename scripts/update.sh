@@ -68,39 +68,10 @@ if ! docker compose up --build -d; then
   exit 1
 fi
 
-# Migrations run when the first database connection is opened. The audit sweep at startup
-# usually triggers that, but it returns early on AUDIT_RETENTION_DAYS=0 — so a request is
-# what reliably proves the schema came up, not just the process.
-address=$(published_address 3000)
-if [ -n "$address" ] && command -v curl >/dev/null 2>&1; then
-  probe=host_probe
-  url="http://$address/"
-  note "Waiting for $url …"
-else
-  probe=container_probe
-  url="http://127.0.0.1:3000/"
-  note "No port published to reach from here — waiting on the container's own $url …"
+if ! wait_until_up; then
+  rollback_hint
+  exit 1
 fi
-deadline=$((SECONDS + 120))
-while :; do
-  if ! running; then
-    note "The container exited during start:"
-    docker compose logs --tail 50 "$SERVICE"
-    rollback_hint
-    exit 1
-  fi
-  code=$("$probe" "$url")
-  case "$code" in
-    [1-4][0-9][0-9]) note "Up, answering with HTTP $code."; break ;;
-  esac
-  if [ "$SECONDS" -ge "$deadline" ]; then
-    note "No usable answer after two minutes (last status: ${code:-none})."
-    docker compose logs --tail 50 "$SERVICE"
-    rollback_hint
-    exit 1
-  fi
-  sleep 2
-done
 
 if [ "$prune" = true ]; then
   note "Pruning dangling images …"

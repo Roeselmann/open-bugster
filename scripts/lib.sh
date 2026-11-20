@@ -101,3 +101,40 @@ container_probe() {
       .catch(() => process.stdout.write("000"))
   ' "$1" 2>/dev/null || true
 }
+
+# Waits until the application answers a request, which is what proves the migrations went
+# through: they run on the first database connection, and the audit sweep at startup that
+# usually opens it returns early on AUDIT_RETENTION_DAYS=0. Asks the published port when there
+# is one and the container itself when there is not (behind a reverse proxy). Returns 1, after
+# printing the container log, when the container exits or no answer comes within the timeout.
+wait_until_up() {
+  local timeout=${1:-120} address probe url code deadline
+  address=$(published_address 3000)
+  if [ -n "$address" ] && command -v curl >/dev/null 2>&1; then
+    probe=host_probe
+    url="http://$address/"
+    note "Waiting for $url …"
+  else
+    probe=container_probe
+    url="http://127.0.0.1:3000/"
+    note "No port published to reach from here — waiting on the container's own $url …"
+  fi
+  deadline=$((SECONDS + timeout))
+  while :; do
+    if ! running; then
+      note "The container exited during start:"
+      docker compose logs --tail 50 "$SERVICE" || true
+      return 1
+    fi
+    code=$("$probe" "$url")
+    case "$code" in
+      [1-4][0-9][0-9]) note "Up, answering with HTTP $code."; return 0 ;;
+    esac
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      note "No usable answer after $timeout seconds (last status: ${code:-none})."
+      docker compose logs --tail 50 "$SERVICE" || true
+      return 1
+    fi
+    sleep 2
+  done
+}
