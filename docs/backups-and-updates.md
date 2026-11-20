@@ -50,6 +50,8 @@ scripts/update.sh
 
 Refuses to run on a dirty working tree, pulls fast-forward only, writes a `pre-update` archive, rebuilds, and then waits for the application to answer a request, because that is what proves the migrations went through. It asks the published port when there is one and the container itself when there is not, so an installation behind a reverse proxy is checked the same way. On a failure it prints the container log and the two commands that undo the update. `--no-pull` rebuilds the working tree as it stands, `--prune` removes dangling images once the new container is healthy.
 
+An installation that releases by pushing to `main` does not run this by hand: `scripts/autodeploy.sh` does the same from a systemd timer and rolls back on its own. See [deployment.md](deployment.md).
+
 ### Commands inside the container
 
 ```bash
@@ -71,7 +73,7 @@ npm run owner:reset -- you@example.com "a-password"  # restore access, see setup
 | `scripts/update.sh` | Pull, backup, rebuild, health check, rollback hints. |
 | `scripts/backup.sh` | Stop, archive volume and `.env`, restart, rotate by `BACKUP_KEEP`. |
 | `scripts/restore.sh` | Confirm, stop, replace volume contents, optionally replace `.env`, start. |
-| `scripts/lib.sh` | Shared helpers, sourced by the three above. |
+| `scripts/lib.sh` | Shared helpers, sourced by the three above and by `scripts/autodeploy.sh`, including `wait_until_up`. |
 | [server/utils/db.ts](../server/utils/db.ts) | `getDb` and the `ensure*` migration chain. |
 | [server/plugins/audit-retention.ts](../server/plugins/audit-retention.ts) | The startup sweep. |
 

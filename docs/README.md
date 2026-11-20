@@ -14,7 +14,7 @@ Line numbers in code maps are approximate and refer to the state of the code whe
 
 ## Where to start
 
-- **Operating an instance:** [setup.md](setup.md), then [backups-and-updates.md](backups-and-updates.md).
+- **Operating an instance:** [setup.md](setup.md), then [backups-and-updates.md](backups-and-updates.md) and [deployment.md](deployment.md).
 - **Using the board:** [boards.md](boards.md), [tickets.md](tickets.md), [users-and-access.md](users-and-access.md).
 - **Connecting other software:** [api.md](api.md), [mcp-server.md](mcp-server.md), [webhooks.md](webhooks.md); the built-in imports are [app-store-connect.md](app-store-connect.md) and [jira.md](jira.md).
 - **Reading or changing the code:** [architecture.md](architecture.md) first, then [development.md](development.md) for the checklist a new feature has to satisfy.
@@ -26,6 +26,7 @@ Line numbers in code maps are approximate and refer to the state of the code whe
 | [architecture.md](architecture.md) | The shared core every surface runs on: operations, the actor, access rules, the SQLite data layer and its migrations, the frontend layout, and the tests that guard the invariants. |
 | [setup.md](setup.md) | Installing with Docker, the `.env` file, the machine secrets, HTTPS, where data lives, and what to do when nobody can sign in. |
 | [backups-and-updates.md](backups-and-updates.md) | The three host-side scripts, what survives an update, and why migrations only run forward. |
+| [deployment.md](deployment.md) | `develop` and `main`, and the server that pulls `main` every two minutes, builds, backs up, and rolls back on its own. |
 | [development.md](development.md) | Running locally, the test suite, the scratch instance, and the checklist for adding a feature. |
 | [workspaces.md](workspaces.md) | The level above boards: grouping, workspace administrators, board order, moving and duplicating boards. |
 | [boards.md](boards.md) | Boards, lanes and the import lane, categories, labels. |

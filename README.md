@@ -98,6 +98,7 @@ One document per feature, each written for people who want an overview and for a
 | [Architecture](docs/architecture.md) | The operation registry, the actor, access rules, the SQLite data layer, and the tests that guard them. The starting point for reading the code. |
 | [Setup](docs/setup.md) | Docker, `.env`, secrets, HTTPS, data paths, recovering access. |
 | [Backups and updates](docs/backups-and-updates.md) | The host-side scripts and why the backup is not optional. |
+| [Deployment](docs/deployment.md) | Releasing by merging into `main`; the server pulls, builds, and rolls back by itself. |
 | [Development](docs/development.md) | Running locally, tests, and the checklist for adding a feature. |
 | [Workspaces](docs/workspaces.md) | Grouping boards, workspace administrators, moving and duplicating boards. |
 | [Boards](docs/boards.md) | Boards, lanes, the import lane, categories, labels. |
