@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ComponentPublicInstance } from 'vue'
-import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, CalendarArrowUp, CalendarClock, CalendarRange, Check, ChevronDown, Flag, Circle, CircleAlert, CircleCheck, CornerDownRight, CornerLeftUp, Download, ExternalLink, FileText, Gauge, GripVertical, Link2, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Pin, PinOff, Plus, Radio, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, CalendarArrowUp, CalendarClock, CalendarRange, Check, ChevronDown, Flag, Circle, CircleAlert, CircleCheck, CornerDownRight, CornerLeftUp, Download, ExternalLink, FileText, Gauge, GripVertical, History, Link2, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Pin, PinOff, Plus, Radio, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogContent,
   DialogDescription,
@@ -191,14 +191,15 @@ const authorOptions = computed(() => [{ value: UNASSIGNED, label: 'Nobody' }, ..
 const commentRefreshKey = ref(0)
 
 /**
- * The drawer shows one pane at a time, picked in the header: the ticket's details, its
- * comments or its files. Comments and files can each be pinned instead: a pinned pane
+ * The drawer shows one pane at a time, picked in the header: the ticket's details, its plan
+ * (to-dos, subtickets, what it waits on), its comments, its files and links, or its history. Comments and files can each be pinned instead: a pinned pane
  * stands as a column of its own beside whichever pane the header shows, and its tab only
  * points at it. Nothing is pinned until somebody pins it; the choice belongs to the ticket
  * and lasts for this browser tab's session.
  */
-type EditorTab = 'details' | 'comments' | 'files'
-type PinnableTab = Exclude<EditorTab, 'details'>
+type EditorTab = 'details' | 'plan' | 'comments' | 'files' | 'history'
+type PinnableTab = 'comments' | 'files'
+const isPinnable = (tab: EditorTab): tab is PinnableTab => tab === 'comments' || tab === 'files'
 const activeTab = ref<EditorTab>('details')
 const pinned = reactive<Record<PinnableTab, boolean>>({ comments: false, files: false })
 const pinnedKey = (ticketId: string) => `open-bugster-ticket-pinned:${ticketId}`
@@ -231,6 +232,14 @@ const filesShown = computed(() => pinned.files || activeTab.value === 'files')
 // Once shown, the thread stays mounted and is only hidden: a comment half written is still there when it comes back.
 const commentsMounted = ref(false)
 watch(commentsShown, (shown) => { if (shown) commentsMounted.value = true }, { immediate: true })
+// Comments and history live on the saved ticket, so a brand-new one shows neither.
+const editorTabs = computed(() => ([
+  { key: 'details', label: 'Details' },
+  { key: 'plan', label: 'Plan' },
+  ...(commentsAvailable.value ? [{ key: 'comments', label: 'Comments' }] : []),
+  { key: 'files', label: 'Assets' },
+  ...(props.ticket ? [{ key: 'history', label: 'History' }] : [])
+] as { key: EditorTab, label: string }[]))
 const fileCount = computed(() => (props.ticket?.attachments.length || 0) + pendingFiles.value.length)
 
 function scrollPaneIntoView(tab: EditorTab) {
@@ -244,7 +253,7 @@ function scrollPaneIntoView(tab: EditorTab) {
   })
 }
 function selectTab(tab: EditorTab) {
-  if (tab !== 'details' && pinned[tab]) return scrollPaneIntoView(tab)
+  if (isPinnable(tab) && pinned[tab]) return scrollPaneIntoView(tab)
   activeTab.value = tab
   scrollPaneIntoView(tab)
 }
@@ -363,11 +372,6 @@ function resizeFilesByKey(event: KeyboardEvent) {
 function resetFilesWidth() {
   setFilesWidth(FILES_MIN_WIDTH)
   rememberFilesWidth()
-}
-
-function openComments() {
-  selectTab('comments')
-  nextTick(() => document.querySelector<HTMLTextAreaElement>('[data-comment-input]')?.focus())
 }
 
 // The ticket in hand keeps the count it was opened with, so the thread reports its own.
@@ -1130,23 +1134,29 @@ function focusTitle(event: Event) {
             <!-- One pane at a time; a pinned one stands beside the others, so its tab only points at it. -->
             <div role="tablist" aria-label="Ticket panes" class="-mb-4 mt-2 flex gap-1 overflow-x-auto scrollbar-thin">
               <button
-                v-for="tab in ([['details', 'Details'], ['comments', 'Comments'], ['files', 'Assets']] as const).filter(([key]) => key !== 'comments' || commentsAvailable)"
-                :key="tab[0]"
+                v-for="tab in editorTabs"
+                :key="tab.key"
                 type="button"
                 role="tab"
-                :aria-selected="activeTab === tab[0]"
-                :title="tab[0] !== 'details' && pinned[tab[0]] ? `${tab[1]} are pinned beside` : undefined"
+                :aria-selected="activeTab === tab.key"
+                :title="isPinnable(tab.key) && pinned[tab.key] ? `${tab.label} pinned beside` : undefined"
                 class="focus-ring -mb-px flex h-10 shrink-0 items-center gap-1.5 border-b-2 px-3 text-sm font-semibold transition-colors"
-                :class="activeTab === tab[0] ? 'border-[var(--ink)] text-[var(--ink)]' : 'muted border-transparent hover:text-[var(--ink)]'"
-                @click="selectTab(tab[0])"
+                :class="activeTab === tab.key ? 'border-[var(--ink)] text-[var(--ink)]' : 'muted border-transparent hover:text-[var(--ink)]'"
+                @click="selectTab(tab.key)"
               >
-                <SquareKanban v-if="tab[0] === 'details'" :size="15" aria-hidden="true" />
-                <MessageSquare v-else-if="tab[0] === 'comments'" :size="15" aria-hidden="true" />
-                <Paperclip v-else :size="15" aria-hidden="true" />
-                {{ tab[1] }}
-                <span v-if="tab[0] === 'comments' && commentCount" class="muted text-xs tabular-nums">{{ commentCount }}</span>
-                <span v-if="tab[0] === 'files' && fileCount" class="muted text-xs tabular-nums">{{ fileCount }}</span>
-                <Pin v-if="tab[0] !== 'details' && pinned[tab[0]]" :size="12" class="text-[var(--accent)]" aria-label="pinned" />
+                <SquareKanban v-if="tab.key === 'details'" :size="15" aria-hidden="true" />
+                <ListTodo v-else-if="tab.key === 'plan'" :size="15" aria-hidden="true" />
+                <MessageSquare v-else-if="tab.key === 'comments'" :size="15" aria-hidden="true" />
+                <Paperclip v-else-if="tab.key === 'files'" :size="15" aria-hidden="true" />
+                <History v-else :size="15" aria-hidden="true" />
+                {{ tab.label }}
+                <span v-if="tab.key === 'plan' && todos.length" class="flex items-center gap-1 text-xs tabular-nums" :title="light ? TODO_LIGHT_LABELS[light] : undefined">
+                  <TodoLight v-if="light" :light="light" />
+                  <span class="muted">{{ todos.filter(todo => todo.completed).length }}/{{ todos.length }}</span>
+                </span>
+                <span v-if="tab.key === 'comments' && commentCount" class="muted text-xs tabular-nums">{{ commentCount }}</span>
+                <span v-if="tab.key === 'files' && fileCount" class="muted text-xs tabular-nums">{{ fileCount }}</span>
+                <Pin v-if="isPinnable(tab.key) && pinned[tab.key]" :size="12" class="text-[var(--accent)]" aria-label="pinned" />
               </button>
             </div>
           </header>
@@ -1250,121 +1260,6 @@ function focusTitle(event: Event) {
                 @keydown.enter.prevent="editDescription"
               />
             </div>
-
-            <section class="space-y-3">
-              <!-- Without to-dos the heading would label nothing; the Add button is enough. -->
-              <div v-if="todos.length" class="flex items-center gap-2">
-                <h3 class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><ListTodo :size="15" /> To-dos</h3>
-                <span v-if="light" class="ml-auto flex items-center gap-1.5 text-[11px] font-semibold" :title="TODO_LIGHT_LABELS[light]">
-                  <TodoLight :light="light" />
-                  <span class="muted">{{ todos.filter(todo => todo.completed).length }}/{{ todos.length }} completed</span>
-                </span>
-              </div>
-              <div v-if="todos.length" ref="todoListElement">
-                <TransitionGroup name="todo-sort" tag="div" data-todo-stack class="relative flex flex-col gap-2">
-                  <div v-for="item in todoSortItems" :key="item?.key || '__todo-drop-placeholder'" :data-todo-sort-item="item?.key">
-                    <div
-                      v-if="item"
-                      :data-todo-row="item.key"
-                      class="surface-strong flex items-center gap-2 rounded-xl p-2 transition-[border-color,background-color,box-shadow] duration-150 hover:border-[color-mix(in_srgb,var(--line)_60%,var(--accent))]"
-                    >
-                      <button
-                        type="button"
-                        :data-todo-handle="item.key"
-                        class="focus-ring muted grid size-8 shrink-0 cursor-grab touch-none place-items-center rounded-lg hover:bg-[var(--panel)] active:cursor-grabbing"
-                        :aria-label="`Reorder to-do ${todoIndexOf(item.key) + 1}`"
-                        title="Drag to reorder · Alt+arrow keys"
-                        @pointerdown="beginTodoDrag($event, item.key)"
-                        @keydown.alt.up.prevent="moveTodo(todoIndexOf(item.key), -1)"
-                        @keydown.alt.down.prevent="moveTodo(todoIndexOf(item.key), 1)"
-                      ><GripVertical :size="17" /></button>
-                      <template v-if="item.subticketId">
-                        <span class="grid size-4 shrink-0 place-items-center" :class="item.completed ? 'text-[var(--accent)]' : 'muted'" :title="item.completed ? 'Done: the subticket is in a done lane' : 'Open until the subticket reaches a done lane'">
-                          <CircleCheck v-if="item.completed" :size="16" aria-label="Done" />
-                          <Circle v-else :size="16" aria-label="Open" />
-                        </span>
-                        <NuxtLink
-                          :to="item.subticket ? subticketHref(item.subticket) : undefined"
-                          class="focus-ring group/sub flex min-w-0 flex-1 flex-col rounded-md px-1 py-0.5 hover:bg-[var(--panel)]"
-                          :title="item.subticket ? `Open subticket #${item.subticket.ticketNumber}` : undefined"
-                        >
-                          <!-- The title alone on the first line; the number leads the second, where "Subticket" used to say what the arrow already does. -->
-                          <span class="truncate text-sm group-hover/sub:underline" :class="item.completed ? 'muted line-through' : ''">{{ item.text }}</span>
-                          <span v-if="item.subticket" class="muted flex min-w-0 items-center gap-1 text-[11px]">
-                            <CornerDownRight :size="11" class="shrink-0" aria-hidden="true" />
-                            <span class="shrink-0 font-semibold tabular-nums">#{{ item.subticket.ticketNumber }}</span>
-                            <span class="truncate">· {{ item.subticket.boardName }} · {{ item.subticket.laneName }}{{ item.subticket.archived ? ' · archived' : '' }}</span>
-                          </span>
-                        </NuxtLink>
-                      </template>
-                      <template v-else>
-                      <input v-model="item.completed" type="checkbox" class="focus-ring size-4 shrink-0 cursor-pointer accent-[var(--accent)]" :aria-label="`Mark to-do “${item.text || todoIndexOf(item.key) + 1}” as completed`" @change="commitTodos()">
-                      <input
-                        v-model="item.text"
-                        :data-todo-input="item.key"
-                        maxlength="500"
-                        class="focus-ring min-w-0 flex-1 bg-transparent px-1 py-1.5 text-sm outline-none"
-                        :class="item.completed ? 'muted line-through' : ''"
-                        placeholder="What needs to be done?"
-                        @keydown.enter.prevent="addTodo(todoIndexOf(item.key) + 1)"
-                        @blur="commitTodos()"
-                      >
-                      </template>
-                      <button
-                        type="button"
-                        class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10"
-                        :aria-label="item.subticketId ? `Remove subticket ${todoIndexOf(item.key) + 1} from the list` : `Delete to-do ${todoIndexOf(item.key) + 1}`"
-                        :title="item.subticketId ? 'Remove from the list — the subticket itself stays' : undefined"
-                        @click="removeTodo(todoIndexOf(item.key))"
-                      ><Trash2 :size="15" /></button>
-                    </div>
-                    <div
-                      v-else
-                      data-todo-placeholder
-                      class="pointer-events-none rounded-xl border border-dashed border-[color-mix(in_srgb,var(--accent)_38%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_8%,transparent)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--accent)_8%,transparent)]"
-                      :style="{ height: `${todoDragPreview?.height || 52}px` }"
-                      aria-hidden="true"
-                    />
-                  </div>
-                </TransitionGroup>
-              </div>
-              <!-- One quiet way to add: to-do, subticket and comment wait in a small menu. -->
-              <div class="flex justify-end">
-                <DropdownMenuRoot :modal="false">
-                  <DropdownMenuTrigger
-                    data-add-menu
-                    class="focus-ring group flex h-9 items-center gap-1.5 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] data-[state=open]:border-[var(--accent)] data-[state=open]:bg-[var(--accent-soft)]"
-                  >
-                    <Plus :size="16" aria-hidden="true" /> Add
-                    <ChevronDown :size="14" class="muted transition-transform duration-150 group-data-[state=open]:rotate-180" aria-hidden="true" />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuPortal>
-                    <!-- Focus goes where the item sends it (a new to-do, the comment box), not back here. -->
-                    <DropdownMenuContent
-                      align="end"
-                      :side-offset="6"
-                      class="ui-popover z-[100] min-w-52 overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel-strong)] p-1 text-[var(--ink)] shadow-[0_18px_45px_rgba(0,0,0,.16),0_3px_12px_rgba(0,0,0,.08)]"
-                      @close-auto-focus.prevent
-                    >
-                      <DropdownMenuItem :disabled="todos.length >= 100" class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-medium outline-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--accent-soft)]" @select="addTodo()">
-                        <Plus :size="15" aria-hidden="true" /> To-do
-                      </DropdownMenuItem>
-                      <DropdownMenuItem v-if="canAddSubticket" :disabled="todos.length >= 100" class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-medium outline-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--accent-soft)]" @select="subticketOpen = true">
-                        <CornerDownRight :size="15" aria-hidden="true" /> Subticket…
-                      </DropdownMenuItem>
-                      <DropdownMenuItem v-if="ticket && !commentsShown" class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-medium outline-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--accent-soft)]" @select="openComments">
-                        <MessageSquare :size="15" aria-hidden="true" />
-                        <span class="flex-1">{{ commentCount ? 'Show comments' : 'Comment' }}</span>
-                        <span v-if="commentCount" class="muted text-xs tabular-nums">{{ commentCount }}</span>
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenuPortal>
-                </DropdownMenuRoot>
-              </div>
-            </section>
-
-            <!-- Only once there is a plan to draw: a ticket that bundles subtickets. -->
-            <TicketTimeline v-if="ticket && hasSubtickets" :ticket-id="ticket.id" :refresh-key="timelineKey" />
 
             <div class="grid gap-4 border-t border-[var(--line)] pt-6" :class="ticket ? '' : 'sm:grid-cols-2'">
               <div class="block">
@@ -1600,88 +1495,6 @@ function focusTitle(event: Event) {
                 </div>
                 </template>
 
-                <!-- Finish-to-start: it starts once these end. Only an existing ticket can point at others. -->
-                <div v-if="ticket" class="space-y-2 border-t border-[var(--line)] pt-4">
-                  <div class="flex items-center gap-2">
-                    <span class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Link2 :size="14" /> Waits on</span>
-                    <button
-                      v-if="canEdit && !dependencyPicking && waitsOn.length < 50"
-                      type="button"
-                      class="focus-ring muted ml-auto flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-xs font-semibold hover:bg-[var(--panel)] hover:text-[var(--ink)]"
-                      title="Pick a ticket this one can only start once it has ended"
-                      @click="openDependencyPicker"
-                    ><Plus :size="13" /> Add</button>
-                  </div>
-                  <ul v-if="waitsOn.length" class="space-y-1">
-                    <li v-for="blocker in waitsOn" :key="blocker.id" class="surface-strong flex items-center gap-2 rounded-xl px-2.5 py-1.5">
-                      <span class="grid size-4 shrink-0 place-items-center" :class="blocker.done ? 'text-[var(--accent)]' : 'muted'">
-                        <CircleCheck v-if="blocker.done" :size="15" aria-label="Done" />
-                        <Circle v-else :size="15" aria-label="Open" />
-                      </span>
-                      <NuxtLink :to="subticketHref(blocker)" class="focus-ring group/dep flex min-w-0 flex-1 flex-col rounded-md px-1 hover:bg-[var(--panel)]" :title="`Open #${blocker.ticketNumber}`">
-                        <span class="truncate text-sm group-hover/dep:underline" :class="blocker.done ? 'muted line-through' : ''">{{ blocker.title }}</span>
-                        <span class="muted flex min-w-0 items-center gap-1 text-[11px]">
-                          <span class="shrink-0 font-semibold tabular-nums">#{{ blocker.ticketNumber }}</span>
-                          <span class="truncate">· {{ blocker.boardName }} · {{ blocker.laneName }}<template v-if="blocker.dueDate"> · due {{ blocker.dueDate }}</template></span>
-                        </span>
-                      </NuxtLink>
-                      <span
-                        v-if="blockerConcern(blocker)"
-                        class="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold"
-                        :class="blockerConcern(blocker) === 'late' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
-                        :title="blockerConcern(blocker) === 'late' ? 'It is past its due date and not done' : 'It ends after this ticket starts'"
-                      >{{ blockerConcern(blocker) === 'late' ? 'Late' : 'Ends later' }}</span>
-                      <button
-                        v-if="canEdit"
-                        type="button"
-                        class="focus-ring muted grid size-7 shrink-0 place-items-center rounded-lg hover:bg-[var(--panel)] hover:text-rose-600"
-                        :aria-label="`No longer wait on #${blocker.ticketNumber}`"
-                        @click="removeDependency(blocker.id)"
-                      ><X :size="14" /></button>
-                    </li>
-                  </ul>
-                  <p v-else-if="!dependencyPicking" class="muted text-xs">Nothing. Add the tickets that have to end before this one can start.</p>
-
-                  <div v-if="dependencyPicking" class="space-y-1" @keydown.esc.stop.prevent="dependencyPicking = false">
-                    <div class="relative">
-                      <input
-                        v-model="dependencyQuery"
-                        data-dependency-search
-                        class="focus-ring surface-strong h-10 w-full rounded-xl px-3 pr-9 text-sm outline-none"
-                        placeholder="Search by title or #number"
-                        aria-label="Search for a ticket to wait on"
-                      >
-                      <LoaderCircle v-if="dependencySearching" :size="14" class="muted absolute right-3 top-1/2 -translate-y-1/2 animate-spin" aria-hidden="true" />
-                    </div>
-                    <button
-                      v-for="candidate in dependencyCandidates"
-                      :key="candidate.id"
-                      type="button"
-                      class="focus-ring flex w-full items-center gap-2.5 rounded-xl border border-transparent px-3 py-1.5 text-left hover:border-[var(--line)] hover:bg-[var(--panel)]"
-                      @click="addDependency(candidate)"
-                    >
-                      <span class="min-w-0 flex-1">
-                        <span class="block truncate text-sm font-medium">{{ candidate.title }}</span>
-                        <span class="muted block truncate text-[11px]"><span class="font-semibold tabular-nums">#{{ candidate.ticketNumber }}</span> · {{ candidate.boardName }} · {{ candidate.laneName }}</span>
-                      </span>
-                      <CircleCheck v-if="candidate.done" :size="14" class="shrink-0 text-[var(--accent)]" aria-label="Done" />
-                    </button>
-                    <div class="flex items-center gap-2">
-                      <p v-if="!dependencySearching && !dependencyCandidates.length" class="muted text-xs">{{ dependencyQuery.trim() ? 'No open ticket of this workspace matches.' : 'No ticket of this workspace to wait on.' }}</p>
-                      <button type="button" class="focus-ring muted ml-auto rounded-lg px-1.5 py-0.5 text-xs font-semibold hover:text-[var(--ink)]" @click="dependencyPicking = false">Cancel</button>
-                    </div>
-                  </div>
-
-                  <ul v-if="dependencyIssues.length" class="space-y-1 rounded-xl bg-orange-400/10 p-2.5 text-xs text-orange-800 dark:text-orange-200">
-                    <li v-for="issue in dependencyIssues" :key="issue.message" class="flex items-start gap-1.5"><CircleAlert :size="13" class="mt-px shrink-0" aria-hidden="true" /> {{ issue.message }}</li>
-                  </ul>
-
-                  <p v-if="dependents.length" class="muted flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs">
-                    <span>Waited on by</span>
-                    <NuxtLink v-for="item in dependents" :key="item.id" :to="subticketHref(item)" class="focus-ring rounded font-semibold tabular-nums hover:text-[var(--accent)] hover:underline" :title="item.title">#{{ item.ticketNumber }}</NuxtLink>
-                  </p>
-                </div>
-
                 <!-- Moving the plan: these dates and everything waiting on them, by the same days. -->
                 <div v-if="ticket && canEdit && (ticket.startDate || ticket.dueDate)" class="border-t border-[var(--line)] pt-3">
                   <button
@@ -1720,7 +1533,205 @@ function focusTitle(event: Event) {
                 </div>
               </template>
             </section>
+          </div>
 
+          <!-- The way the work is laid out: its steps and subtickets, their timeline, and what it has to wait for. -->
+          <div v-show="activeTab === 'plan'" data-editor-pane="plan" role="tabpanel" class="order-first space-y-6 px-5 py-6 sm:px-7">
+            <section class="space-y-3">
+              <div class="flex items-center gap-2">
+                <h3 class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><ListTodo :size="15" /> To-dos</h3>
+                <span v-if="todos.length && light" class="ml-auto flex items-center gap-1.5 text-[11px] font-semibold" :title="TODO_LIGHT_LABELS[light]">
+                  <TodoLight :light="light" />
+                  <span class="muted">{{ todos.filter(todo => todo.completed).length }}/{{ todos.length }} completed</span>
+                </span>
+              </div>
+              <p v-if="!todos.length" class="muted text-xs">No to-dos yet. Add steps, or subtickets that count as done once they are finished.</p>
+              <div v-if="todos.length" ref="todoListElement">
+                <TransitionGroup name="todo-sort" tag="div" data-todo-stack class="relative flex flex-col gap-2">
+                  <div v-for="item in todoSortItems" :key="item?.key || '__todo-drop-placeholder'" :data-todo-sort-item="item?.key">
+                    <div
+                      v-if="item"
+                      :data-todo-row="item.key"
+                      class="surface-strong flex items-center gap-2 rounded-xl p-2 transition-[border-color,background-color,box-shadow] duration-150 hover:border-[color-mix(in_srgb,var(--line)_60%,var(--accent))]"
+                    >
+                      <button
+                        type="button"
+                        :data-todo-handle="item.key"
+                        class="focus-ring muted grid size-8 shrink-0 cursor-grab touch-none place-items-center rounded-lg hover:bg-[var(--panel)] active:cursor-grabbing"
+                        :aria-label="`Reorder to-do ${todoIndexOf(item.key) + 1}`"
+                        title="Drag to reorder · Alt+arrow keys"
+                        @pointerdown="beginTodoDrag($event, item.key)"
+                        @keydown.alt.up.prevent="moveTodo(todoIndexOf(item.key), -1)"
+                        @keydown.alt.down.prevent="moveTodo(todoIndexOf(item.key), 1)"
+                      ><GripVertical :size="17" /></button>
+                      <template v-if="item.subticketId">
+                        <span class="grid size-4 shrink-0 place-items-center" :class="item.completed ? 'text-[var(--accent)]' : 'muted'" :title="item.completed ? 'Done: the subticket is in a done lane' : 'Open until the subticket reaches a done lane'">
+                          <CircleCheck v-if="item.completed" :size="16" aria-label="Done" />
+                          <Circle v-else :size="16" aria-label="Open" />
+                        </span>
+                        <NuxtLink
+                          :to="item.subticket ? subticketHref(item.subticket) : undefined"
+                          class="focus-ring group/sub flex min-w-0 flex-1 flex-col rounded-md px-1 py-0.5 hover:bg-[var(--panel)]"
+                          :title="item.subticket ? `Open subticket #${item.subticket.ticketNumber}` : undefined"
+                        >
+                          <!-- The title alone on the first line; the number leads the second, where "Subticket" used to say what the arrow already does. -->
+                          <span class="truncate text-sm group-hover/sub:underline" :class="item.completed ? 'muted line-through' : ''">{{ item.text }}</span>
+                          <span v-if="item.subticket" class="muted flex min-w-0 items-center gap-1 text-[11px]">
+                            <CornerDownRight :size="11" class="shrink-0" aria-hidden="true" />
+                            <span class="shrink-0 font-semibold tabular-nums">#{{ item.subticket.ticketNumber }}</span>
+                            <span class="truncate">· {{ item.subticket.boardName }} · {{ item.subticket.laneName }}{{ item.subticket.archived ? ' · archived' : '' }}</span>
+                          </span>
+                        </NuxtLink>
+                      </template>
+                      <template v-else>
+                      <input v-model="item.completed" type="checkbox" class="focus-ring size-4 shrink-0 cursor-pointer accent-[var(--accent)]" :aria-label="`Mark to-do “${item.text || todoIndexOf(item.key) + 1}” as completed`" @change="commitTodos()">
+                      <input
+                        v-model="item.text"
+                        :data-todo-input="item.key"
+                        maxlength="500"
+                        class="focus-ring min-w-0 flex-1 bg-transparent px-1 py-1.5 text-sm outline-none"
+                        :class="item.completed ? 'muted line-through' : ''"
+                        placeholder="What needs to be done?"
+                        @keydown.enter.prevent="addTodo(todoIndexOf(item.key) + 1)"
+                        @blur="commitTodos()"
+                      >
+                      </template>
+                      <button
+                        type="button"
+                        class="focus-ring grid size-8 shrink-0 place-items-center rounded-lg text-rose-600 hover:bg-rose-500/10"
+                        :aria-label="item.subticketId ? `Remove subticket ${todoIndexOf(item.key) + 1} from the list` : `Delete to-do ${todoIndexOf(item.key) + 1}`"
+                        :title="item.subticketId ? 'Remove from the list — the subticket itself stays' : undefined"
+                        @click="removeTodo(todoIndexOf(item.key))"
+                      ><Trash2 :size="15" /></button>
+                    </div>
+                    <div
+                      v-else
+                      data-todo-placeholder
+                      class="pointer-events-none rounded-xl border border-dashed border-[color-mix(in_srgb,var(--accent)_38%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_8%,transparent)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--accent)_8%,transparent)]"
+                      :style="{ height: `${todoDragPreview?.height || 52}px` }"
+                      aria-hidden="true"
+                    />
+                  </div>
+                </TransitionGroup>
+              </div>
+              <!-- One quiet way to add: a to-do or a subticket. -->
+              <div class="flex justify-end">
+                <DropdownMenuRoot :modal="false">
+                  <DropdownMenuTrigger
+                    data-add-menu
+                    class="focus-ring group flex h-9 items-center gap-1.5 rounded-xl border border-dashed border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] data-[state=open]:border-[var(--accent)] data-[state=open]:bg-[var(--accent-soft)]"
+                  >
+                    <Plus :size="16" aria-hidden="true" /> Add
+                    <ChevronDown :size="14" class="muted transition-transform duration-150 group-data-[state=open]:rotate-180" aria-hidden="true" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuPortal>
+                    <!-- Focus goes where the item sends it (a new to-do), not back here. -->
+                    <DropdownMenuContent
+                      align="end"
+                      :side-offset="6"
+                      class="ui-popover z-[100] min-w-52 overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel-strong)] p-1 text-[var(--ink)] shadow-[0_18px_45px_rgba(0,0,0,.16),0_3px_12px_rgba(0,0,0,.08)]"
+                      @close-auto-focus.prevent
+                    >
+                      <DropdownMenuItem :disabled="todos.length >= 100" class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-medium outline-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--accent-soft)]" @select="addTodo()">
+                        <Plus :size="15" aria-hidden="true" /> To-do
+                      </DropdownMenuItem>
+                      <DropdownMenuItem v-if="canAddSubticket" :disabled="todos.length >= 100" class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-medium outline-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--accent-soft)]" @select="subticketOpen = true">
+                        <CornerDownRight :size="15" aria-hidden="true" /> Subticket…
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenuPortal>
+                </DropdownMenuRoot>
+              </div>
+            </section>
+
+            <!-- Only once there is a plan to draw: a ticket that bundles subtickets. -->
+            <TicketTimeline v-if="ticket && hasSubtickets" :ticket-id="ticket.id" :refresh-key="timelineKey" />
+
+            <!-- Finish-to-start: it starts once these end. Only an existing ticket can point at others. -->
+            <section v-if="ticket" class="space-y-2 border-t border-[var(--line)] pt-6" aria-label="Waits on">
+              <div class="flex items-center gap-2">
+                <span class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Link2 :size="14" /> Waits on</span>
+                <button
+                  v-if="canEdit && !dependencyPicking && waitsOn.length < 50"
+                  type="button"
+                  class="focus-ring muted ml-auto flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-xs font-semibold hover:bg-[var(--panel)] hover:text-[var(--ink)]"
+                  title="Pick a ticket this one can only start once it has ended"
+                  @click="openDependencyPicker"
+                ><Plus :size="13" /> Add</button>
+              </div>
+              <ul v-if="waitsOn.length" class="space-y-1">
+                <li v-for="blocker in waitsOn" :key="blocker.id" class="surface-strong flex items-center gap-2 rounded-xl px-2.5 py-1.5">
+                  <span class="grid size-4 shrink-0 place-items-center" :class="blocker.done ? 'text-[var(--accent)]' : 'muted'">
+                    <CircleCheck v-if="blocker.done" :size="15" aria-label="Done" />
+                    <Circle v-else :size="15" aria-label="Open" />
+                  </span>
+                  <NuxtLink :to="subticketHref(blocker)" class="focus-ring group/dep flex min-w-0 flex-1 flex-col rounded-md px-1 hover:bg-[var(--panel)]" :title="`Open #${blocker.ticketNumber}`">
+                    <span class="truncate text-sm group-hover/dep:underline" :class="blocker.done ? 'muted line-through' : ''">{{ blocker.title }}</span>
+                    <span class="muted flex min-w-0 items-center gap-1 text-[11px]">
+                      <span class="shrink-0 font-semibold tabular-nums">#{{ blocker.ticketNumber }}</span>
+                      <span class="truncate">· {{ blocker.boardName }} · {{ blocker.laneName }}<template v-if="blocker.dueDate"> · due {{ blocker.dueDate }}</template></span>
+                    </span>
+                  </NuxtLink>
+                  <span
+                    v-if="blockerConcern(blocker)"
+                    class="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold"
+                    :class="blockerConcern(blocker) === 'late' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
+                    :title="blockerConcern(blocker) === 'late' ? 'It is past its due date and not done' : 'It ends after this ticket starts'"
+                  >{{ blockerConcern(blocker) === 'late' ? 'Late' : 'Ends later' }}</span>
+                  <button
+                    v-if="canEdit"
+                    type="button"
+                    class="focus-ring muted grid size-7 shrink-0 place-items-center rounded-lg hover:bg-[var(--panel)] hover:text-rose-600"
+                    :aria-label="`No longer wait on #${blocker.ticketNumber}`"
+                    @click="removeDependency(blocker.id)"
+                  ><X :size="14" /></button>
+                </li>
+              </ul>
+              <p v-else-if="!dependencyPicking" class="muted text-xs">Nothing. Add the tickets that have to end before this one can start.</p>
+
+              <div v-if="dependencyPicking" class="space-y-1" @keydown.esc.stop.prevent="dependencyPicking = false">
+                <div class="relative">
+                  <input
+                    v-model="dependencyQuery"
+                    data-dependency-search
+                    class="focus-ring surface-strong h-10 w-full rounded-xl px-3 pr-9 text-sm outline-none"
+                    placeholder="Search by title or #number"
+                    aria-label="Search for a ticket to wait on"
+                  >
+                  <LoaderCircle v-if="dependencySearching" :size="14" class="muted absolute right-3 top-1/2 -translate-y-1/2 animate-spin" aria-hidden="true" />
+                </div>
+                <button
+                  v-for="candidate in dependencyCandidates"
+                  :key="candidate.id"
+                  type="button"
+                  class="focus-ring flex w-full items-center gap-2.5 rounded-xl border border-transparent px-3 py-1.5 text-left hover:border-[var(--line)] hover:bg-[var(--panel)]"
+                  @click="addDependency(candidate)"
+                >
+                  <span class="min-w-0 flex-1">
+                    <span class="block truncate text-sm font-medium">{{ candidate.title }}</span>
+                    <span class="muted block truncate text-[11px]"><span class="font-semibold tabular-nums">#{{ candidate.ticketNumber }}</span> · {{ candidate.boardName }} · {{ candidate.laneName }}</span>
+                  </span>
+                  <CircleCheck v-if="candidate.done" :size="14" class="shrink-0 text-[var(--accent)]" aria-label="Done" />
+                </button>
+                <div class="flex items-center gap-2">
+                  <p v-if="!dependencySearching && !dependencyCandidates.length" class="muted text-xs">{{ dependencyQuery.trim() ? 'No open ticket of this workspace matches.' : 'No ticket of this workspace to wait on.' }}</p>
+                  <button type="button" class="focus-ring muted ml-auto rounded-lg px-1.5 py-0.5 text-xs font-semibold hover:text-[var(--ink)]" @click="dependencyPicking = false">Cancel</button>
+                </div>
+              </div>
+
+              <ul v-if="dependencyIssues.length" class="space-y-1 rounded-xl bg-orange-400/10 p-2.5 text-xs text-orange-800 dark:text-orange-200">
+                <li v-for="issue in dependencyIssues" :key="issue.message" class="flex items-start gap-1.5"><CircleAlert :size="13" class="mt-px shrink-0" aria-hidden="true" /> {{ issue.message }}</li>
+              </ul>
+
+              <p v-if="dependents.length" class="muted flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs">
+                <span>Waited on by</span>
+                <NuxtLink v-for="item in dependents" :key="item.id" :to="subticketHref(item)" class="focus-ring rounded font-semibold tabular-nums hover:text-[var(--accent)] hover:underline" :title="item.title">#{{ item.ticketNumber }}</NuxtLink>
+              </p>
+            </section>
+          </div>
+
+          <!-- Where the ticket came from, and everything that happened to it since. -->
+          <div v-if="ticket" v-show="activeTab === 'history'" data-editor-pane="history" role="tabpanel" class="order-first space-y-6 px-5 py-6 sm:px-7">
             <section v-if="ticket?.feedback" class="rounded-2xl bg-[var(--accent-soft)] p-4 sm:p-5">
               <div class="mb-4 flex items-center gap-2 text-sm font-bold"><TestTubeDiagonal :size="17" /> TestFlight metadata</div>
               <dl class="grid grid-cols-2 gap-x-5 gap-y-4 text-xs">
@@ -1765,7 +1776,7 @@ function focusTitle(event: Event) {
               <p class="muted mt-4 text-[11px] leading-relaxed">Imported once; the ticket is carried on here and Jira is not updated.</p>
             </section>
 
-            <TicketActivity v-if="ticket" :ticket-id="ticket.id" :refresh-key="commentRefreshKey" />
+            <TicketActivity :ticket-id="ticket.id" :refresh-key="commentRefreshKey" />
           </div>
 
           <!-- Pinned, the files ride as a narrow column at the far right, past pinned comments; on a phone they follow the fields. -->

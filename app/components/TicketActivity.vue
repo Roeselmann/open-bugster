@@ -6,7 +6,6 @@ import { providerLabel } from '~~/shared/utils/ticket-source'
 const props = defineProps<{ ticketId: string; refreshKey?: number }>()
 
 const entries = ref<TicketActivityEntry[]>([])
-const open = ref(false)
 
 const timeFormat = new Intl.DateTimeFormat('en', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
 
@@ -74,19 +73,15 @@ function via(entry: TicketActivityEntry): string | null {
 </script>
 
 <template>
-  <section v-if="entries.length" class="border-t border-[var(--line)] pt-6">
-    <button
-      type="button"
-      class="focus-ring flex items-center gap-1.5 rounded-lg text-xs font-bold uppercase tracking-[.08em]"
-      :aria-expanded="open"
-      @click="open = !open"
-    >
-      <History :size="14" aria-hidden="true" /> History
-      <span class="muted font-semibold tabular-nums">{{ entries.length }}</span>
-      <span class="muted font-medium normal-case tracking-normal">{{ open ? '· hide' : '· show' }}</span>
-    </button>
+  <!-- It has a tab of its own now, so the list is simply there. -->
+  <section>
+    <h3 class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]">
+      <History :size="14" aria-hidden="true" /> Activity
+      <span v-if="entries.length" class="muted font-semibold tabular-nums">{{ entries.length }}</span>
+    </h3>
+    <p v-if="!entries.length" class="muted mt-3 text-xs">Nothing recorded yet.</p>
 
-    <ol v-if="open" class="mt-3 space-y-2">
+    <ol v-else class="mt-3 space-y-2">
       <li v-for="entry in entries" :key="entry.id" class="muted flex items-baseline gap-2 text-xs leading-relaxed">
         <span class="shrink-0 tabular-nums">{{ timeFormat.format(new Date(entry.createdAt)) }}</span>
         <span>
