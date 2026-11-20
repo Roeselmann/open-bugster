@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, CalendarArrowUp, CalendarClock, CalendarRange, Check, ChevronDown, Flag, Circle, CircleAlert, CircleCheck, CornerDownRight, CornerLeftUp, Download, ExternalLink, FileText, Gauge, GripVertical, Link2, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Plus, Radio, Shapes, SlidersHorizontal, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
+import type { ComponentPublicInstance } from 'vue'
+import { AlarmClock, Archive, ArrowDownToLine, ArrowRightLeft, ArrowUpToLine, Calendar, CalendarArrowUp, CalendarClock, CalendarRange, Check, ChevronDown, Flag, Circle, CircleAlert, CircleCheck, CornerDownRight, CornerLeftUp, Download, ExternalLink, FileText, Gauge, GripVertical, Link2, ListTodo, LoaderCircle, MessageSquare, Paperclip, PenLine, Pin, PinOff, Plus, Radio, Shapes, SquareKanban, Tag, Tags, TestTubeDiagonal, Trash2, Upload, UserRound, X } from '@lucide/vue'
 import {
   DialogContent,
   DialogDescription,
@@ -190,60 +191,120 @@ const authorOptions = computed(() => [{ value: UNASSIGNED, label: 'Nobody' }, ..
 const commentRefreshKey = ref(0)
 
 /**
- * The thread gets its own column beside the ticket, but only once there is a conversation
- * to show — an empty one would cost half the drawer for nothing. `commentCount` comes with
- * the ticket, so the column is already open on the first paint rather than appearing late.
+ * The drawer shows one pane at a time, picked in the header: the ticket's details, its
+ * comments or its files. Comments and files can each be pinned instead: a pinned pane
+ * stands as a column of its own beside whichever pane the header shows, and its tab only
+ * points at it. Nothing is pinned until somebody pins it; the choice belongs to the ticket
+ * and lasts for this browser tab's session.
  */
-const commentsOpen = ref(false)
-// Closing only hides the column: a comment half written is still there when it comes back.
+type EditorTab = 'details' | 'comments' | 'files'
+type PinnableTab = Exclude<EditorTab, 'details'>
+const activeTab = ref<EditorTab>('details')
+const pinned = reactive<Record<PinnableTab, boolean>>({ comments: false, files: false })
+const pinnedKey = (ticketId: string) => `open-bugster-ticket-pinned:${ticketId}`
+function restorePinned(ticketId: string | undefined) {
+  pinned.comments = pinned.files = false
+  if (!ticketId) return
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(pinnedKey(ticketId)) || '{}')
+    pinned.comments = stored.comments === true
+    pinned.files = stored.files === true
+  } catch {
+    // Nothing stored, or nothing readable: nothing is pinned.
+  }
+}
+function rememberPinned() {
+  // A ticket not yet created has nowhere to keep it: its pins last as long as the editor.
+  if (!props.ticket) return
+  try {
+    if (pinned.comments || pinned.files) sessionStorage.setItem(pinnedKey(props.ticket.id), JSON.stringify(pinned))
+    else sessionStorage.removeItem(pinnedKey(props.ticket.id))
+  } catch {
+    // Private mode or a full store: pinning still works, it just forgets.
+  }
+}
+// The thread lives on the saved ticket, so a brand-new one has no comments to show.
+const commentsAvailable = computed(() => Boolean(props.ticket))
+const commentsPinned = computed(() => commentsAvailable.value && pinned.comments)
+const commentsShown = computed(() => commentsAvailable.value && (pinned.comments || activeTab.value === 'comments'))
+const filesShown = computed(() => pinned.files || activeTab.value === 'files')
+// Once shown, the thread stays mounted and is only hidden: a comment half written is still there when it comes back.
 const commentsMounted = ref(false)
+watch(commentsShown, (shown) => { if (shown) commentsMounted.value = true }, { immediate: true })
+const fileCount = computed(() => (props.ticket?.attachments.length || 0) + pendingFiles.value.length)
+
+function scrollPaneIntoView(tab: EditorTab) {
+  nextTick(() => {
+    const scroller = document.querySelector<HTMLElement>('[data-ticket-editor-scroll]')
+    const pane = document.querySelector<HTMLElement>(`[data-editor-pane="${tab}"]`)
+    if (!scroller || !pane) return
+    // A pane in the main column starts at the top; a pinned one is only brought into view (on a phone it sits below).
+    if (tab === activeTab.value) scroller.scrollTop = 0
+    else pane.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  })
+}
+function selectTab(tab: EditorTab) {
+  if (tab !== 'details' && pinned[tab]) return scrollPaneIntoView(tab)
+  activeTab.value = tab
+  scrollPaneIntoView(tab)
+}
+function togglePin(tab: PinnableTab) {
+  pinned[tab] = !pinned[tab]
+  // A pane pinned out of the main column leaves the details there; one unpinned simply goes.
+  if (pinned[tab] && activeTab.value === tab) activeTab.value = 'details'
+  rememberPinned()
+}
 
 /**
- * Opening or closing the column is a choice for every ticket, kept in this browser. Until
- * somebody has made it, the rule above decides ticket by ticket.
+ * The editor's header grows with the parents and the tabs, so what sticks below it is
+ * placed by its measured height rather than a guess.
  */
-const COMMENTS_PREFERENCE_KEY = 'open-bugster-ticket-comments'
-function commentsPreference(): boolean | null {
-  try {
-    const stored = localStorage.getItem(COMMENTS_PREFERENCE_KEY)
-    return stored === 'open' ? true : stored === 'closed' ? false : null
-  } catch {
-    return null
-  }
+const headerHeight = ref(72)
+let headerObserver: ResizeObserver | undefined
+// The header renders in the dialog's portal; a function ref sees it whenever it comes and goes.
+function observeHeader(header: Element | ComponentPublicInstance | null) {
+  headerObserver?.disconnect()
+  headerObserver = undefined
+  if (!(header instanceof HTMLElement) || typeof ResizeObserver === 'undefined') return
+  const measure = () => { if (header.offsetHeight) headerHeight.value = header.offsetHeight }
+  nextTick(measure)
+  headerObserver = new ResizeObserver(measure)
+  headerObserver.observe(header)
 }
-function rememberComments(open: boolean) {
-  try {
-    localStorage.setItem(COMMENTS_PREFERENCE_KEY, open ? 'open' : 'closed')
-  } catch {
-    // Private mode or a full store: the column still works, it just forgets.
-  }
-}
+onBeforeUnmount(() => headerObserver?.disconnect())
 
 /**
- * The files column can be dragged wider, from its narrow default up to about the width of the
- * comments column. Only the files column changes: the drawer grows by as much, so the fields
- * and the comments keep their width — as long as the window has the room, which caps the
- * drag. The width is one for every ticket, kept in this browser like the comments column.
+ * A pinned files column can be dragged wider, from its narrow default up to about the width
+ * of a comments column. Only the files column changes: the drawer grows by as much, so the
+ * other columns keep their width — as long as the window has the room, which caps the drag.
+ * The width is one for every ticket, kept in this browser.
  */
 const FILES_WIDTH_KEY = 'open-bugster-ticket-files-width'
 const FILES_MIN_WIDTH = 240
-// The drawer at the narrow files column: 52rem, or 78rem with the comments beside the fields.
-const DRAWER_WIDTH = 832
-const DRAWER_WIDTH_WITH_COMMENTS = 1248
-// As wide as the comments column at that size.
-const FILES_MAX_WIDTH = (DRAWER_WIDTH_WITH_COMMENTS - FILES_MIN_WIDTH) / 2
+// The drawer with one pane, and with the comments pinned beside it (two equal columns).
+const DRAWER_WIDTH = 672
+const DRAWER_WIDTH_WITH_COMMENTS = 1120
+const FILES_MAX_WIDTH = 504
 const LG_BREAKPOINT = 1024
 const columns = ref<HTMLElement | null>(null)
 const filesWidth = ref(FILES_MIN_WIDTH)
 const resizingFiles = ref(false)
 const viewportWidth = ref(LG_BREAKPOINT)
-const baseDrawerWidth = computed(() => commentsOpen.value && viewportWidth.value >= LG_BREAKPOINT ? DRAWER_WIDTH_WITH_COMMENTS : DRAWER_WIDTH)
-const maxFilesWidth = () => Math.max(FILES_MIN_WIDTH, Math.min(FILES_MAX_WIDTH, viewportWidth.value - baseDrawerWidth.value + FILES_MIN_WIDTH))
+const baseDrawerWidth = computed(() => commentsPinned.value && viewportWidth.value >= LG_BREAKPOINT ? DRAWER_WIDTH_WITH_COMMENTS : DRAWER_WIDTH)
+const maxFilesWidth = () => Math.max(FILES_MIN_WIDTH, Math.min(FILES_MAX_WIDTH, viewportWidth.value - baseDrawerWidth.value))
 const shownFilesWidth = computed(() => Math.min(filesWidth.value, maxFilesWidth()))
 const drawerStyle = computed(() => ({
-  maxWidth: `${baseDrawerWidth.value + shownFilesWidth.value - FILES_MIN_WIDTH}px`,
-  '--files-width': `${shownFilesWidth.value}px`
+  maxWidth: `${baseDrawerWidth.value + (pinned.files ? shownFilesWidth.value : 0)}px`,
+  '--files-width': `${shownFilesWidth.value}px`,
+  '--editor-header': `${headerHeight.value}px`
 }))
+// One column per pinned pane, the main one first; on a phone they all stack.
+const columnsClass = computed(() => {
+  if (commentsPinned.value && pinned.files) return 'sm:grid-cols-[minmax(0,1fr)_var(--files-width)] lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_var(--files-width)]'
+  if (pinned.files) return 'sm:grid-cols-[minmax(0,1fr)_var(--files-width)]'
+  if (commentsPinned.value) return 'sm:grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
+  return 'sm:grid-cols-1'
+})
 const measureViewport = () => { viewportWidth.value = window.innerWidth }
 onMounted(() => {
   measureViewport()
@@ -258,7 +319,7 @@ function rememberFilesWidth() {
   try {
     localStorage.setItem(FILES_WIDTH_KEY, String(filesWidth.value))
   } catch {
-    // As with the comments: the column still resizes, it just forgets.
+    // As with pinning: the column still resizes, it just forgets.
   }
 }
 onMounted(() => {
@@ -304,15 +365,8 @@ function resetFilesWidth() {
   rememberFilesWidth()
 }
 
-function closeComments() {
-  commentsOpen.value = false
-  rememberComments(false)
-}
-
 function openComments() {
-  commentsOpen.value = true
-  commentsMounted.value = true
-  rememberComments(true)
+  selectTab('comments')
   nextTick(() => document.querySelector<HTMLTextAreaElement>('[data-comment-input]')?.focus())
 }
 
@@ -371,6 +425,8 @@ function toggleTransfer() {
 const labelPill = 'focus-ring flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-2 text-[11px] font-semibold leading-none transition'
 const labelPillIdle = 'muted border-[var(--line)] hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)]'
 // The icon buttons beside the lane in the header: to the top, to the bottom, to another board.
+// Pins a pane beside the ticket, or takes it back into the header's tabs.
+const pinButton = 'focus-ring muted grid size-7 shrink-0 place-items-center rounded-lg hover:bg-[var(--panel-strong)] hover:text-[var(--ink)] aria-pressed:text-[var(--accent)]'
 const headerButton = 'focus-ring muted flex size-8 shrink-0 items-center justify-center rounded-lg border border-[var(--line)] transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] hover:text-[var(--ink)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--line)] disabled:hover:bg-transparent'
 const priorityOptions = Object.entries(PRIORITY_LABELS).map(([value, label]) => ({ value, label }))
 const categoryOptions = computed(() => (props.categories || []).map(category => category.name))
@@ -415,7 +471,9 @@ watch(() => props.ticket, (ticket, previous) => {
   form.authorId = ticket?.author?.id || UNASSIGNED
   if (!sameTicket) {
     commentCount.value = ticket?.commentCount || 0
-    commentsOpen.value = commentsMounted.value = Boolean(ticket) && (commentsPreference() ?? commentCount.value > 0)
+    activeTab.value = 'details'
+    if (import.meta.client) restorePinned(ticket?.id)
+    commentsMounted.value = commentsShown.value
   }
   form.labels = ticket?.labels.map(label => label.name) || []
   form.categoryName = ticket?.category?.name || ''
@@ -1011,7 +1069,7 @@ function focusTitle(event: Event) {
           <DialogDescription>{{ isEdit ? 'Edit the ticket. Changes are saved as you make them.' : 'Create a new ticket.' }}</DialogDescription>
         </VisuallyHidden>
         <form class="flex min-h-full flex-col" @submit.prevent="submit()">
-          <header class="sticky top-0 z-10 border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_62%,var(--canvas))] px-5 py-4 sm:px-7">
+          <header :ref="observeHeader" class="sticky top-0 z-10 border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_62%,var(--canvas))] px-5 py-4 sm:px-7">
             <div class="flex items-center gap-3">
               <DialogTitle as-child>
                 <h2 class="shrink-0 text-xl font-bold tracking-[-.03em]">
@@ -1069,15 +1127,37 @@ function focusTitle(event: Event) {
                 <span class="muted shrink-0 tabular-nums">#{{ parent.ticketNumber }}</span>
               </NuxtLink>
             </nav>
+            <!-- One pane at a time; a pinned one stands beside the others, so its tab only points at it. -->
+            <div role="tablist" aria-label="Ticket panes" class="-mb-4 mt-2 flex gap-1 overflow-x-auto scrollbar-thin">
+              <button
+                v-for="tab in ([['details', 'Details'], ['comments', 'Comments'], ['files', 'Assets']] as const).filter(([key]) => key !== 'comments' || commentsAvailable)"
+                :key="tab[0]"
+                type="button"
+                role="tab"
+                :aria-selected="activeTab === tab[0]"
+                :title="tab[0] !== 'details' && pinned[tab[0]] ? `${tab[1]} are pinned beside` : undefined"
+                class="focus-ring -mb-px flex h-10 shrink-0 items-center gap-1.5 border-b-2 px-3 text-sm font-semibold transition-colors"
+                :class="activeTab === tab[0] ? 'border-[var(--ink)] text-[var(--ink)]' : 'muted border-transparent hover:text-[var(--ink)]'"
+                @click="selectTab(tab[0])"
+              >
+                <SquareKanban v-if="tab[0] === 'details'" :size="15" aria-hidden="true" />
+                <MessageSquare v-else-if="tab[0] === 'comments'" :size="15" aria-hidden="true" />
+                <Paperclip v-else :size="15" aria-hidden="true" />
+                {{ tab[1] }}
+                <span v-if="tab[0] === 'comments' && commentCount" class="muted text-xs tabular-nums">{{ commentCount }}</span>
+                <span v-if="tab[0] === 'files' && fileCount" class="muted text-xs tabular-nums">{{ fileCount }}</span>
+                <Pin v-if="tab[0] !== 'details' && pinned[tab[0]]" :size="12" class="text-[var(--accent)]" aria-label="pinned" />
+              </button>
+            </div>
           </header>
 
           <!-- Columns stretch to the footer so the lines between them run all the way down; what sticks is inside. -->
           <div
             ref="columns"
-            class="flex-1 sm:grid sm:grid-cols-[minmax(0,1fr)_var(--files-width)]"
-            :class="[commentsOpen ? 'lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_var(--files-width)]' : '', resizingFiles ? 'cursor-col-resize select-none' : '']"
+            class="flex-1 sm:grid"
+            :class="[columnsClass, resizingFiles ? 'cursor-col-resize select-none' : '']"
           >
-          <div class="space-y-6 px-5 py-6 sm:px-7">
+          <div v-show="activeTab === 'details'" data-editor-pane="details" role="tabpanel" class="order-first space-y-6 px-5 py-6 sm:px-7">
             <!-- The transfer, folded out by the header button: destination board and lane, then one deliberate button. -->
             <div v-if="ticket && targetBoard" class="surface-strong rounded-xl p-3">
               <div class="grid gap-2 sm:grid-cols-2">
@@ -1272,7 +1352,7 @@ function focusTitle(event: Event) {
                       <DropdownMenuItem v-if="canAddSubticket" :disabled="todos.length >= 100" class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-medium outline-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--accent-soft)]" @select="subticketOpen = true">
                         <CornerDownRight :size="15" aria-hidden="true" /> Subticket…
                       </DropdownMenuItem>
-                      <DropdownMenuItem v-if="ticket && !commentsOpen" class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-medium outline-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--accent-soft)]" @select="openComments">
+                      <DropdownMenuItem v-if="ticket && !commentsShown" class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm font-medium outline-none data-[disabled]:opacity-50 data-[highlighted]:bg-[var(--accent-soft)]" @select="openComments">
                         <MessageSquare :size="15" aria-hidden="true" />
                         <span class="flex-1">{{ commentCount ? 'Show comments' : 'Comment' }}</span>
                         <span v-if="commentCount" class="muted text-xs tabular-nums">{{ commentCount }}</span>
@@ -1352,8 +1432,7 @@ function focusTitle(event: Event) {
             </label>
 
             <!-- How the ticket is sorted: how urgent, which category, which labels. -->
-            <section class="space-y-4 rounded-2xl border border-[color-mix(in_srgb,var(--accent)_22%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_5%,transparent)] p-4" aria-labelledby="ticket-classification-heading">
-              <h3 id="ticket-classification-heading" class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><SlidersHorizontal :size="14" /> Classification</h3>
+            <section class="space-y-4 rounded-2xl border border-[color-mix(in_srgb,var(--accent)_22%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_5%,transparent)] p-4" aria-label="Classification">
               <div class="grid items-start gap-4 sm:grid-cols-2">
                 <div class="block">
                   <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Gauge :size="14" /> Priority</span>
@@ -1689,16 +1768,23 @@ function focusTitle(event: Event) {
             <TicketActivity v-if="ticket" :ticket-id="ticket.id" :refresh-key="commentRefreshKey" />
           </div>
 
-          <!-- Attachments ride as a narrow column at the far right, past the comments when those are open; on a phone they follow the fields. -->
-          <div :class="commentsOpen ? 'lg:order-last' : ''" class="relative border-t border-[var(--line)] sm:border-l sm:border-t-0">
+          <!-- Pinned, the files ride as a narrow column at the far right, past pinned comments; on a phone they follow the fields. -->
+          <div
+            v-show="filesShown"
+            data-editor-pane="files"
+            :role="pinned.files ? 'complementary' : 'tabpanel'"
+            class="relative"
+            :class="pinned.files ? ['border-t border-[var(--line)] sm:border-l sm:border-t-0', commentsPinned ? 'lg:order-last' : ''] : 'order-first'"
+          >
             <!-- The whole line can be grabbed; the handle in its middle shows where. -->
-            <div class="absolute inset-y-0 -left-1.5 z-20 hidden w-3 cursor-col-resize sm:block" aria-hidden="true" @pointerdown="startFilesResize" @dblclick="resetFilesWidth" />
-            <div class="sm:sticky sm:top-[4.5rem] sm:h-[calc(100dvh-9rem)]">
+            <div v-if="pinned.files" class="absolute inset-y-0 -left-1.5 z-20 hidden w-3 cursor-col-resize sm:block" aria-hidden="true" @pointerdown="startFilesResize" @dblclick="resetFilesWidth" />
+            <div :class="pinned.files ? 'sm:sticky sm:top-[var(--editor-header)] sm:h-[calc(100dvh-var(--editor-header)-4.5rem)]' : ''">
               <div
+                v-if="pinned.files"
                 role="separator"
                 tabindex="0"
                 aria-orientation="vertical"
-                aria-label="Width of the files column"
+                aria-label="Width of the assets column"
                 :aria-valuenow="shownFilesWidth"
                 :aria-valuemin="FILES_MIN_WIDTH"
                 title="Drag to resize · double-click to reset"
@@ -1714,8 +1800,13 @@ function focusTitle(event: Event) {
                   <span v-for="dot in 3" :key="dot" class="size-[3px] rounded-full bg-[var(--muted)] group-hover/handle:bg-[var(--accent)]" />
                 </span>
               </div>
-          <aside class="space-y-3 px-5 py-6 sm:max-h-full sm:overflow-y-auto sm:px-3 scrollbar-thin">
-            <h3 class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Paperclip :size="14" /> Files</h3>
+          <div class="space-y-3 px-5 py-6 scrollbar-thin" :class="pinned.files ? 'sm:max-h-full sm:overflow-y-auto sm:px-3' : 'sm:px-7'">
+            <div class="flex items-center justify-between gap-2">
+              <h3 class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Paperclip :size="14" /> Assets</h3>
+              <button type="button" :class="pinButton" :aria-pressed="pinned.files" :aria-label="pinned.files ? 'Unpin assets' : 'Pin assets beside the ticket'" :title="pinned.files ? 'Unpin' : 'Pin beside the ticket'" @click="togglePin('files')">
+                <PinOff v-if="pinned.files" :size="15" aria-hidden="true" /><Pin v-else :size="15" aria-hidden="true" />
+              </button>
+            </div>
             <p v-if="!canEdit && !ticket?.attachments.length" class="muted text-xs">No files.</p>
             <div v-if="pendingFiles.length || ticket?.attachments.length" class="grid grid-cols-2 gap-2 sm:grid-cols-[repeat(auto-fill,minmax(200px,1fr))]">
               <div v-for="(file, fileIndex) in pendingFiles" :key="`${file.name}-${file.size}-${file.lastModified}`" class="surface-strong min-w-0 rounded-xl p-2 text-xs">
@@ -1761,25 +1852,29 @@ function focusTitle(event: Event) {
             </template>
             <p v-if="fileError" class="text-xs font-semibold text-rose-600" role="alert">{{ fileError }}</p>
             <TicketLinks :links="links" :saved="ticket?.links" :can-edit="canEdit" :card-image-options="cardImageOptions" :shown-on-card="shownOnCard" class="border-t border-[var(--line)] pt-4" @change="changeLinks" @toggle-card-image="toggleCardImage" />
-          </aside>
+          </div>
             </div>
           </div>
 
           <!-- The thread lives on the saved ticket, so a brand-new one gets it after the first save. -->
           <div
             v-if="ticket && commentsMounted"
-            v-show="commentsOpen"
-            class="border-t border-[var(--line)] sm:col-span-2 lg:col-span-1 lg:border-l lg:border-t-0"
+            v-show="commentsShown"
+            data-editor-pane="comments"
+            :role="commentsPinned ? 'complementary' : 'tabpanel'"
+            :class="commentsPinned ? ['border-t border-[var(--line)] lg:border-l lg:border-t-0', pinned.files ? 'sm:col-span-2 lg:col-span-1' : ''] : 'order-first'"
           >
-          <aside class="relative px-5 py-6 scrollbar-thin sm:px-7 lg:sticky lg:top-[4.5rem] lg:max-h-[calc(100dvh-9rem)] lg:overflow-y-auto">
-            <button type="button" class="focus-ring muted absolute right-4 top-4 grid size-8 place-items-center rounded-lg hover:bg-[var(--panel-strong)] hover:text-[var(--ink)] sm:right-6" aria-label="Hide comments" title="Hide comments" @click="closeComments"><X :size="16" /></button>
+          <div class="relative px-5 py-6 scrollbar-thin sm:px-7" :class="commentsPinned ? 'lg:sticky lg:top-[var(--editor-header)] lg:max-h-[calc(100dvh-var(--editor-header)-4.5rem)] lg:overflow-y-auto' : ''">
+            <button type="button" :class="[pinButton, 'absolute right-4 top-5 sm:right-6']" :aria-pressed="pinned.comments" :aria-label="pinned.comments ? 'Unpin comments' : 'Pin comments beside the ticket'" :title="pinned.comments ? 'Unpin' : 'Pin beside the ticket'" @click="togglePin('comments')">
+              <PinOff v-if="pinned.comments" :size="15" aria-hidden="true" /><Pin v-else :size="15" aria-hidden="true" />
+            </button>
             <TicketComments
               :ticket-id="ticket.id"
               :can-moderate="canModerate"
               @changed="onCommented"
               @notify="(type, text) => emit('notify', type, text)"
             />
-          </aside>
+          </div>
           </div>
           </div>
 
