@@ -1261,7 +1261,7 @@ function focusTitle(event: Event) {
               />
             </div>
 
-            <div class="grid gap-4 border-t border-[var(--line)] pt-6" :class="ticket ? '' : 'sm:grid-cols-2'">
+            <div class="grid gap-4" :class="ticket ? '' : 'sm:grid-cols-2'">
               <div class="block">
                 <span class="mb-2 flex h-5 items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Shapes :size="14" /> Type</span>
                 <div class="flex items-center gap-2">
