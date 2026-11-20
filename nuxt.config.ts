@@ -24,9 +24,9 @@ export default defineNuxtConfig({
   },
   app: {
     head: {
-      title: 'Open-Bugster · TestFlight Kanban',
+      title: 'Open-Bugster',
       meta: [
-        { name: 'description', content: 'A focused Kanban board for manual tickets and TestFlight feedback.' },
+        { name: 'description', content: 'A self-hosted planning and production board for teams and their AI agents.' },
         { name: 'theme-color', content: '#0b0d10' }
       ]
     }

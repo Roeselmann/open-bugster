@@ -1,5 +1,7 @@
 # Open-Bugster documentation
 
+Open-Bugster is a self-hosted planning and production board: Kanban boards for the daily work, tickets that nest into plans across boards with schedules, dependencies, a timeline and live windows, and every bit of it open to software and AI agents through REST, MCP, and webhooks. The [README](../README.md) has the overview; this folder has the detail.
+
 One document per feature, each written for two readers at once: a person who wants to know what the feature does and how to use it, and an agent that needs to find and understand the code behind it quickly. Every document follows the same order, so you can jump straight to the part you need:
 
 1. **Summary** – what the feature is and why it exists.
@@ -15,7 +17,8 @@ Line numbers in code maps are approximate and refer to the state of the code whe
 ## Where to start
 
 - **Operating an instance:** [setup.md](setup.md), then [backups-and-updates.md](backups-and-updates.md) and [deployment.md](deployment.md).
-- **Using the board:** [boards.md](boards.md), [tickets.md](tickets.md), [users-and-access.md](users-and-access.md).
+- **Using the board:** [workspaces.md](workspaces.md), [boards.md](boards.md), [users-and-access.md](users-and-access.md).
+- **Planning work across boards:** [tickets.md](tickets.md) — types, subtickets, schedule, dependencies, the timeline, live windows; [boards.md](boards.md) for done and live lanes.
 - **Connecting other software:** [api.md](api.md), [mcp-server.md](mcp-server.md), [webhooks.md](webhooks.md); the built-in imports are [app-store-connect.md](app-store-connect.md) and [jira.md](jira.md).
 - **Reading or changing the code:** [architecture.md](architecture.md) first, then [development.md](development.md) for the checklist a new feature has to satisfy.
 
@@ -29,11 +32,11 @@ Line numbers in code maps are approximate and refer to the state of the code whe
 | [deployment.md](deployment.md) | `develop` and `main`, and the server that pulls `main` every two minutes, builds, backs up, and rolls back on its own. |
 | [development.md](development.md) | Running locally, the test suite, the scratch instance, and the checklist for adding a feature. |
 | [workspaces.md](workspaces.md) | The level above boards: grouping, workspace administrators, board order, moving and duplicating boards. |
-| [boards.md](boards.md) | Boards, lanes and the import lane, categories, labels. |
-| [tickets.md](tickets.md) | Tickets, to-dos, attachments, comments, history, assignment, archive, filtering and search. |
+| [boards.md](boards.md) | Boards, lanes (the import lane, done and live lanes), categories, labels. |
+| [tickets.md](tickets.md) | Tickets and their types, to-dos, subtickets, decisions, strict order, schedule (none, milestone, lifecycle), dependencies and shifting, the timeline, live windows, the header alarm, attachments, comments, history, assignment, archive, filtering and search. |
 | [users-and-access.md](users-and-access.md) | Accounts, instance and board roles, invitations, password resets, disabling, anonymizing, deleting, and how identity by email works. |
 | [api.md](api.md) | Tokens, the integration permission, service identities, the REST v1 API with OpenAPI, idempotency, and the audit trail. |
 | [mcp-server.md](mcp-server.md) | The MCP endpoint for AI agents: the tools, their annotations, the two permission layers. |
-| [webhooks.md](webhooks.md) | Outgoing signed webhooks: events, signing, retries, destination screening. |
+| [webhooks.md](webhooks.md) | Outgoing signed webhooks: events (including those the calendar raises for live windows), signing, retries, destination screening. |
 | [app-store-connect.md](app-store-connect.md) | The built-in TestFlight import: credentials, encryption, the sync, and upgrading from a single board. |
 | [jira.md](jira.md) | The built-in Jira Cloud import: API token and JQL per board, the one-way sync, descriptions from ADF, attachments. |

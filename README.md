@@ -4,69 +4,83 @@
 
 # Open-Bugster
 
-Open-Bugster is a lightweight, self-hosted Kanban board that is meant to be driven by other software as much as by people. It started as the shortest path from TestFlight feedback to a ticket — App Store Connect and Jira Cloud are the two integrations that ship built in — but everything the board can do is also a REST endpoint, an MCP tool, and an outgoing webhook, so any application, script, or AI agent can work the same board with the same permissions.
+Open-Bugster is a self-hosted planning and production board for teams and the AI agents that work with them. It runs anything from a bug list to a campaign spread over several boards: Kanban boards for the daily work, tickets that nest into plans across boards, dates with dependencies and live windows on a timeline. Everything a person can do in the browser, software can do too, through a REST API, an MCP endpoint, and signed webhooks.
+
+It began as the shortest path from TestFlight feedback to a ticket, and the App Store Connect and Jira imports still ship with it. It has since grown from a bug board into a tool for producing assets and digital campaigns, with agents as first-class colleagues.
+
+**In three lines:**
+
+- **Boards** for the work as it moves: lanes, drag and drop, roles, comments, history.
+- **Plans** across boards: a campaign is a ticket whose subtickets live on the boards of the teams doing them, with dates, dependencies, a timeline, and a live window once it is out.
+- **Agents** on the same footing as people: every action is an API call, an MCP tool, or a webhook, under the same permissions and recorded against whoever answers for it.
 
 ## Features
 
-### A board first
+### Boards and tickets
 
 - **Work as a team**  
   Real accounts with per-board roles, ticket assignment, comment threads, and a history on every ticket.
-- **Run several boards**  
-  Give every app or project its own board with its own lanes, categories, labels, and archive.
-- **Group boards into workspaces**  
-  A level above the boards for teams, clients, or departments — each workspace with its own boards, board order, and administrators. Boards can be moved or duplicated between workspaces.
+- **Workspaces and boards**  
+  Group boards into workspaces for teams, clients, or brands. Every board has its own lanes, categories, labels, members, and archive. Boards can be moved or duplicated between workspaces.
 - **Shape the workflow**  
-  Add, rename, drag to reorder, and remove lanes per board—only the import lane is fixed.
-- **Move tickets by dragging**  
-  Drag cards between lanes and to any position within a lane.
-- **Create tickets manually**  
-  Capture ideas, tasks, and bugs with a Markdown description, priority, due date, build number, and an internal comment.
-- **Discuss in the ticket**  
-  A Markdown comment thread per ticket instead of one shared note, with a history of moves, assignments and priority changes.
-- **Organize with categories and labels**  
-  One colored category per ticket, plus as many labels as needed. Labels are suggested while typing and created on the fly.
+  Add, rename, reorder, and remove lanes per board. Mark a lane **Done** for finished work or **Live** for work that is out in the world.
+- **Ticket types**  
+  Each workspace defines its own types (Ticket, Email, Social Post, Idea …), each with an icon and colour on the card.
+- **Tickets with substance**  
+  Markdown description, priority, assignee, labels, category, links with previews, attachments, and a to-do list, plus a comment thread and a full history.
 - **Filter and search**  
-  Filter by labels, category, or assignee—including everything still unassigned—and search titles, descriptions, to-dos, authors, assignees, build numbers, and ticket numbers.
-- **Attach files directly**  
-  Add screenshots, documents, and other files to the relevant ticket.
-- **Manage to-do lists**  
-  Record the next steps within each ticket, reorder them, and work through them systematically. A step can also be a subticket — a ticket of its own on this board or another of the workspace — that ticks itself once it reaches a done lane, or a decision — a question with answers to pick, single or multiple choice, optionally with “Other” — settled with who decided and when. A list can be set to strict order: worked top to bottom, its subtickets waiting on each other in the timeline. A traffic light on every card shows how far the list has come.
+  By labels, category, type, or assignee (including everything still unassigned), and across titles, descriptions, to-dos, people, build numbers, and ticket numbers.
 - **Archive instead of delete**  
   Archived tickets stay restorable by a board administrator and are never re-imported.
 - **Light and dark**  
   A theme toggle in the header, remembered per browser.
 
+### Planning across boards
+
+- **Subtickets**  
+  A to-do can be a ticket of its own, on this board or another of the workspace, that ticks itself off once it reaches a done or live lane. A campaign, its waves, and its assets form one tree; **Where used** leads back up.
+- **Schedule**  
+  A ticket has no dates, is a **milestone** (one day: a meeting, a go-live), or has a **lifecycle**: work from start to due date, then a live window. A plain ticket stays plain.
+- **Dependencies**  
+  A ticket waits on others, finish to start. **Shift dates** moves a ticket and everything waiting on it, with a preview first.
+- **Timeline**  
+  Every ticket with subtickets has a Gantt-style timeline of its whole tree, with dependency arrows and warnings for late work, windows that do not fit, and live windows that have run out.
+- **Live windows**  
+  The days an asset or campaign is out in the world. The board warns before a window ends and when something is still live after it should be down, and tells webhooks and agents when a window opens, nears its end, or runs out.
+- **Decisions and strict order**  
+  A to-do can be a question for people to settle (which logo, which channels), recorded with who decided and when. A list can be set to strict order and worked top to bottom.
+- **One alarm for every date**  
+  The header lists every due date and live window across your boards, coloured by each board's lead times.
+
 ### Open to any application
 
 - **Drive it from your own tools**  
-  A versioned REST API at `/api/v1`, generated from the same definitions that validate the app itself, with a reference you can read in a browser and an OpenAPI document to generate a client from.
+  A versioned REST API at `/api/v1`, generated from the same definitions that validate the app itself, with a browsable reference and an OpenAPI document.
 - **Connect AI agents**  
-  An MCP endpoint lets Claude, Cursor, or anything else that speaks the protocol search a board, file tickets, and comment—reaching exactly as far as its token does, and recorded under the person or service it belongs to.
+  An MCP endpoint lets Claude, Cursor, or anything else that speaks the protocol read a board or a whole plan, file and move tickets, shift schedules, and comment. An agent reaches exactly as far as its token does, and everything it does is recorded under the person or service it belongs to.
 - **Push events to other systems**  
-  Signed webhooks tell n8n, a chat channel, or a build pipeline when a ticket is created, updated, moved, archived, or restored, when somebody comments, and when an import finishes.
+  Signed webhooks tell n8n, a chat channel, or a build pipeline when a ticket is created, updated, moved, or archived, when somebody comments, when an import finishes, and when a live window opens, nears its end, or runs out.
 - **Give machines their own identity**  
-  Scoped tokens, agents with a user of their own (assigned tickets, own comments, no email needed), and an audit trail that records which agent acted through which channel—so automation is accountable rather than anonymous.
+  Scoped tokens, agents with a user of their own (assigned tickets, their own comments, no email needed), and an audit trail of which agent acted through which channel.
 
 ### The integrations that ship with it
 
 - **Import TestFlight feedback**  
-  Screenshots and crash reports land as tickets, with tester, device, system, build, and the original comment attached—per board, on that board's own App Store Connect credentials.
-
+  Screenshots and crash reports land as tickets, with tester, device, system, build, and the original comment attached, per board, on that board's own App Store Connect credentials.
 - **Import Jira issues**  
-  A JQL query and an API token per board pull issues onto it once—title, description, comments, priority, reporter, attachments—and from then on the ticket is worked here. Nothing is written back to Jira.
+  A JQL query and an API token per board pull issues onto it once (title, description, comments, priority, reporter, attachments), and from then on the ticket is worked here. Nothing is written back to Jira.
 
 ## The idea behind Open-Bugster
 
-**It is a Kanban board first.** Several boards side by side, lanes you arrange yourself, and tickets with a priority, due date, assignee, labels, a category, a to-do list, attachments, and a comment thread—plus per-board roles so a team can share one instance, and an archive so nothing is ever really lost. None of that needs an Apple account, and a board that imports nothing never even shows an import lane. Used this way it is simply a small, self-hosted work tracker that a team can run for the cost of a container.
+**From a bug to a campaign, on one model.** A bug report, an email, a banner, and the campaign that bundles them are all tickets. What sets them apart is their type, their place in a tree of subtickets, and their schedule. That keeps the model small: there is no separate project, epic, or job object to learn, and a plan is simply a ticket you can open.
 
-**App Store Connect is where it started.** For an iOS team the TestFlight import removes the most tedious part of beta testing: feedback arrives as tickets by itself, with the tester, device, system, locale, build, and the original screenshot or crash report already attached. Nothing gets copied out of App Store Connect by hand, and no device details are re-typed. Because people are matched by email address, a tester who is also on the team shows up as a colleague rather than as a string.
+**Each team keeps its own board.** The agency, the reviewers, and the brand team each work on the board they know, with the members and lanes that suit them. The plan reaches across those boards through subtickets and dependencies, and shows people from other boards only what they may see.
 
-**Every other source connects through the API.** Rather than growing an integration per service, the board exposes itself: a versioned REST API, an MCP endpoint for AI agents, and signed outgoing webhooks. A crash reporter, a support inbox, a CI pipeline, an n8n flow, or an agent reading a codebase can all file, move, and comment on tickets—and the same email matching that turns a tester into a colleague works for whatever they bring in. Every entry point runs under the same roles as the browser does, and everything a token does is recorded against the person or service it belongs to, so opening the board to software does not mean opening it wider than a person would be.
+**Agents are colleagues, not an add-on.** Every operation runs through one registry that serves the browser, the REST API, and the MCP tools alike, under the same roles and with the same audit. An agent can read the whole plan in one call, file the assets of a campaign, move a schedule after a dry run, or react to a webhook when an approval runs out. Opening the board to software never opens it wider than a person would be.
 
-**It is deliberately small.** It gives a useful workflow out of the box without trying to become an enterprise issue tracker: no sprints, no burndowns, no workflow engine. That is what makes it suitable for solo developers and small teams who want a practical process without meaningful setup, administration, or hosting costs.
+**A board first, still.** A ticket without a schedule has no dates and no timeline; a board that imports nothing never shows an import lane; a single workspace never shows the workspace level. Teams that only want a Kanban board get one, and the planning appears once they start using it. There are no sprints, burndowns, or workflow engine.
 
-**And it is a launchpad rather than a fixed product.** AI-assisted coding makes it easier than ever to read a compact codebase and bend it to a specific team. Add fields, change the workflow, connect other services, extend the permission model, or deploy it wherever you like.
+**Self-hosted and small enough to bend.** One container, one SQLite file, a codebase compact enough for AI-assisted coding to read and change. Add fields, change the workflow, connect other services, or deploy it wherever you like.
 
 ## Setup
 
@@ -101,11 +115,11 @@ One document per feature, each written for people who want an overview and for a
 | [Deployment](docs/deployment.md) | Releasing by merging into `main`; the server pulls, builds, and rolls back by itself. |
 | [Development](docs/development.md) | Running locally, tests, and the checklist for adding a feature. |
 | [Workspaces](docs/workspaces.md) | Grouping boards, workspace administrators, moving and duplicating boards. |
-| [Boards](docs/boards.md) | Boards, lanes, the import lane, categories, labels. |
-| [Tickets](docs/tickets.md) | Tickets, to-dos, attachments, comments, history, archive, filters. |
+| [Boards](docs/boards.md) | Boards, lanes (import, done, live), categories, labels. |
+| [Tickets](docs/tickets.md) | Tickets and their types, to-dos, subtickets, decisions, schedule, dependencies, timeline, live windows, attachments, comments, history, archive, filters. |
 | [Users and access](docs/users-and-access.md) | Accounts, roles, invitations, resets, anonymizing, identity by email. |
 | [API](docs/api.md) | Tokens, the integration permission, service identities, REST v1, the audit trail. |
 | [MCP server](docs/mcp-server.md) | The tools for AI agents and their annotations. |
-| [Webhooks](docs/webhooks.md) | Signed outgoing events, retries, destination screening. |
+| [Webhooks](docs/webhooks.md) | Signed outgoing events, including the live-window events the calendar raises; retries, destination screening. |
 | [App Store Connect](docs/app-store-connect.md) | The TestFlight import, credentials, and encryption. |
 | [Jira](docs/jira.md) | The one-way Jira Cloud import: API token, JQL, and what arrives on the board. |
