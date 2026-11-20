@@ -16,7 +16,7 @@ import {
   VisuallyHidden,
 } from 'reka-ui'
 import type { Attachment, BoardMember, DependencyRef, ShiftResult, Category, LabelSummary, Lane, Person, RecurrenceFrequency, SubticketRef, Ticket, TicketDecisionInput, TicketLinkInput, TicketPatch, TicketPriority, TicketRecurrence, TicketSchedule, TicketTodoInput, TicketType, BoardSummary } from '~~/shared/types/domain'
-import { describeRecurrence, isOccurrence, nextRound as nextRoundOf, occurrenceOnOrAfter, occurrenceOnOrBefore } from '~~/shared/utils/recurrence'
+import { describeRecurrence, occurrenceOnOrAfter } from '~~/shared/utils/recurrence'
 import { TODO_LIGHT_LABELS, todoLight } from '~~/shared/utils/todo-progress'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 import { boardToday, dueDescription, dueLevel, liveDescription, liveLevel } from '~~/shared/utils/due-date'
@@ -94,9 +94,12 @@ const returnLaneOptions = computed(() => [
   ...props.lanes.filter(lane => !lane.isImport).map(lane => ({ value: lane.id, label: lane.name }))
 ])
 const ruleText = computed(() => (rule.anchor ? describeRecurrence(rule) : ''))
-// The round after this one, as the server will count it; the rule decides, not the moved round.
-const nextRoundDate = computed(() => (schedule.value === 'recurring' && rule.anchor && form.dueDate ? nextRoundOf(rule, form.dueDate) : null))
-const offRule = computed(() => schedule.value === 'recurring' && rule.anchor && form.dueDate ? !isOccurrence(rule, form.dueDate) : false)
+// The round to do: the one on now, which the clock moves on by itself. A line to read, not a field.
+const roundLine = computed(() => {
+  if (schedule.value !== 'recurring' || !form.dueDate) return ''
+  if (seriesOver.value) return 'the series is over'
+  return form.dueDate < today ? `round of ${longDayOf(form.dueDate)} still open` : `next round ${longDayOf(form.dueDate)}`
+})
 const rounds = computed(() => (schedule.value === 'recurring' ? props.ticket?.rounds ?? [] : []))
 const seriesOver = computed(() => Boolean(props.ticket && schedule.value === 'recurring' && !props.ticket.nextRound && props.ticket.rounds[0]?.date === props.ticket.dueDate))
 
@@ -122,30 +125,6 @@ function commitRule() {
 function commitReturnLane(value: string) {
   rule.returnLaneId = value === NO_RETURN_LANE ? null : value
   commitRule()
-}
-// Moving the round that is on now, the exception: a holiday, a trip. The series keeps its beat.
-const movingRound = ref(false)
-const roundDraft = ref('')
-// The day the rule itself gives for the current round, to go back to after a move: the beat
-// nearest to where the round was moved, the later one on a tie.
-const ruleDay = computed(() => {
-  if (!rule.anchor || !form.dueDate) return null
-  const after = occurrenceOnOrAfter(rule, form.dueDate)
-  const before = occurrenceOnOrBefore(rule, form.dueDate)
-  if (!before) return after
-  const gap = (from: string, to: string) => Math.abs(Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`))
-  return gap(before, form.dueDate) < gap(form.dueDate, after) ? before : after
-})
-function startMovingRound() {
-  roundDraft.value = form.dueDate
-  movingRound.value = true
-}
-function saveMovedRound() {
-  if (!roundDraft.value) return
-  movingRound.value = false
-  if (roundDraft.value === form.dueDate) return
-  form.dueDate = roundDraft.value
-  commit(withSchedule({ dueDate: form.dueDate }))
 }
 const longDay = new Intl.DateTimeFormat('en', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })
 const longDayOf = (date: string) => longDay.format(new Date(`${date}T00:00:00Z`))
@@ -346,7 +325,7 @@ const dateText = (date: string) => shortDate.format(new Date(`${date}T00:00:00Z`
 const scheduleSummary = computed(() => {
   if (schedule.value === 'none') return 'No schedule'
   if (schedule.value === 'milestone') return form.dueDate ? `Milestone · ${dateText(form.dueDate)}` : 'Milestone · no date yet'
-  if (schedule.value === 'recurring') return ruleText.value ? `${ruleText.value}${form.dueDate ? ` · this round ${dateText(form.dueDate)}` : ''}` : 'Recurring · no rule yet'
+  if (schedule.value === 'recurring') return ruleText.value ? `${ruleText.value}${form.dueDate ? ` · next round ${dateText(form.dueDate)}` : ''}` : 'Recurring · no rule yet'
   const work = form.startDate && form.dueDate ? `${dateText(form.startDate)} – ${dateText(form.dueDate)}`
     : form.dueDate ? `Due ${dateText(form.dueDate)}`
     : form.startDate ? `From ${dateText(form.startDate)}` : null
@@ -1847,7 +1826,7 @@ function focusTitle(event: Event) {
                       </div>
                     </div>
                   </div>
-                  <p v-if="ruleText" class="muted -mt-2 text-xs" data-recurrence-summary>{{ ruleText }}{{ rule.until ? `, until ${dateText(rule.until)}` : '' }}.</p>
+                  <p v-if="ruleText" class="muted -mt-2 text-xs" data-recurrence-summary>{{ ruleText }}{{ rule.until ? `, until ${dateText(rule.until)}` : '' }}<template v-if="roundLine"> · {{ roundLine }}</template></p>
 
                   <!-- When the series runs, start and end side by side. -->
                   <div class="grid gap-4 sm:grid-cols-2">
@@ -1902,51 +1881,6 @@ function focusTitle(event: Event) {
                       <span class="muted block text-xs">Unticks the to-dos and reopens the decisions when the next round starts.</span>
                     </span>
                   </label>
-
-                  <!--
-                    The round that is on now follows from the rule and moves on by itself, so it is a line
-                    to read rather than a field to fill. Moving it is the exception — a holiday — and the
-                    series keeps its beat afterwards.
-                  -->
-                  <div v-if="form.dueDate" class="surface-strong space-y-2 rounded-xl px-3 py-2.5 text-sm" data-current-round>
-                    <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-                      <Calendar :size="14" class="shrink-0" aria-hidden="true" />
-                      <span><span class="font-semibold">Current round:</span> {{ longDayOf(form.dueDate) }}</span>
-                      <span
-                        v-if="dueText"
-                        class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold"
-                        :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
-                      ><AlarmClock :size="11" /> {{ dueText }}</span>
-                      <span v-if="offRule" class="tone tone-amber rounded-md px-1.5 py-0.5 text-[10px] font-semibold">moved</span>
-                      <span class="muted text-xs">
-                        <template v-if="seriesOver">· the series is over</template>
-                        <template v-else-if="nextRoundDate">· next {{ longDayOf(nextRoundDate) }}</template>
-                        <template v-else>· the last round of the series</template>
-                      </span>
-                      <button
-                        v-if="canEdit && !movingRound && !seriesOver"
-                        type="button"
-                        class="focus-ring muted ml-auto rounded-md px-1 text-xs font-semibold hover:text-[var(--ink)] hover:underline"
-                        data-move-round
-                        @click="startMovingRound"
-                      >Move this round…</button>
-                    </div>
-                    <div v-if="movingRound" class="flex flex-wrap items-center gap-2 border-t border-[var(--line)] pt-2">
-                      <label class="flex items-center gap-2 text-xs font-semibold">
-                        This round on
-                        <input
-                          v-model="roundDraft"
-                          type="date"
-                          class="focus-ring h-9 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-2 text-sm outline-none"
-                          data-round-date
-                        >
-                      </label>
-                      <button type="button" class="focus-ring h-9 rounded-xl border border-[var(--line)] px-3 text-xs font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:opacity-50" :disabled="!roundDraft" @click="saveMovedRound">Move</button>
-                      <button v-if="offRule && ruleDay" type="button" class="focus-ring muted rounded-lg px-1.5 text-xs font-semibold hover:text-[var(--ink)]" @click="roundDraft = ruleDay; saveMovedRound()">Back to {{ longDayOf(ruleDay) }}</button>
-                      <button type="button" class="focus-ring muted ml-auto rounded-lg px-1.5 text-xs font-semibold hover:text-[var(--ink)]" @click="movingRound = false">Cancel</button>
-                      <span class="muted w-full text-[11px]">Only this round moves; the one after stays on the series’ beat.</span>
-                    </div>
-                  </div>
 
                   <!-- How the rounds went, newest last, and the way to end this one early. -->
                   <div v-if="ticket" class="space-y-2 border-t border-[var(--line)] pt-3">
