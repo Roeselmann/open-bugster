@@ -221,15 +221,8 @@ function clearOfMonthStart(value: Date, days: number) {
 }
 const hasLiveWindows = computed(() => flatten().some(({ node }) => liveSpanOf(node)))
 const todayVisible = computed(() => Boolean(range.value && today >= range.value.start && today <= range.value.end))
-/**
- * Without a day of its own on the scale, today prints its name over the line; a month or week
- * label close enough to run into it gives way. Measured in pixels once the chart is laid out.
- */
-function clearOfToday(date: string) {
-  if (daily.value || !todayVisible.value) return true
-  const apart = Math.abs(offset(date) - offset(today))
-  return layout.value ? (apart / 100) * layout.value.width >= 40 : apart >= 4
-}
+/** Today's line runs down the middle of its day, where that day's milestones and rounds sit. */
+const todayAt = computed(() => (offset(today) + offset(today, true)) / 2)
 
 /** A due date with no start: a deadline, drawn as an arrow up to a line at the close of its day. */
 function isDeadline(node: TimelineNode) {
@@ -412,13 +405,7 @@ const arrows = computed(() => {
           class="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap"
           :class="[tick.major ? '' : 'font-semibold normal-case tracking-normal opacity-70', tick.date === today ? '!text-rose-600' : '']"
           :style="{ left: `${daily ? (offset(tick.date) + offset(tick.date, true)) / 2 : offset(tick.date)}%` }"
-        ><template v-if="clearOfToday(tick.date)">{{ tick.label }}</template></span>
-        <!-- Without a day of its own on the scale, today says what the red line is. -->
-        <span
-          v-if="todayVisible && !daily"
-          class="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap font-bold normal-case tracking-normal text-rose-600"
-          :style="{ left: `${offset(today)}%` }"
-        >Today</span>
+        >{{ tick.label }}</span>
       </div>
     </div>
 
@@ -426,7 +413,7 @@ const arrows = computed(() => {
       <!-- Gridlines and today behind every row, drawn once for the whole chart. -->
       <div class="pointer-events-none absolute inset-y-0 right-0 left-[var(--timeline-label)]" aria-hidden="true">
         <span v-for="tick in ticks" :key="tick.date" class="absolute inset-y-0 w-px" :class="tick.major ? 'bg-[var(--line)]' : 'bg-[color-mix(in_srgb,var(--line)_45%,transparent)]'" :style="{ left: `${offset(tick.date)}%` }" />
-        <span v-if="todayVisible" class="absolute inset-y-0 w-0.5 bg-rose-500/70" :style="{ left: `${daily ? (offset(today) + offset(today, true)) / 2 : offset(today)}%` }" title="Today" />
+        <span v-if="todayVisible" class="absolute inset-y-0 w-0.5 -translate-x-1/2 bg-rose-500/70" :style="{ left: `${todayAt}%` }" title="Today" data-today-line />
       </div>
 
       <div
