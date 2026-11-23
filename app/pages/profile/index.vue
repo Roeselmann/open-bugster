@@ -136,7 +136,7 @@ async function saveProfile() {
           <img v-if="avatar?.avatarUrl" :src="avatar.avatarUrl" alt="" class="size-full object-cover">
           <UiAvatar v-else :person="user" size="lg" class="!size-20 !text-xl" />
         </span>
-        <span class="absolute -bottom-0.5 -right-0.5 grid size-7 place-items-center rounded-full border-2 border-[var(--canvas)] bg-[var(--ink)] text-[var(--canvas)] shadow-sm transition group-hover:scale-110" aria-hidden="true">
+        <span class="absolute -bottom-0.5 -right-0.5 grid size-7 place-items-center rounded-full border-2 border-[var(--canvas)] bg-[var(--primary)] text-[var(--primary-ink)] shadow-sm transition group-hover:scale-110" aria-hidden="true">
           <Pencil :size="13" />
         </span>
       </button>
@@ -144,7 +144,7 @@ async function saveProfile() {
         <button
           type="button"
           :disabled="avatarPending"
-          class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50"
+          class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] transition hover:opacity-85 disabled:opacity-50"
           @click="fileInput?.click()"
         >
           <Camera :size="15" aria-hidden="true" /> {{ avatar?.avatarUrl ? 'Choose another photo' : 'Upload a photo' }}
@@ -195,7 +195,7 @@ async function saveProfile() {
         </label>
       </div>
       <div class="flex justify-end">
-        <button :disabled="saving" class="focus-ring h-10 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50">
+        <button :disabled="saving" class="focus-ring h-10 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] transition hover:opacity-85 disabled:opacity-50">
           {{ saving ? 'Saving…' : 'Save profile' }}
         </button>
       </div>

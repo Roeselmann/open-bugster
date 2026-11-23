@@ -49,7 +49,7 @@ const selected = computed(() => props.options.find(option => option.value === pr
       :aria-label="ariaLabel"
     >
       <span class="flex min-w-0 items-center gap-2">
-        <span class="shrink-0 rounded-md border border-black/5 dark:border-white/10" :class="[selected?.toneClass, compact ? 'size-4' : 'size-5']" aria-hidden="true" />
+        <span class="shrink-0 rounded-md border border-black/5" :class="[selected?.toneClass, compact ? 'size-4' : 'size-5']" aria-hidden="true" />
         <span class="min-w-0 truncate">{{ selected?.label }}</span>
       </span>
       <ChevronDown :size="compact ? 14 : 16" class="muted shrink-0 transition-transform duration-150 group-data-[state=open]:rotate-180" aria-hidden="true" />
@@ -72,7 +72,7 @@ const selected = computed(() => props.options.find(option => option.value === pr
             <SelectItemIndicator class="absolute left-2.5 grid place-items-center text-[var(--accent)]">
               <Check :size="15" stroke-width="2.5" aria-hidden="true" />
             </SelectItemIndicator>
-            <span class="size-4 shrink-0 rounded-md border border-black/5 dark:border-white/10" :class="option.toneClass" aria-hidden="true" />
+            <span class="size-4 shrink-0 rounded-md border border-black/5" :class="option.toneClass" aria-hidden="true" />
             <SelectItemText>{{ option.label }}</SelectItemText>
           </SelectItem>
         </SelectViewport>

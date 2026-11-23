@@ -320,9 +320,9 @@ onBeforeUnmount(cleanupPointerDrag)
         :class="[
           // The phone lane is a flat, edge-to-edge surface so the cards keep their contrast.
           compact
-            ? '-mx-3 min-h-[50vh] bg-[color-mix(in_srgb,var(--panel)_70%,transparent)] px-3 pb-3 pt-2 dark:bg-[color-mix(in_srgb,var(--panel-strong)_50%,var(--canvas))]'
-            : 'max-h-[calc(100vh-230px)] rounded-[12px] bg-[color-mix(in_srgb,var(--panel)_70%,transparent)] dark:bg-[color-mix(in_srgb,var(--panel-strong)_50%,var(--canvas))]',
-          !compact && targetLaneId === lane.id ? 'bg-[color-mix(in_srgb,var(--accent)_7%,var(--panel))] dark:bg-[color-mix(in_srgb,var(--accent)_16%,var(--panel-strong))]' : '',
+            ? '-mx-3 min-h-[50vh] bg-[color-mix(in_srgb,var(--panel)_70%,transparent)] px-3 pb-3 pt-2'
+            : 'lane-surface max-h-[calc(100vh-230px)] rounded-[12px] bg-[color-mix(in_srgb,var(--panel)_70%,transparent)]',
+          !compact && targetLaneId === lane.id ? 'bg-[color-mix(in_srgb,var(--accent)_7%,var(--panel))]' : '',
         ]"
       >
         <header

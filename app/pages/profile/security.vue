@@ -58,7 +58,7 @@ async function savePassword() {
         </label>
       </div>
       <div class="flex justify-end">
-        <button :disabled="saving || passwordMismatch" class="focus-ring h-10 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50">
+        <button :disabled="saving || passwordMismatch" class="focus-ring h-10 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] transition hover:opacity-85 disabled:opacity-50">
           {{ saving ? 'Saving…' : 'Change password' }}
         </button>
       </div>

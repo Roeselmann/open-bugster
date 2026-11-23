@@ -219,7 +219,13 @@ function clearOfMonthStart(value: Date, days: number) {
   const daysInMonth = new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth() + 1, 0)).getUTCDate()
   return day > days && day < daysInMonth + 1 - days
 }
+const legendOpen = ref(false)
 const hasLiveWindows = computed(() => flatten().some(({ node }) => liveSpanOf(node)))
+// The legend names only what this chart draws beyond the basics, so it stays one short block.
+const hasExpiredLive = computed(() => flatten().some(({ node }) => node.live && node.liveUntil && node.liveUntil < today))
+const hasRounds = computed(() => flatten().some(({ node }) => marksOf(node).length))
+const hasConflicts = computed(() => arrows.value.some(arrow => arrow.conflict))
+const hasHidden = computed(() => flatten().some(({ node }) => !node.readable))
 const todayVisible = computed(() => Boolean(range.value && today >= range.value.start && today <= range.value.end))
 /** Today's line runs down the middle of its day, where that day's milestones and rounds sit. */
 const todayAt = computed(() => (offset(today) + offset(today, true)) / 2)
@@ -538,12 +544,48 @@ const arrows = computed(() => {
     </div>
     </div>
     </div>
-    <!-- Two kinds of bar once any ticket is out in the world; worth saying which is which. -->
-    <div v-if="hasLiveWindows || arrows.length" class="muted flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-[var(--line)] px-3 py-1.5 text-[10px] font-semibold">
-      <span class="flex items-center gap-1.5"><span class="h-2.5 w-5 rounded-full bg-[var(--accent)]" /> Work: start to due date</span>
-      <span v-if="hasLiveWindows" class="flex items-center gap-1.5"><span class="h-1.5 w-5 rounded-full bg-sky-500/55" /> Live window</span>
-      <span v-if="arrows.length" class="flex items-center gap-1.5"><span class="relative h-px w-5 bg-[color-mix(in_srgb,var(--ink)_45%,transparent)]"><span class="absolute -right-0.5 -top-[3px] border-y-[3.5px] border-l-[5px] border-y-transparent border-l-[color-mix(in_srgb,var(--ink)_45%,transparent)]" /></span> Waits on</span>
-      <span class="flex items-center gap-1.5"><span class="h-0.5 w-3 bg-rose-500/70" /> Today</span>
+    <!-- What the colours and shapes mean. Status and the basic shapes always; live windows,
+         rounds and dependencies only when this chart has them. The status swatches use the
+         chart's own classes, so they follow the colour scheme; the work shapes are grey,
+         since their colour is the status above. -->
+    <div class="muted space-y-1 border-t border-[var(--line)] px-3 py-1.5 text-[10px] font-semibold">
+      <!-- Folded by default: a small link that opens it, its chevron turning as it does. -->
+      <button
+        type="button"
+        class="focus-ring -mx-1 flex items-center gap-1 rounded-md px-1 py-0.5 hover:text-[var(--ink)]"
+        :aria-expanded="legendOpen"
+        :aria-controls="`${markerId}-legend`"
+        data-timeline-legend-toggle
+        @click="legendOpen = !legendOpen"
+      >
+        Legend
+        <ChevronDown :size="12" class="transition-transform" :class="legendOpen && 'rotate-180'" aria-hidden="true" />
+      </button>
+      <div v-show="legendOpen" :id="`${markerId}-legend`" class="space-y-1 pb-0.5" data-timeline-legend>
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <span class="flex items-center gap-1.5"><span class="h-2.5 w-5 rounded-full bg-[var(--accent)]" /> Planned</span>
+          <span class="flex items-center gap-1.5"><span class="h-2.5 w-5 rounded-full bg-emerald-500/70" /> Done</span>
+          <span class="flex items-center gap-1.5"><span class="h-2.5 w-5 rounded-full bg-orange-400" /> Needs attention</span>
+          <span class="flex items-center gap-1.5"><span class="h-2.5 w-5 rounded-full bg-rose-600" /> Overdue</span>
+          <span v-if="hasHidden" class="flex items-center gap-1.5"><span class="h-2.5 w-5 rounded-full border border-dashed border-[var(--muted)]" /> No access</span>
+        </div>
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <span class="flex items-center gap-1.5"><span class="h-2.5 w-5 rounded-full bg-[color-mix(in_srgb,var(--ink)_40%,transparent)]" /> Work: start to due date</span>
+          <span class="flex items-center gap-1"><ArrowRightToLine :size="14" :stroke-width="3" class="text-[color-mix(in_srgb,var(--ink)_40%,transparent)]" aria-hidden="true" /> Deadline</span>
+          <span class="flex items-center gap-1"><Diamond :size="11" class="fill-[color-mix(in_srgb,var(--ink)_40%,transparent)] text-[color-mix(in_srgb,var(--ink)_40%,transparent)]" aria-hidden="true" /> Milestone</span>
+          <span v-if="hasLiveWindows" class="flex items-center gap-1.5"><span class="h-1.5 w-5 rounded-full bg-sky-500/55" /> Live window</span>
+          <span v-if="hasExpiredLive" class="flex items-center gap-1.5"><span class="h-1.5 w-5 rounded-full bg-rose-500/40" /> Live window over</span>
+          <span v-if="hasRounds" class="flex items-center gap-1">
+            <Diamond :size="9" :class="ROUND_MARK_CLASSES.done" aria-hidden="true" />
+            <Diamond :size="9" :class="ROUND_MARK_CLASSES.missed" aria-hidden="true" />
+            <Diamond :size="9" :class="ROUND_MARK_CLASSES.upcoming" aria-hidden="true" />
+            Rounds: done, missed, coming
+          </span>
+          <span v-if="arrows.length" class="flex items-center gap-1.5"><span class="relative h-px w-5 bg-[color-mix(in_srgb,var(--ink)_45%,transparent)]"><span class="absolute -right-0.5 -top-[3px] border-y-[3.5px] border-l-[5px] border-y-transparent border-l-[color-mix(in_srgb,var(--ink)_45%,transparent)]" /></span> Waits on</span>
+          <span v-if="hasConflicts" class="flex items-center gap-1.5"><span class="w-5 border-t-[1.5px] border-dashed border-orange-500" /> Starts too early</span>
+          <span class="flex items-center gap-1.5"><span class="h-3 w-0.5 bg-rose-500/70" /> Today</span>
+        </div>
+      </div>
     </div>
   </div>
 </template>

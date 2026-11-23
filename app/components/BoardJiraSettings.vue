@@ -227,7 +227,7 @@ async function removeToken() {
           <PlugZap v-else :size="16" aria-hidden="true" />
           {{ testing ? 'Testing…' : 'Test connection' }}
         </button>
-        <button type="submit" :disabled="saving" class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50">
+        <button type="submit" :disabled="saving" class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] disabled:opacity-50">
           <Save :size="16" /> {{ saving ? 'Saving…' : 'Save' }}
         </button>
       </div>
@@ -236,7 +236,7 @@ async function removeToken() {
         Unsaved changes. “Test connection” checks the values above as they stand; “Save” stores them.
       </p>
 
-      <p v-if="testResult" role="status" class="flex items-start gap-2 rounded-xl p-3 text-sm" :class="testResult.ok ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400' : 'bg-rose-500/10 text-rose-700 dark:text-rose-400'">
+      <p v-if="testResult" role="status" class="flex items-start gap-2 rounded-xl p-3 text-sm" :class="testResult.ok ? 'bg-emerald-500/10 text-emerald-700' : 'bg-rose-500/10 text-rose-700'">
         <component :is="testResult.ok ? CircleCheck : CircleX" :size="16" class="mt-0.5 shrink-0" aria-hidden="true" />
         <span v-if="testResult.ok">
           Connected as <strong>{{ testResult.connection.displayName || 'this account' }}</strong><template v-if="testResult.connection.email"> ({{ testResult.connection.email }})</template>.

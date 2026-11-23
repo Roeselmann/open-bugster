@@ -321,7 +321,7 @@ async function copyLink() {
               </p>
               <div class="mt-2.5 flex flex-wrap items-center gap-2">
                 <input :value="pendingLink.url" readonly class="focus-ring surface-strong h-10 min-w-56 flex-1 rounded-lg px-2.5 font-mono text-xs outline-none" :aria-label="`Link for ${account.email}`">
-                <button type="button" class="focus-ring flex h-10 items-center gap-2 rounded-lg bg-[var(--ink)] px-3.5 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85" @click="copyLink">
+                <button type="button" class="focus-ring flex h-10 items-center gap-2 rounded-lg bg-[var(--primary)] px-3.5 text-sm font-semibold text-[var(--primary-ink)] transition hover:opacity-85" @click="copyLink">
                   <component :is="copied ? Check : Copy" :size="15" aria-hidden="true" />
                   {{ copied ? 'Copied' : 'Copy' }}
                 </button>
@@ -347,7 +347,7 @@ async function copyLink() {
           <div class="w-40 shrink-0">
             <UiSelect v-model="invite.role" :options="roleOptions" aria-label="Role of the new account" />
           </div>
-          <button :disabled="inviting" class="focus-ring h-11 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50">
+          <button :disabled="inviting" class="focus-ring h-11 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] transition hover:opacity-85 disabled:opacity-50">
             {{ inviting ? 'Creating…' : 'Create account' }}
           </button>
         </form>

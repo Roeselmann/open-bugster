@@ -196,7 +196,7 @@ function status(hook: WebhookRecord) {
             <code class="surface-strong min-w-0 flex-1 overflow-x-auto rounded-lg px-3 py-2 font-mono text-xs">{{ minted.secret }}</code>
             <button
               type="button"
-              class="focus-ring flex h-9 items-center gap-1.5 rounded-xl bg-[var(--ink)] px-3 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85"
+              class="focus-ring flex h-9 items-center gap-1.5 rounded-xl bg-[var(--primary)] px-3 text-sm font-semibold text-[var(--primary-ink)] transition hover:opacity-85"
               @click="copySecret"
             >
               <component :is="copied ? Check : Copy" :size="15" aria-hidden="true" /> {{ copied ? 'Copied' : 'Copy' }}
@@ -225,7 +225,7 @@ function status(hook: WebhookRecord) {
           <div class="flex justify-end">
             <button
               :disabled="creating || !form.url.trim() || !form.events.length"
-              class="focus-ring flex h-10 items-center gap-1.5 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50"
+              class="focus-ring flex h-10 items-center gap-1.5 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] transition hover:opacity-85 disabled:opacity-50"
             >
               <Plus :size="15" aria-hidden="true" /> {{ creating ? 'Adding…' : 'Add webhook' }}
             </button>
@@ -311,7 +311,7 @@ function status(hook: WebhookRecord) {
                 <button type="button" class="focus-ring muted h-9 rounded-xl px-3 text-sm font-semibold hover:text-[var(--ink)]" @click="editing = null">Cancel</button>
                 <button
                   :disabled="saving || !draft.url.trim() || !draft.events.length"
-                  class="focus-ring h-9 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50"
+                  class="focus-ring h-9 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] transition hover:opacity-85 disabled:opacity-50"
                 >
                   {{ saving ? 'Saving…' : 'Save changes' }}
                 </button>

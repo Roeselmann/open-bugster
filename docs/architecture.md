@@ -125,7 +125,7 @@ The app lives under `app/` and uses the internal `server/api/**` routes only.
 
 | Area | Files |
 |---|---|
-| State | `app/composables/useAuth.ts` (session user), `useBoards.ts` (board list, current board, last board cookie, `useCanAutomate`), `useWorkspaces.ts` (the same for workspaces), `useNotify.ts` (toasts), `useTheme.ts` (light/dark). |
+| State | `app/composables/useAuth.ts` (session user), `useBoards.ts` (board list, current board, last board cookie, `useCanAutomate`), `useWorkspaces.ts` (the same for workspaces), `useNotify.ts` (toasts), `useColorScheme.ts` (cool or warm colour scheme, per browser). |
 | Middleware | `app/middleware/auth.global.ts` (redirect to `/login`), `board.ts` and `workspace.ts` (resolve the route parameter or 404), `home-board.ts` (send `/` to the last used board inside the selected workspace). |
 | Pages | `app/pages/b/[board]/index.vue` (the board), `archive.vue`, `settings.vue` with children `board`, `users`, `integration`, `automation`, `audit`; `app/pages/w/[workspace]/settings.vue`; `app/pages/profile/*`; `app/pages/admin/users.vue`; `login.vue`, `invite/[token].vue`. |
 | Key components | `KanbanBoard.vue` (lanes and drag-and-drop), `TicketCard.vue`, `TicketEditor.vue` (the ticket dialog), `TicketComments.vue`, `TicketActivity.vue`, `AppHeader.vue` (switchers, search, menus), `BoardFilterPane.vue`, the `Board*Settings.vue` panels, `ApiTokenManager.vue`, `McpConnection.vue`, `WebhookEventPicker.vue`, `WebhookReference.vue`, and the `Ui*` primitives built on reka-ui. |

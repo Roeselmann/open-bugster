@@ -132,7 +132,7 @@ async function confirmDelete() {
             <button type="button" class="focus-ring flex h-8 items-center gap-1.5 rounded-lg border border-[var(--line)] px-2.5 text-xs font-semibold" @click="editingId = ''">
               <X :size="14" /> Cancel
             </button>
-            <button type="button" :disabled="busyId === comment.id || !editDraft.trim()" class="focus-ring flex h-8 items-center gap-1.5 rounded-lg bg-[var(--ink)] px-2.5 text-xs font-semibold text-[var(--canvas)] disabled:opacity-50" @click="saveEdit(comment)">
+            <button type="button" :disabled="busyId === comment.id || !editDraft.trim()" class="focus-ring flex h-8 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-2.5 text-xs font-semibold text-[var(--primary-ink)] disabled:opacity-50" @click="saveEdit(comment)">
               <Check :size="14" /> Save
             </button>
           </div>
@@ -152,7 +152,7 @@ async function confirmDelete() {
         placeholder="Write a comment… Markdown is supported."
       />
       <div class="mt-2 flex justify-end">
-        <button type="button" :disabled="posting || !draft.trim()" class="focus-ring h-9 rounded-xl bg-[var(--ink)] px-3.5 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50" @click="post">
+        <button type="button" :disabled="posting || !draft.trim()" class="focus-ring h-9 rounded-xl bg-[var(--primary)] px-3.5 text-sm font-semibold text-[var(--primary-ink)] transition hover:opacity-85 disabled:opacity-50" @click="post">
           {{ posting ? 'Posting…' : 'Comment' }}
         </button>
       </div>

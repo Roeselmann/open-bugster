@@ -156,14 +156,18 @@ const reorderButtons = computed(() => [
 </script>
 
 <template>
+  <!-- The ticket open in the detail panel lifts on a small, crisp, dark shadow while the panel covers the board. -->
   <article
     :data-ticket-id="ticket.id"
-    class="group relative overflow-hidden rounded-[10px] bg-[var(--panel-strong)] shadow-[0_1px_1px_rgba(0,0,0,.10),0_0_1px_rgba(0,0,0,.12)] transition-[box-shadow,transform] duration-150 ease-out dark:shadow-[0_1px_2px_rgba(0,0,0,.55),0_0_1px_rgba(0,0,0,.6)]"
+    :data-card-selected="selected || undefined"
+    class="group relative overflow-hidden rounded-[10px] bg-[var(--panel-strong)] transition-[box-shadow,transform] duration-150 ease-out"
     :class="[
       draggable ? 'cursor-grab active:cursor-grabbing' : '',
       preview
         ? 'scale-[.99] cursor-grabbing opacity-[.96] shadow-[0_18px_45px_rgba(0,0,0,.18),0_3px_12px_rgba(0,0,0,.12)]'
-        : 'hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/10',
+        : selected
+          ? '-translate-y-0.5 shadow-[0_4px_8px_rgba(0,0,0,.30),0_1px_3px_rgba(0,0,0,.28)]'
+          : 'shadow-[0_1px_1px_rgba(0,0,0,.10),0_0_1px_rgba(0,0,0,.12)] hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/10',
       dropActive ? 'ring-2 ring-[var(--accent)]'
       : dueState === 'alert' ? 'ring-[3px] ring-rose-600'
         : dueState === 'warning' ? 'ring-2 ring-orange-400' : '',
@@ -173,8 +177,6 @@ const reorderButtons = computed(() => [
     @dragleave="fileDragLeave"
     @drop="fileDrop"
   >
-    <!-- Open in the detail panel: a bracket down the card's left edge, following its rounded corners. -->
-    <span v-if="selected" class="pointer-events-none absolute inset-y-0 left-0 z-10 w-3.5 rounded-l-[10px] border-y-4 border-l-[5px] border-[var(--accent)]" aria-hidden="true" data-card-selected />
     <button class="focus-ring block w-full text-left" :aria-current="selected ? 'true' : undefined" :tabindex="preview ? -1 : undefined" @click="!preview && emit('open', ticket)">
       <!--
         Only the header wears the type's tone: title on the left, the type's mark on the right.
@@ -326,7 +328,7 @@ const reorderButtons = computed(() => [
               v-if="dueText"
               class="inline-flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 font-semibold"
               :class="dueState === 'alert' ? 'bg-rose-600 text-white'
-                : dueState === 'warning' ? 'bg-orange-400/20 text-orange-700 dark:text-orange-300'
+                : dueState === 'warning' ? 'bg-orange-400/20 text-orange-700'
                   : 'bg-[var(--panel)]'"
               :title="`${dueTitle}${recurring || ticket.schedule === 'milestone' ? '' : ` · ${scheduleKind.label}`}`"
             ><component :is="scheduleKind.icon" :size="12" class="shrink-0" :aria-label="scheduleKind.label" data-schedule-icon /> <span class="sr-only">{{ scheduleKind.label }}:</span> <span class="truncate">{{ dueText }}</span></span>

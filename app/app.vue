@@ -2,7 +2,7 @@
 useHead({
   htmlAttrs: { lang: 'en' },
   script: [{
-    innerHTML: `try{const t=localStorage.getItem('open-bugster-theme')||localStorage.getItem('bugster-theme');const d=t==='dark'||(!t&&matchMedia('(prefers-color-scheme:dark)').matches);document.documentElement.classList.toggle('dark',d)}catch(e){}`,
+    innerHTML: `try{if(localStorage.getItem('open-bugster-scheme')==='warm')document.documentElement.dataset.scheme='warm'}catch(e){}`,
     tagPosition: 'head'
   }]
 })

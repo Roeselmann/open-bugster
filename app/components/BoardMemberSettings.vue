@@ -226,7 +226,7 @@ async function removeMember(member: BoardMember) {
       <button
         v-if="candidateOptions.length"
         :disabled="adding || !selectedCandidate"
-        class="focus-ring flex h-11 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50"
+        class="focus-ring flex h-11 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] transition hover:opacity-85 disabled:opacity-50"
       >
         <UserPlus :size="16" aria-hidden="true" /> {{ adding ? 'Adding…' : 'Add member' }}
       </button>

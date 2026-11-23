@@ -4,6 +4,7 @@ import type { Attachment, CategorySummary, IntegrationProvider, LabelSummary, Sy
 import { PROVIDER_LABELS } from '~~/shared/utils/ticket-source'
 import { ticketNumberList } from '~~/shared/utils/ticket-search'
 import { TICKET_TYPES_KEY } from '~/utils/ticketTypes'
+import { TooltipContent, TooltipPortal, TooltipProvider, TooltipRoot, TooltipTrigger } from 'reka-ui'
 
 type PendingConfirmation =
   | { kind: 'archive-ticket'; ticket: Ticket }
@@ -625,6 +626,17 @@ async function reorderTicketFromEditor(ticket: Ticket, placement: 'top' | 'botto
   if (await moveTicket(ticket.id, ticket.laneId, Math.max(0, targetIndex))) notify('success', `Moved to the ${placement} of the lane. Saved right away.`)
 }
 
+/** The last import of a connection, shown when hovering its sync button. */
+function syncRunLabel(run: SyncRun | null) {
+  if (!run) return 'Not synced yet'
+  if (run.status === 'running') return 'Sync in progress'
+  const date = new Intl.DateTimeFormat('en', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(run.finishedAt || run.startedAt))
+  // Said in full, because a bare date beside a count reads as when the tickets arrived rather
+  // than when the board last looked.
+  const when = `last sync on ${date}`
+  return run.status === 'failed' ? `Error · ${when}` : `${run.importedCount} new · ${when}`
+}
+
 async function sync(provider: IntegrationProvider) {
   if (syncing.value) return
   syncing.value = provider
@@ -699,7 +711,7 @@ async function sync(provider: IntegrationProvider) {
           <button v-if="query" class="muted absolute right-2 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-lg hover:bg-[var(--panel-strong)]" aria-label="Clear search" @click="query = ''"><X :size="14" /></button>
         </div>
         <div class="mb-3 flex">
-          <div role="tablist" aria-label="View" class="flex shrink-0 rounded-xl border border-[var(--line)] bg-[var(--panel)] p-0.5">
+          <div role="tablist" aria-label="View" class="flex shrink-0 items-center rounded-xl border border-[var(--line)] bg-[var(--panel)] p-0.5">
             <button
               v-for="option in VIEWS"
               :key="option.value"
@@ -707,7 +719,7 @@ async function sync(provider: IntegrationProvider) {
               role="tab"
               :aria-selected="view === option.value"
               class="focus-ring flex h-9 items-center gap-1.5 rounded-[10px] px-3 text-[13px] font-semibold transition"
-              :class="view === option.value ? 'bg-[var(--ink)] text-[var(--canvas)]' : 'muted hover:text-[var(--ink)]'"
+              :class="view === option.value ? 'bg-[var(--primary)] text-[var(--primary-ink)]' : 'muted hover:text-[var(--ink)]'"
               :data-view="option.value"
               @click="selectView(option.value)"
             >
@@ -724,7 +736,7 @@ async function sync(provider: IntegrationProvider) {
             :aria-selected="lane.id === selectedLaneId"
             class="focus-ring flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 text-[13px] font-semibold transition"
             :class="lane.id === selectedLaneId
-              ? 'border-[var(--ink)] bg-[var(--ink)] text-[var(--canvas)]'
+              ? 'border-[var(--ink)] bg-[var(--primary)] text-[var(--primary-ink)]'
               : 'border-[var(--line)] bg-[var(--panel)] hover:bg-[var(--panel-strong)]'"
             @click="selectLane(lane.id)"
           >
@@ -735,9 +747,9 @@ async function sync(provider: IntegrationProvider) {
       </div>
 
       <div class="mb-6 flex-col gap-4 max-md:hidden md:flex md:flex-row md:items-end">
-        <BoardSwitcher :board="board" :boards="workspaceBoards" :syncing="syncing" :latest-runs="latestRuns" :sync-providers="syncProviders" @sync="sync" />
+        <BoardSwitcher :board="board" :boards="workspaceBoards" />
         <div class="flex flex-wrap gap-2 md:ml-auto md:justify-end">
-          <div role="tablist" aria-label="View" class="flex shrink-0 rounded-xl border border-[var(--line)] bg-[var(--panel)] p-0.5">
+          <div role="tablist" aria-label="View" class="flex shrink-0 items-center rounded-xl border border-[var(--line)] bg-[var(--panel)] p-0.5">
             <button
               v-for="option in VIEWS"
               :key="option.value"
@@ -745,7 +757,7 @@ async function sync(provider: IntegrationProvider) {
               role="tab"
               :aria-selected="view === option.value"
               class="focus-ring flex h-9 items-center gap-1.5 rounded-[10px] px-3 text-[13px] font-semibold transition"
-              :class="view === option.value ? 'bg-[var(--ink)] text-[var(--canvas)]' : 'muted hover:text-[var(--ink)]'"
+              :class="view === option.value ? 'bg-[var(--primary)] text-[var(--primary-ink)]' : 'muted hover:text-[var(--ink)]'"
               :data-view="option.value"
               @click="selectView(option.value)"
             >
@@ -767,6 +779,50 @@ async function sync(provider: IntegrationProvider) {
             :type-options="typeFilterOptions"
             :assignee-options="assigneeFilterOptions"
           />
+          <!-- One sync per connection, between the filter and the settings: plain icons like
+               the settings beside them. The page decides who gets them (syncProviders); the
+               last run shows on hover. -->
+          <TooltipProvider :delay-duration="200">
+            <TooltipRoot v-for="provider in syncProviders" :key="provider">
+              <TooltipTrigger as-child>
+                <button
+                  type="button"
+                  class="focus-ring muted grid h-11 w-8 shrink-0 place-items-center rounded-lg transition-colors hover:text-[var(--ink)] disabled:opacity-50"
+                  :disabled="Boolean(syncing)"
+                  :aria-label="`${PROVIDER_LABELS[provider]} sync`"
+                  @click="sync(provider)"
+                >
+                  <RefreshCcw :size="18" :class="syncing === provider ? 'animate-spin' : ''" />
+                </button>
+              </TooltipTrigger>
+              <TooltipPortal>
+                <TooltipContent
+                  side="bottom"
+                  align="end"
+                  :side-offset="4"
+                  class="ui-popover z-[100] rounded-xl border border-[var(--line)] bg-[var(--panel-strong)] px-3 py-2 text-xs text-[var(--ink)] shadow-[0_18px_45px_rgba(0,0,0,.16),0_3px_12px_rgba(0,0,0,.08)]"
+                >
+                  <p class="font-semibold">{{ PROVIDER_LABELS[provider] }} sync</p>
+                  <p class="muted mt-1 flex items-center gap-2 whitespace-nowrap">
+                    <span class="size-1.5 rounded-full" :class="latestRuns[provider]?.status === 'failed' ? 'bg-rose-500' : 'bg-emerald-500'" aria-hidden="true" />
+                    {{ syncRunLabel(latestRuns[provider] || null) }}
+                  </p>
+                </TooltipContent>
+              </TooltipPortal>
+            </TooltipRoot>
+          </TooltipProvider>
+          <!-- Everything the page offers belongs to board administrators, so for anyone else the
+               icon would only lead to the member roster, the one section they may read. Just the
+               icon, no button frame: it is reached rarely and should not compete with the filter. -->
+          <NuxtLink
+            v-if="board.role === 'admin'"
+            :to="`/b/${board.id}/settings/board`"
+            class="focus-ring muted grid h-11 w-8 shrink-0 place-items-center rounded-lg transition-colors hover:text-[var(--ink)]"
+            aria-label="Board settings"
+            title="Board settings"
+          >
+            <Settings2 :size="18" />
+          </NuxtLink>
         </div>
       </div>
 
@@ -775,7 +831,7 @@ async function sync(provider: IntegrationProvider) {
       </div>
       <div v-else-if="error" class="surface mx-auto mt-24 max-w-md rounded-2xl p-7 text-center">
         <h2 class="font-bold">Could not load the board</h2><p class="muted mt-2 text-sm">{{ errorText(error) }}</p>
-        <button class="mt-5 inline-flex items-center gap-2 rounded-xl bg-[var(--ink)] px-4 py-2 text-sm font-semibold text-[var(--canvas)]" @click="refresh()"><RefreshCcw :size="15" /> Try again</button>
+        <button class="mt-5 inline-flex items-center gap-2 rounded-xl bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-[var(--primary-ink)]" @click="refresh()"><RefreshCcw :size="15" /> Try again</button>
       </div>
       <BoardList v-else-if="view === 'list'" :board-id="board.id" :lanes="lanes" :tickets="filteredTickets" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" :selected-id="openTicketId" @open="openTicket" />
       <ClientOnly v-else-if="view === 'timeline'">

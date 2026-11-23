@@ -102,7 +102,7 @@ async function createWorkspace() {
           <button
             type="submit"
             :disabled="creating || !newName.trim()"
-            class="focus-ring flex h-11 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"
+            class="focus-ring flex h-11 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] disabled:opacity-50"
           >
             <Plus :size="16" aria-hidden="true" /> {{ creating ? 'Creating…' : 'Create workspace' }}
           </button>

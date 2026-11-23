@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, ChevronDown, Plus, RefreshCcw, Settings2 } from '@lucide/vue'
+import { Check, ChevronDown, Plus } from '@lucide/vue'
 import {
   DialogClose,
   DialogContent,
@@ -16,22 +16,13 @@ import {
   DropdownMenuTrigger,
   VisuallyHidden,
 } from 'reka-ui'
-import type { BoardSummary, IntegrationProvider, SyncRun } from '~~/shared/types/domain'
-import { PROVIDER_LABELS } from '~~/shared/utils/ticket-source'
+import type { BoardSummary } from '~~/shared/types/domain'
 
-const props = withDefaults(defineProps<{
+const props = defineProps<{
   board: BoardSummary
   boards: BoardSummary[]
-  /** The connection syncing right now, if any. */
-  syncing?: IntegrationProvider | null
-  latestRuns?: Partial<Record<IntegrationProvider, SyncRun | null>>
-  /**
-   * The connections to offer a sync button for. The page decides: importing spends the
-   * board's credentials, so only its administrators get one, and only for complete connections.
-   */
-  syncProviders?: IntegrationProvider[]
-}>(), { syncing: null, latestRuns: () => ({}), syncProviders: () => [] })
-const emit = defineEmits<{ created: []; sync: [provider: IntegrationProvider] }>()
+}>()
+const emit = defineEmits<{ created: [] }>()
 
 const { refresh: refreshBoards } = useBoards()
 const { workspaces } = useWorkspaces()
@@ -48,23 +39,6 @@ const createError = ref('')
 
 // A single board needs no menu — the heading stays a plain title until a second one exists.
 const hasChoice = computed(() => props.boards.length > 1)
-
-function syncLabel(provider: IntegrationProvider) {
-  const run = props.syncProviders.length > 1 ? null : undefined
-  // With two connections the line has to say which one it speaks of.
-  const prefix = run === null ? `${PROVIDER_LABELS[provider]} · ` : ''
-  return prefix + runLabel(props.latestRuns[provider] || null)
-}
-
-function runLabel(run: SyncRun | null) {
-  if (!run) return 'Not synced yet'
-  if (run.status === 'running') return 'Sync in progress'
-  const date = new Intl.DateTimeFormat('en', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(run.finishedAt || run.startedAt))
-  // Said in full, because a bare date beside a count reads as when the tickets arrived rather
-  // than when the board last looked.
-  const when = `last sync on ${date}`
-  return run.status === 'failed' ? `Error · ${when}` : `${run.importedCount} new · ${when}`
-}
 
 function openCreate() {
   newName.value = ''
@@ -102,7 +76,7 @@ async function createBoard() {
 
       <DropdownMenuRoot v-else>
         <DropdownMenuTrigger
-          class="focus-ring group flex min-w-0 items-center gap-2 rounded-xl px-1 text-left transition hover:bg-[var(--panel-strong)]"
+          class="focus-ring group flex min-w-0 items-center gap-2 rounded-xl px-1 text-left"
           :aria-label="`Switch board, currently ${board.name}`"
         >
           <h1 class="truncate text-3xl font-bold tracking-[-.045em]">{{ board.name }}</h1>
@@ -135,35 +109,6 @@ async function createBoard() {
           </DropdownMenuContent>
         </DropdownMenuPortal>
       </DropdownMenuRoot>
-
-      <!-- Everything the page offers belongs to board administrators, so for anyone else the
-           icon would only lead to the member roster, the one section they may read. -->
-      <NuxtLink
-        v-if="board.role === 'admin'"
-        :to="`/b/${board.id}/settings/board`"
-        class="focus-ring surface grid size-9 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]"
-        aria-label="Board settings"
-        title="Board settings"
-      >
-        <Settings2 :size="17" />
-      </NuxtLink>
-
-      <template v-for="provider in syncProviders" :key="provider">
-        <button
-          class="focus-ring surface grid size-9 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]"
-          :disabled="Boolean(syncing)"
-          :aria-label="`${PROVIDER_LABELS[provider]} sync`"
-          :title="`${PROVIDER_LABELS[provider]} sync`"
-          @click="emit('sync', provider)"
-        >
-          <RefreshCcw :size="17" :class="syncing === provider ? 'animate-spin' : ''" />
-        </button>
-
-        <div class="muted hidden shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-[var(--line)] px-3 py-1.5 text-xs lg:flex">
-          <span class="size-1.5 rounded-full" :class="latestRuns[provider]?.status === 'failed' ? 'bg-rose-500' : 'bg-emerald-500'" />
-          {{ syncLabel(provider) }}
-        </div>
-      </template>
 
       <button
         v-if="!hasChoice && canCreate"
@@ -201,7 +146,7 @@ async function createBoard() {
                 <DialogClose as-child>
                   <button type="button" :disabled="creating" class="focus-ring h-10 rounded-xl px-4 text-sm font-semibold hover:bg-[var(--panel-strong)] disabled:opacity-50">Cancel</button>
                 </DialogClose>
-                <button type="submit" :disabled="creating || !newName.trim()" class="focus-ring h-10 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50">
+                <button type="submit" :disabled="creating || !newName.trim()" class="focus-ring h-10 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] disabled:opacity-50">
                   {{ creating ? 'Creating…' : 'Create board' }}
                 </button>
               </div>

@@ -110,7 +110,7 @@ async function save() {
       <button
         type="button"
         :disabled="saving || !canSave"
-        class="focus-ring h-9 rounded-lg bg-[var(--ink)] px-3.5 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50"
+        class="focus-ring h-9 rounded-lg bg-[var(--primary)] px-3.5 text-sm font-semibold text-[var(--primary-ink)] transition hover:opacity-85 disabled:opacity-50"
         @click="save"
       >
         {{ saving ? 'Saving…' : 'Save access' }}

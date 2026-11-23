@@ -73,7 +73,7 @@ function handleContentClick(event: MouseEvent) {
               class="focus-ring flex h-10 items-center gap-2 rounded-xl px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
               :class="tone === 'danger'
                 ? 'bg-rose-600 text-white hover:bg-rose-700'
-                : 'bg-[var(--ink)] text-[var(--canvas)] hover:opacity-85'"
+                : 'bg-[var(--primary)] text-[var(--primary-ink)] hover:opacity-85'"
             >
               <LoaderCircle v-if="interactionLocked" :size="16" class="animate-spin" aria-hidden="true" />
               {{ interactionLocked ? 'Please wait…' : confirmLabel }}

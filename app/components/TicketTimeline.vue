@@ -64,38 +64,44 @@ function toggle(path: string) {
 
 <template>
   <section class="space-y-3" aria-labelledby="ticket-timeline-heading">
-    <div class="flex items-center gap-2">
-      <h3 id="ticket-timeline-heading" class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><ChartGantt :size="15" /> Timeline</h3>
-      <LoaderCircle v-if="loading" :size="13" class="muted animate-spin" aria-label="Loading" />
-      <button
-        v-if="!failed && warnings.length"
-        type="button"
-        class="focus-ring flex items-center gap-1 rounded-md px-1 text-[11px] font-semibold text-orange-700 hover:underline dark:text-orange-300"
-        :aria-expanded="warningsOpen"
-        aria-controls="ticket-timeline-warnings"
-        data-timeline-warnings-toggle
-        @click="warningsOpen = !warningsOpen"
-      >
-        <TriangleAlert :size="13" aria-hidden="true" />
-        {{ warnings.length }} {{ warnings.length === 1 ? 'warning' : 'warnings' }}
-        <ChevronDown :size="12" class="transition-transform" :class="warningsOpen && 'rotate-180'" aria-hidden="true" />
-      </button>
-      <span v-if="rangeText" class="muted ml-auto text-[11px] font-semibold tabular-nums">{{ rangeText }}</span>
-    </div>
-
-    <p v-if="failed" class="muted text-sm">The timeline could not be loaded.</p>
-    <template v-else-if="timeline">
+    <!-- Two columns: the heading, its warnings and the dates on the left; the way into the
+         full-screen chart on the right, as a primary button. On a phone the button goes under. -->
+    <div class="flex items-center gap-3 max-sm:flex-col max-sm:items-stretch">
+      <div class="min-w-0 flex-1 space-y-1">
+        <div class="flex items-center gap-2">
+          <h3 id="ticket-timeline-heading" class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><ChartGantt :size="15" /> Timeline</h3>
+          <LoaderCircle v-if="loading" :size="13" class="muted animate-spin" aria-label="Loading" />
+          <button
+            v-if="!failed && warnings.length"
+            type="button"
+            class="focus-ring flex items-center gap-1 rounded-md px-1 text-[11px] font-semibold text-orange-700 hover:underline"
+            :aria-expanded="warningsOpen"
+            aria-controls="ticket-timeline-warnings"
+            data-timeline-warnings-toggle
+            @click="warningsOpen = !warningsOpen"
+          >
+            <TriangleAlert :size="13" aria-hidden="true" />
+            {{ warnings.length }} {{ warnings.length === 1 ? 'warning' : 'warnings' }}
+            <ChevronDown :size="12" class="transition-transform" :class="warningsOpen && 'rotate-180'" aria-hidden="true" />
+          </button>
+        </div>
+        <p v-if="rangeText" class="muted whitespace-nowrap text-[11px] font-semibold tabular-nums">{{ rangeText }}</p>
+      </div>
       <!-- In the editor only the way in; the chart needs the whole window to be read. -->
       <button
-        v-if="bounds"
+        v-if="!failed && timeline && bounds"
         type="button"
-        class="focus-ring flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[var(--line)] px-3 text-sm font-semibold hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]"
+        class="focus-ring flex h-10 w-1/2 shrink-0 items-center max-sm:w-full justify-center gap-2 rounded-xl bg-[var(--primary)] px-3 text-sm font-semibold text-[var(--primary-ink)] transition hover:opacity-85"
         @click="expanded = true"
       >
         <Maximize2 :size="15" aria-hidden="true" /> Open timeline
       </button>
-      <p v-else class="muted text-sm">Nothing here has a start or due date yet. Give the subtickets dates to see them on a timeline.</p>
-      <ul v-if="warnings.length && warningsOpen" id="ticket-timeline-warnings" class="space-y-1 rounded-xl bg-orange-400/10 p-2.5 text-xs text-orange-800 dark:text-orange-200">
+    </div>
+
+    <p v-if="failed" class="muted text-sm">The timeline could not be loaded.</p>
+    <template v-else-if="timeline">
+      <p v-if="!bounds" class="muted text-sm">Nothing here has a start or due date yet. Give the subtickets dates to see them on a timeline.</p>
+      <ul v-if="warnings.length && warningsOpen" id="ticket-timeline-warnings" class="space-y-1 rounded-xl bg-orange-400/10 p-2.5 text-xs text-orange-800">
         <li v-for="warning in warnings" :key="warning.message" class="flex items-start gap-1.5">
           <TriangleAlert :size="13" class="mt-px shrink-0" aria-hidden="true" /> <span>{{ warning.message }}</span>
         </li>
@@ -130,7 +136,7 @@ function toggle(path: string) {
             </button>
           </header>
           <div class="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 sm:p-6">
-            <ul v-if="warnings.length" class="space-y-1 rounded-xl bg-orange-400/10 p-3 text-sm text-orange-800 dark:text-orange-200">
+            <ul v-if="warnings.length" class="space-y-1 rounded-xl bg-orange-400/10 p-3 text-sm text-orange-800">
               <li v-for="warning in warnings" :key="warning.message" class="flex items-start gap-2">
                 <TriangleAlert :size="15" class="mt-0.5 shrink-0" aria-hidden="true" /> <span>{{ warning.message }}</span>
               </li>

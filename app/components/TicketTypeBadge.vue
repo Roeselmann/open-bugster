@@ -39,7 +39,7 @@ const sizing = computed(() => (props.size === 'sm' ? 'size-6' : 'size-8'))
  */
 const toneClass = computed(() => {
   if (props.type.color !== 'none') return CATEGORY_TONE_CLASSES[props.type.color]
-  return props.inverted ? 'bg-[var(--ink)] text-[var(--canvas)]' : 'bg-[var(--panel)] text-[var(--ink)]'
+  return props.inverted ? 'bg-[var(--primary)] text-[var(--primary-ink)]' : 'bg-[var(--panel)] text-[var(--ink)]'
 })
 const invertedStyle = computed(() => (props.inverted && props.type.color !== 'none'
   ? { backgroundColor: 'var(--tone-fg)', color: 'var(--tone-bg)' }
@@ -53,7 +53,7 @@ const iconSize = computed(() => (props.size === 'sm' ? 13 : 16))
     has to be clipped to the circle; a lucide icon sits on the tone's background.
   -->
   <span
-    class="grid shrink-0 place-items-center overflow-hidden rounded-full border border-black/5 dark:border-white/10"
+    class="grid shrink-0 place-items-center overflow-hidden rounded-full border border-black/5"
     :class="[sizing, toneClass]"
     :style="invertedStyle"
     :title="untitled ? undefined : type.name"

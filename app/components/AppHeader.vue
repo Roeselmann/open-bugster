@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, Bug, Check, Layers, LogOut, Menu, Moon, Settings2, Sun, User, Users } from '@lucide/vue'
+import { Archive, Bug, Check, Layers, LogOut, Menu, Palette, Settings2, User, Users } from '@lucide/vue'
 import {
   DialogContent,
   DialogDescription,
@@ -11,12 +11,15 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuPortal,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuRoot,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   VisuallyHidden,
 } from 'reka-ui'
 import type { WorkspaceSummary } from '~~/shared/types/domain'
+import type { ColorScheme } from '~/composables/useColorScheme'
 
 const props = withDefaults(defineProps<{
   boardId?: string
@@ -25,7 +28,7 @@ const props = withDefaults(defineProps<{
   canViewArchive?: boolean
 }>(), { boardId: '', archiveMode: false, canViewArchive: true })
 
-const { isDark, toggle } = useTheme()
+const { scheme, set: setScheme } = useColorScheme()
 const { user, instanceAdmin, logout } = useAuth()
 const { workspaceId, workspace } = useCurrentWorkspace()
 const { workspaces } = useWorkspaces()
@@ -57,14 +60,14 @@ function openWorkspace(item: WorkspaceSummary) {
 </script>
 
 <template>
-  <header class="border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_88%,transparent)] backdrop-blur-xl">
+  <header class="app-chrome border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_88%,transparent)] backdrop-blur-xl">
     <div class="mx-auto hidden min-h-18 max-w-[1800px] items-center gap-3 px-6 md:flex">
       <!-- The wrapper takes all free space (keeping the icons right even when the workspace
            switcher inside renders nothing) and passes it down, so the switcher can lay a
            description into the room the workspace name leaves over. -->
       <div class="flex min-w-0 flex-1 items-center gap-1">
         <NuxtLink :to="home" class="focus-ring flex shrink-0 items-center gap-3 rounded-xl" aria-label="Open-Bugster board">
-          <span class="grid size-10 place-items-center rounded-xl bg-[var(--ink)] text-[var(--canvas)] shadow-sm">
+          <span class="grid size-10 place-items-center rounded-xl bg-[var(--primary)] text-[var(--primary-ink)] shadow-sm">
             <Bug :size="20" :stroke-width="2.2" />
           </span>
           <span class="text-[15px] font-bold tracking-[-0.02em]">Open-Bugster</span>
@@ -82,10 +85,6 @@ function openWorkspace(item: WorkspaceSummary) {
       >
         <Archive :size="18" />
       </NuxtLink>
-      <button class="focus-ring grid size-10 place-items-center rounded-xl border border-[var(--line)] transition hover:bg-[var(--panel-strong)]" aria-label="Toggle color scheme" @click="toggle">
-        <Sun v-if="isDark" :size="18" />
-        <Moon v-else :size="18" />
-      </button>
       <DropdownMenuRoot v-if="user">
         <DropdownMenuTrigger class="focus-ring rounded-full" :aria-label="`Account menu for ${displayName(user)}`">
           <UiAvatar :person="user" size="lg" />
@@ -107,6 +106,23 @@ function openWorkspace(item: WorkspaceSummary) {
             >
               <User :size="15" aria-hidden="true" /> Your profile
             </DropdownMenuItem>
+            <DropdownMenuSeparator class="my-1 h-px bg-[var(--line)]" />
+            <DropdownMenuLabel class="muted flex items-center gap-1.5 px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-[.14em]">
+              <Palette :size="12" aria-hidden="true" /> Color scheme
+            </DropdownMenuLabel>
+            <DropdownMenuRadioGroup :model-value="scheme" @update:model-value="value => setScheme(value as ColorScheme)">
+              <DropdownMenuRadioItem
+                v-for="option in COLOR_SCHEMES"
+                :key="option.value"
+                :value="option.value"
+                class="flex h-10 cursor-default select-none items-center gap-2 rounded-lg px-3 text-sm outline-none data-[highlighted]:bg-[var(--accent-soft)]"
+                @select.prevent
+              >
+                <Check v-if="scheme === option.value" :size="15" stroke-width="2.5" class="text-[var(--accent)]" aria-hidden="true" />
+                <span v-else class="size-[15px]" aria-hidden="true" />
+                {{ option.label }}
+              </DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
             <DropdownMenuSeparator v-if="instanceAdmin" class="my-1 h-px bg-[var(--line)]" />
             <DropdownMenuLabel v-if="instanceAdmin" class="muted px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-[.14em]">Administration</DropdownMenuLabel>
             <DropdownMenuItem
@@ -139,7 +155,7 @@ function openWorkspace(item: WorkspaceSummary) {
 
     <!-- Phone: logo, the page's title, its quick actions (search, filter) and the burger. -->
     <div class="flex min-h-14 items-center gap-2 px-3 md:hidden">
-      <NuxtLink :to="home" class="focus-ring grid size-9 shrink-0 place-items-center rounded-xl bg-[var(--ink)] text-[var(--canvas)] shadow-sm" aria-label="Open-Bugster board">
+      <NuxtLink :to="home" class="focus-ring grid size-9 shrink-0 place-items-center rounded-xl bg-[var(--primary)] text-[var(--primary-ink)] shadow-sm" aria-label="Open-Bugster board">
         <Bug :size="18" :stroke-width="2.2" />
       </NuxtLink>
       <div class="min-w-0 flex-1">
@@ -195,10 +211,11 @@ function openWorkspace(item: WorkspaceSummary) {
           <NuxtLink v-if="showArchiveLink" :to="archiveMode ? `/b/${boardId}` : `/b/${boardId}/archive`" class="sheet-item" @click="closeMenu">
             <Archive :size="15" aria-hidden="true" /> {{ archiveMode ? 'Back to board' : 'Archive' }}
           </NuxtLink>
-          <button type="button" class="sheet-item" @click="toggle">
-            <Sun v-if="isDark" :size="15" aria-hidden="true" />
-            <Moon v-else :size="15" aria-hidden="true" />
-            {{ isDark ? 'Light mode' : 'Dark mode' }}
+          <p class="sheet-heading">Color scheme</p>
+          <button v-for="option in COLOR_SCHEMES" :key="option.value" type="button" class="sheet-item" :aria-pressed="scheme === option.value" @click="setScheme(option.value)">
+            <Check v-if="scheme === option.value" :size="15" stroke-width="2.5" class="text-[var(--accent)]" aria-hidden="true" />
+            <span v-else class="size-[15px]" aria-hidden="true" />
+            {{ option.label }}
           </button>
           <NuxtLink v-if="workspace?.role === 'admin'" :to="`/w/${workspaceId}/settings`" class="sheet-item" @click="closeMenu"><Settings2 :size="15" aria-hidden="true" /> Settings of {{ workspace.name }}</NuxtLink>
           <NuxtLink to="/profile" class="sheet-item" @click="closeMenu"><User :size="15" aria-hidden="true" /> Your profile</NuxtLink>

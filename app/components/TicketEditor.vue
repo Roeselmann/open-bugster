@@ -1332,7 +1332,7 @@ function focusTitle(event: Event) {
                   <button
                     v-if="boards.length"
                     type="button"
-                    :class="[headerButton, transferOpen ? '!border-[var(--ink)] !bg-[var(--ink)] !text-[var(--canvas)]' : '']"
+                    :class="[headerButton, transferOpen ? '!border-[var(--primary)] !bg-[var(--primary)] !text-[var(--primary-ink)]' : '']"
                     :aria-expanded="transferOpen"
                     :aria-label="transferOpen ? 'Cancel moving to another board' : 'Move to board'"
                     :title="transferOpen ? 'Cancel' : 'Move to board'"
@@ -1367,7 +1367,7 @@ function focusTitle(event: Event) {
                 role="tab"
                 :aria-selected="activeTab === tab.key"
                 :title="isPinnable(tab.key) && pinned[tab.key] ? `${tab.label} pinned beside` : undefined"
-                class="focus-ring -mb-px flex h-10 shrink-0 items-center gap-1.5 border-b-2 px-3 text-sm font-semibold transition-colors"
+                class="focus-ring -mb-px flex h-10 shrink-0 items-center gap-1.5 border-b-2 px-3 text-sm font-semibold transition-colors max-sm:px-2.5"
                 :class="activeTab === tab.key ? 'border-[var(--ink)] text-[var(--ink)]' : 'muted border-transparent hover:text-[var(--ink)]'"
                 @click="selectTab(tab.key)"
               >
@@ -1376,7 +1376,8 @@ function focusTitle(event: Event) {
                 <MessageSquare v-else-if="tab.key === 'comments'" :size="15" aria-hidden="true" />
                 <Paperclip v-else-if="tab.key === 'files'" :size="15" aria-hidden="true" />
                 <History v-else :size="15" aria-hidden="true" />
-                {{ tab.label }}
+                <!-- On a phone the other tabs keep only their icon, so all five fit the width. -->
+                <span :class="activeTab === tab.key ? '' : 'max-sm:sr-only'">{{ tab.label }}</span>
                 <span v-if="tab.key === 'plan' && todos.length" class="flex items-center gap-1 text-xs tabular-nums" :title="light ? TODO_LIGHT_LABELS[light] : undefined">
                   <TodoLight v-if="light" :light="light" />
                   <span class="muted">{{ todos.filter(todo => todo.completed).length }}/{{ todos.length }}</span>
@@ -1405,7 +1406,7 @@ function focusTitle(event: Event) {
                 <span class="muted text-[11px]">The ticket leaves this board. Labels and category come along; an assignee who is no member over there is dropped.</span>
                 <button
                   type="button"
-                  class="focus-ring flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-[var(--ink)] px-3 text-xs font-semibold text-[var(--canvas)] disabled:opacity-50"
+                  class="focus-ring flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 text-xs font-semibold text-[var(--primary-ink)] disabled:opacity-50"
                   :disabled="!targetLaneId || saving"
                   @click="emit('transfer', ticket, targetBoard.id, targetLaneId)"
                 >
@@ -1421,7 +1422,7 @@ function focusTitle(event: Event) {
                   <button v-if="hasSavedTitle" type="button" class="focus-ring flex h-7 items-center gap-1.5 rounded-lg border border-[var(--line)] px-2.5 text-xs font-semibold" @click="cancelTitle">
                     <X :size="14" /> Cancel
                   </button>
-                  <button type="button" :disabled="saving || saveState === 'saving' || !form.title.trim()" class="focus-ring flex h-7 items-center gap-1.5 rounded-lg bg-[var(--ink)] px-2.5 text-xs font-semibold text-[var(--canvas)] disabled:opacity-50" @click="saveTitle">
+                  <button type="button" :disabled="saving || saveState === 'saving' || !form.title.trim()" class="focus-ring flex h-7 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-2.5 text-xs font-semibold text-[var(--primary-ink)] disabled:opacity-50" @click="saveTitle">
                     <Check :size="14" /> Save
                   </button>
                 </div>
@@ -1458,7 +1459,7 @@ function focusTitle(event: Event) {
                   <button v-if="hasSavedDescription" type="button" class="focus-ring flex h-7 items-center gap-1.5 rounded-lg border border-[var(--line)] px-2.5 text-xs font-semibold" @click="cancelDescription">
                     <X :size="14" /> Cancel
                   </button>
-                  <button type="button" :disabled="saving || saveState === 'saving'" class="focus-ring flex h-7 items-center gap-1.5 rounded-lg bg-[var(--ink)] px-2.5 text-xs font-semibold text-[var(--canvas)] disabled:opacity-50" @click="saveDescription">
+                  <button type="button" :disabled="saving || saveState === 'saving'" class="focus-ring flex h-7 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-2.5 text-xs font-semibold text-[var(--primary-ink)] disabled:opacity-50" @click="saveDescription">
                     <Check :size="14" /> Save
                   </button>
                 </div>
@@ -1468,7 +1469,7 @@ function focusTitle(event: Event) {
                   type="button"
                   :disabled="saving || !form.title.trim()"
                   :title="form.title.trim() ? 'Create the ticket and keep editing' : 'A title is needed first'"
-                  class="focus-ring flex h-7 items-center gap-1.5 rounded-lg bg-[var(--ink)] px-2.5 text-xs font-semibold text-[var(--canvas)] disabled:opacity-50"
+                  class="focus-ring flex h-7 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-2.5 text-xs font-semibold text-[var(--primary-ink)] disabled:opacity-50"
                   @click="submit({ stayOpen: true })"
                 >
                   <Check :size="14" /> Save
@@ -1611,7 +1612,7 @@ function focusTitle(event: Event) {
               <span
                 v-if="dueText"
                 class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold"
-                :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
+                :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700'"
               ><AlarmClock :size="11" /> {{ dueText }}</span>
               <span class="muted shrink-0 text-xs font-semibold">Plan →</span>
             </button>
@@ -1620,8 +1621,8 @@ function focusTitle(event: Event) {
           <!-- The way the work is laid out: its steps and subtickets, their timeline, and what it has to wait for. -->
           <div v-show="activeTab === 'plan'" data-editor-pane="plan" role="tabpanel" class="order-first space-y-6 px-5 py-6 sm:px-7">
             <section class="space-y-3">
-              <div class="flex items-center gap-2">
-                <h3 class="flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><ListTodo :size="15" /> To-dos</h3>
+              <div class="flex flex-wrap items-center gap-2">
+                <h3 class="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs font-bold uppercase tracking-[.08em]"><ListTodo :size="15" /> To-dos</h3>
                 <!-- Strict: top to bottom, subtickets waiting on each other. Loose: any order. -->
                 <div class="flex overflow-hidden rounded-md border border-[var(--line)] text-[11px]" role="radiogroup" aria-label="Order of the to-dos">
                   <button
@@ -1632,12 +1633,12 @@ function focusTitle(event: Event) {
                     :aria-checked="strictOrder === choice.strict"
                     :disabled="Boolean(ticket) && !canEdit"
                     :title="choice.title"
-                    class="focus-ring flex items-center gap-1 px-2 py-0.5 font-semibold"
+                    class="focus-ring flex items-center gap-1 whitespace-nowrap px-2 py-0.5 font-semibold"
                     :class="strictOrder === choice.strict ? 'bg-[var(--accent-soft)] text-[var(--ink)]' : 'muted enabled:hover:bg-[var(--panel)]'"
                     @click="setStrictOrder(choice.strict)"
                   ><ListOrdered v-if="choice.strict" :size="12" aria-hidden="true" />{{ choice.label }}</button>
                 </div>
-                <span v-if="todos.length && light" class="ml-auto flex items-center gap-1.5 text-[11px] font-semibold" :title="TODO_LIGHT_LABELS[light]">
+                <span v-if="todos.length && light" class="ml-auto flex items-center gap-1.5 whitespace-nowrap text-[11px] font-semibold" :title="TODO_LIGHT_LABELS[light]">
                   <TodoLight :light="light" />
                   <span class="muted">{{ todos.filter(todo => todo.completed).length }}/{{ todos.length }} completed</span>
                 </span>
@@ -1769,7 +1770,18 @@ function focusTitle(event: Event) {
             <section class="rounded-2xl border border-[color-mix(in_srgb,var(--accent)_22%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_5%,transparent)]" :class="lifecycleOn ? 'space-y-4 p-4' : 'px-4 py-3'" aria-labelledby="ticket-schedule-heading" data-schedule-block>
               <div class="flex flex-wrap items-center gap-3">
                 <h3 id="ticket-schedule-heading" class="flex min-w-0 flex-1 items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><CalendarRange :size="14" /> Schedule</h3>
-                <div role="radiogroup" aria-labelledby="ticket-schedule-heading" class="flex shrink-0 rounded-xl bg-[var(--panel)] p-0.5" data-schedule-switch>
+                <!-- Four choices do not fit beside the heading on a phone; there they are a pulldown. -->
+                <div class="w-36 shrink-0 sm:hidden" data-schedule-select>
+                  <UiSelect
+                    :model-value="schedule"
+                    :options="SCHEDULE_OPTIONS"
+                    :disabled="Boolean(ticket) && !canEdit"
+                    aria-label="Schedule"
+                    compact
+                    @update:model-value="setSchedule($event as TicketSchedule)"
+                  />
+                </div>
+                <div role="radiogroup" aria-labelledby="ticket-schedule-heading" class="flex shrink-0 rounded-xl bg-[var(--panel)] p-0.5 max-sm:hidden" data-schedule-switch>
                   <button
                     v-for="option in SCHEDULE_OPTIONS"
                     :key="option.value"
@@ -1779,7 +1791,7 @@ function focusTitle(event: Event) {
                     :disabled="Boolean(ticket) && !canEdit"
                     :title="option.title"
                     class="focus-ring flex h-8 items-center gap-1.5 rounded-[10px] px-2.5 text-xs font-semibold transition disabled:cursor-not-allowed"
-                    :class="schedule === option.value ? 'surface-strong text-[var(--ink)] shadow-sm' : 'muted hover:text-[var(--ink)]'"
+                    :class="schedule === option.value ? 'bg-[var(--primary)] text-[var(--primary-ink)] shadow-sm' : 'muted hover:text-[var(--ink)]'"
                     @click="setSchedule(option.value)"
                   >
                     <Flag v-if="option.value === 'milestone'" :size="13" aria-hidden="true" />
@@ -1798,7 +1810,7 @@ function focusTitle(event: Event) {
                     <span
                       v-if="dueText"
                       class="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal"
-                      :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
+                      :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700'"
                     ><AlarmClock :size="11" /> {{ dueText }}</span>
                   </span>
                   <input
@@ -1967,7 +1979,7 @@ function focusTitle(event: Event) {
                       <span
                         v-if="dueText"
                         class="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal"
-                        :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
+                        :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700'"
                       ><AlarmClock :size="11" /> {{ dueText }}</span>
                     </span>
                     <input
@@ -2011,7 +2023,7 @@ function focusTitle(event: Event) {
                       <span
                         v-if="liveText"
                         class="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal"
-                        :class="liveState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
+                        :class="liveState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700'"
                       >{{ liveText }}</span>
                     </span>
                     <input
@@ -2094,7 +2106,7 @@ function focusTitle(event: Event) {
                   <span
                     v-if="blockerConcern(blocker)"
                     class="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold"
-                    :class="blockerConcern(blocker) === 'late' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700 dark:text-orange-300'"
+                    :class="blockerConcern(blocker) === 'late' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700'"
                     :title="blockerConcern(blocker) === 'late' ? 'It is past its due date and not done' : 'It ends after this ticket starts'"
                   >{{ blockerConcern(blocker) === 'late' ? 'Late' : 'Ends later' }}</span>
                   <span
@@ -2143,7 +2155,7 @@ function focusTitle(event: Event) {
                 </div>
               </div>
 
-              <ul v-if="dependencyIssues.length" class="space-y-1 rounded-xl bg-orange-400/10 p-2.5 text-xs text-orange-800 dark:text-orange-200">
+              <ul v-if="dependencyIssues.length" class="space-y-1 rounded-xl bg-orange-400/10 p-2.5 text-xs text-orange-800">
                 <li v-for="issue in dependencyIssues" :key="issue.message" class="flex items-start gap-1.5"><CircleAlert :size="13" class="mt-px shrink-0" aria-hidden="true" /> {{ issue.message }}</li>
               </ul>
 
@@ -2324,7 +2336,7 @@ function focusTitle(event: Event) {
               <template v-else-if="saveState === 'error'"><CircleAlert :size="14" aria-hidden="true" /> Could not save</template>
             </span>
             <button type="button" class="focus-ring h-10 rounded-xl px-4 text-sm font-semibold hover:bg-[var(--panel-strong)]" :class="isEdit && canEdit ? '' : 'ml-auto'" @click="requestClose">{{ canEdit && !isEdit ? 'Cancel' : 'Close' }}</button>
-            <button v-if="canEdit && !isEdit" type="submit" :disabled="saving || !form.title.trim()" class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"><Plus :size="16" /> {{ saving ? 'Creating…' : 'Create' }}</button>
+            <button v-if="canEdit && !isEdit" type="submit" :disabled="saving || !form.title.trim()" class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] disabled:opacity-50"><Plus :size="16" /> {{ saving ? 'Creating…' : 'Create' }}</button>
           </footer>
         </form>
 

@@ -91,7 +91,7 @@ function scheduleOf(ticket: Ticket, lane: Lane) {
     : dueDate ? `Due ${dayOf(dueDate)}` : `Starts ${dayOf(startDate!)}`
   return { icon: liveFrom || liveUntil ? Radio : AlarmClock, text, level }
 }
-const LEVEL_CLASSES = { none: 'muted', warning: 'text-orange-600 dark:text-orange-300', alert: 'text-rose-600 dark:text-rose-400' } as const
+const LEVEL_CLASSES = { none: 'muted', warning: 'text-orange-600', alert: 'text-rose-600' } as const
 const PRIORITY_DOT = { low: 'bg-slate-400', medium: 'bg-blue-500', high: 'bg-amber-500', urgent: 'bg-rose-600' } as const
 </script>
 

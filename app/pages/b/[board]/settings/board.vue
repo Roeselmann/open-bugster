@@ -247,7 +247,7 @@ async function executeConfirmation() {
           <button
             type="submit"
             :disabled="saving || !name.trim() || !unsaved"
-            class="focus-ring flex h-11 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"
+            class="focus-ring flex h-11 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] disabled:opacity-50"
           >
             <Save :size="16" />
             {{ saving ? 'Saving…' : 'Save' }}
@@ -305,7 +305,7 @@ async function executeConfirmation() {
           <button
             type="submit"
             :disabled="savingDue || !dueValid || !dueUnsaved"
-            class="focus-ring flex h-11 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"
+            class="focus-ring flex h-11 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] disabled:opacity-50"
           >
             <Save :size="16" />
             {{ savingDue ? 'Saving…' : 'Save' }}
@@ -335,7 +335,7 @@ async function executeConfirmation() {
           </div>
           <button
             :disabled="!moveTarget"
-            class="focus-ring flex h-11 shrink-0 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"
+            class="focus-ring flex h-11 shrink-0 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] disabled:opacity-50"
             @click="requestMove"
           ><FolderInput :size="16" /> Move board</button>
         </template>
@@ -364,7 +364,7 @@ async function executeConfirmation() {
             </div>
             <button
               :disabled="duplicating || !duplicateName.trim() || !duplicateTarget"
-              class="focus-ring flex h-11 shrink-0 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"
+              class="focus-ring flex h-11 shrink-0 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] disabled:opacity-50"
               @click="duplicateBoard"
             ><Copy :size="16" /> {{ duplicating ? 'Duplicating…' : 'Duplicate' }}</button>
           </div>

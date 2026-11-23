@@ -160,7 +160,7 @@ async function confirmRemoval() {
           </div>
           <div class="flex justify-end gap-2">
             <button type="button" class="focus-ring h-9 rounded-lg px-3 text-sm font-semibold transition hover:bg-[var(--panel-strong)]" @click="editing = null">Cancel</button>
-            <button type="button" :disabled="busyId === agent.id || !editing.name.trim()" class="focus-ring h-9 rounded-lg bg-[var(--ink)] px-3.5 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50" @click="saveEdit">Save</button>
+            <button type="button" :disabled="busyId === agent.id || !editing.name.trim()" class="focus-ring h-9 rounded-lg bg-[var(--primary)] px-3.5 text-sm font-semibold text-[var(--primary-ink)] transition hover:opacity-85 disabled:opacity-50" @click="saveEdit">Save</button>
           </div>
         </div>
 
@@ -265,7 +265,7 @@ async function confirmRemoval() {
         <span class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">What it does</span>
         <input v-model="form.description" maxlength="500" placeholder="Optional — triages new bug reports" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none">
       </label>
-      <button :disabled="creating || !form.name.trim()" class="focus-ring h-11 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50">
+      <button :disabled="creating || !form.name.trim()" class="focus-ring h-11 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] transition hover:opacity-85 disabled:opacity-50">
         {{ creating ? 'Creating…' : 'Create agent' }}
       </button>
       <div class="basis-full">

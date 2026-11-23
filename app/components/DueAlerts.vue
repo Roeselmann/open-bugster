@@ -74,7 +74,7 @@ function openWorkspace(workspaceId: string) {
     <PopoverTrigger
       class="focus-ring relative grid size-10 shrink-0 place-items-center rounded-xl border transition"
       :class="litCount
-        ? 'border-rose-600/40 bg-rose-600/10 text-rose-600 hover:bg-rose-600/15'
+        ? 'due-alert-lit'
         : 'muted border-[var(--line)] hover:bg-[var(--panel-strong)] hover:text-[var(--ink)]'"
       :aria-label="`Dates: ${summary}`"
       :title="summary"
@@ -137,7 +137,7 @@ function openWorkspace(workspaceId: string) {
                 <span class="min-w-0 flex-1 truncate">{{ ticket.title }}</span>
                 <span
                   class="shrink-0 text-xs font-semibold"
-                  :class="ticket.level === 'alert' ? 'text-rose-600' : ticket.level === 'warning' ? 'text-orange-600 dark:text-orange-300' : 'muted'"
+                  :class="ticket.level === 'alert' ? 'text-rose-600' : ticket.level === 'warning' ? 'text-orange-600' : 'muted'"
                 >{{ dueText(ticket) }}</span>
               </NuxtLink>
             </PopoverClose>

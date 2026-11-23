@@ -420,7 +420,7 @@ async function deleteWorkspace() {
             <button
               type="submit"
               :disabled="savingDetails || !name.trim() || !unsavedDetails"
-              class="focus-ring h-11 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"
+              class="focus-ring h-11 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] disabled:opacity-50"
             >
               {{ savingDetails ? 'Saving…' : 'Save' }}
             </button>
@@ -492,7 +492,7 @@ async function deleteWorkspace() {
           <button
             type="submit"
             :disabled="creatingBoard || !newBoardName.trim()"
-            class="focus-ring flex h-11 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"
+            class="focus-ring flex h-11 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] disabled:opacity-50"
           >
             <Plus :size="16" aria-hidden="true" /> {{ creatingBoard ? 'Creating…' : 'Create board' }}
           </button>
@@ -553,7 +553,7 @@ async function deleteWorkspace() {
           <button
             v-if="candidateOptions.length"
             :disabled="adding || !selectedCandidate"
-            class="focus-ring flex h-11 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] transition hover:opacity-85 disabled:opacity-50"
+            class="focus-ring flex h-11 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] transition hover:opacity-85 disabled:opacity-50"
           >
             <UserPlus :size="16" aria-hidden="true" /> {{ adding ? 'Adding…' : 'Add member' }}
           </button>

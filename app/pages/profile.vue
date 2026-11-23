@@ -37,7 +37,7 @@ const sections = computed(() => [
           :key="section.to"
           :to="section.to"
           class="focus-ring flex h-10 flex-1 basis-28 items-center justify-center gap-2 rounded-xl text-sm font-semibold transition hover:bg-[var(--accent-soft)]"
-          exact-active-class="bg-[var(--ink)] text-[var(--canvas)] hover:bg-[var(--ink)]"
+          exact-active-class="bg-[var(--primary)] text-[var(--primary-ink)] hover:bg-[var(--primary)]"
         >
           <component :is="section.icon" :size="16" aria-hidden="true" />
           {{ section.label }}

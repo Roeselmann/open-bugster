@@ -4,10 +4,10 @@ import { PRIORITY_LABELS } from '~~/shared/utils/constants'
 
 defineProps<{ priority: TicketPriority }>()
 const classes: Record<TicketPriority, string> = {
-  low: 'bg-slate-500/10 text-slate-600 dark:text-slate-300',
-  medium: 'bg-blue-500/10 text-blue-650 dark:text-blue-300',
-  high: 'bg-amber-500/12 text-amber-700 dark:text-amber-300',
-  urgent: 'bg-rose-500/12 text-rose-700 dark:text-rose-300'
+  low: 'bg-slate-500/10 text-slate-600',
+  medium: 'bg-blue-500/10 text-blue-650',
+  high: 'bg-amber-500/12 text-amber-700',
+  urgent: 'bg-rose-500/12 text-rose-700'
 }
 </script>
 

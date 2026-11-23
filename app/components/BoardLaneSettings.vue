@@ -440,7 +440,7 @@ async function confirmDelete() {
             :disabled="busyLaneId === item.id"
             class="focus-ring flex h-9 shrink-0 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition disabled:opacity-50"
             :class="item.isDone
-              ? 'border-emerald-600/40 bg-emerald-600/10 text-emerald-700 dark:text-emerald-300'
+              ? 'border-emerald-600/40 bg-emerald-600/10 text-emerald-700'
               : 'muted border-[var(--line)] hover:bg-[var(--panel-strong)] hover:text-[var(--ink)]'"
             :title="item.isDone ? 'Tickets here count as finished and no longer warn about their due date' : 'Mark this lane as holding finished work'"
             @click="patchLane(item, { isDone: !item.isDone })"
@@ -455,7 +455,7 @@ async function confirmDelete() {
             :disabled="busyLaneId === item.id"
             class="focus-ring flex h-9 shrink-0 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition disabled:opacity-50"
             :class="item.isLive
-              ? 'border-sky-600/40 bg-sky-600/10 text-sky-700 dark:text-sky-300'
+              ? 'border-sky-600/40 bg-sky-600/10 text-sky-700'
               : 'muted border-[var(--line)] hover:bg-[var(--panel-strong)] hover:text-[var(--ink)]'"
             :title="item.isLive ? 'Tickets here are finished and running: no due date warnings, but a warning as their live window ends' : 'Mark this lane as holding live work, such as campaigns in market'"
             @click="patchLane(item, { isLive: !item.isLive })"
@@ -503,7 +503,7 @@ async function confirmDelete() {
       <button
         type="submit"
         :disabled="adding || !newLaneName.trim()"
-        class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--ink)] px-3.5 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50"
+        class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--primary)] px-3.5 text-sm font-semibold text-[var(--primary-ink)] disabled:opacity-50"
       ><Plus :size="16" /> Add lane</button>
     </form>
 

@@ -111,7 +111,7 @@ const rangeText = computed(() => {
       <button
         v-if="warnings.length"
         type="button"
-        class="focus-ring flex items-center gap-1 rounded-md px-1 text-xs font-semibold text-orange-700 hover:underline dark:text-orange-300"
+        class="focus-ring flex items-center gap-1 rounded-md px-1 text-xs font-semibold text-orange-700 hover:underline"
         :aria-expanded="warningsOpen"
         aria-controls="board-timeline-warnings"
         @click="warningsOpen = !warningsOpen"
@@ -130,7 +130,7 @@ const rangeText = computed(() => {
       </div>
     </div>
 
-    <ul v-if="warnings.length && warningsOpen" id="board-timeline-warnings" class="space-y-1 rounded-xl bg-orange-400/10 p-3 text-sm text-orange-800 dark:text-orange-200">
+    <ul v-if="warnings.length && warningsOpen" id="board-timeline-warnings" class="space-y-1 rounded-xl bg-orange-400/10 p-3 text-sm text-orange-800">
       <li v-for="warning in warnings" :key="warning.message" class="flex items-start gap-2">
         <TriangleAlert :size="15" class="mt-0.5 shrink-0" aria-hidden="true" /> <span>{{ warning.message }}</span>
       </li>

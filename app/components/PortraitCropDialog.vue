@@ -151,7 +151,7 @@ function confirm() {
           <button
             type="button"
             :disabled="pending || failed || !display.width"
-            class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] hover:opacity-85 disabled:opacity-50"
+            class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] hover:opacity-85 disabled:opacity-50"
             @click="confirm"
           >
             <LoaderCircle v-if="pending" :size="16" class="animate-spin" aria-hidden="true" />

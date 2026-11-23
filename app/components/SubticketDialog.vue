@@ -214,7 +214,7 @@ function updateOpen(value: boolean) {
             <DialogClose as-child>
               <button type="button" :disabled="pending" class="focus-ring h-10 rounded-xl px-4 text-sm font-semibold hover:bg-[var(--panel-strong)] disabled:cursor-not-allowed disabled:opacity-50">Cancel</button>
             </DialogClose>
-            <button type="submit" :disabled="!selected || pending" class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50">
+            <button type="submit" :disabled="!selected || pending" class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50">
               <Link2 :size="16" aria-hidden="true" />
               {{ selected ? `Link #${selected.ticketNumber}` : 'Pick a ticket' }}
             </button>
@@ -244,7 +244,7 @@ function updateOpen(value: boolean) {
             <DialogClose as-child>
               <button type="button" :disabled="pending" class="focus-ring h-10 rounded-xl px-4 text-sm font-semibold hover:bg-[var(--panel-strong)] disabled:cursor-not-allowed disabled:opacity-50">Cancel</button>
             </DialogClose>
-            <button type="submit" :disabled="!canSubmit" class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50">
+            <button type="submit" :disabled="!canSubmit" class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50">
               <LoaderCircle v-if="pending" :size="16" class="animate-spin" aria-hidden="true" />
               {{ pending ? 'Creating…' : 'Create subticket' }}
             </button>

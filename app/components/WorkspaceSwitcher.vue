@@ -35,7 +35,8 @@ const lastBoardId = useLastBoardId()
 const hasChoice = computed(() => workspaces.value.length > 1)
 // Instance administrators get the menu even with a single workspace — it carries the
 // shortcut to open the second one, the same way the board switcher offers "New board".
-const hasMenu = computed(() => hasChoice.value || instanceAdmin.value)
+// A workspace admin always gets the menu: it is where the workspace's settings live.
+const hasMenu = computed(() => hasChoice.value || instanceAdmin.value || workspace.value?.role === 'admin')
 
 // A lone workspace still shows its name — as a plain title, like the single-board case in
 // BoardSwitcher — once somebody has made it theirs: renamed it away from the seeded default
@@ -140,16 +141,6 @@ async function createWorkspace() {
       </DropdownMenuPortal>
     </DropdownMenuRoot>
 
-    <NuxtLink
-      v-if="workspace.role === 'admin'"
-      :to="`/w/${workspace.id}/settings`"
-      class="focus-ring surface grid size-9 shrink-0 place-items-center rounded-xl hover:bg-[var(--panel-strong)]"
-      aria-label="Workspace settings"
-      title="Workspace settings"
-    >
-      <Settings2 :size="17" />
-    </NuxtLink>
-
     <!-- Three lines at most, in the room the name leaves over: `flex-1` with a zero basis
          means the name keeps its natural width and only the leftovers wrap here — without
          it, a long description would squeeze the name down to a few letters. The title
@@ -186,7 +177,7 @@ async function createWorkspace() {
               <DialogClose as-child>
                 <button type="button" :disabled="creating" class="focus-ring h-10 rounded-xl px-4 text-sm font-semibold hover:bg-[var(--panel-strong)] disabled:opacity-50">Cancel</button>
               </DialogClose>
-              <button type="submit" :disabled="creating || !newName.trim()" class="focus-ring h-10 rounded-xl bg-[var(--ink)] px-4 text-sm font-semibold text-[var(--canvas)] disabled:opacity-50">
+              <button type="submit" :disabled="creating || !newName.trim()" class="focus-ring h-10 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] disabled:opacity-50">
                 {{ creating ? 'Creating…' : 'Create workspace' }}
               </button>
             </div>

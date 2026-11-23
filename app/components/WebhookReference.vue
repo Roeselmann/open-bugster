@@ -161,7 +161,7 @@ function verify(rawBody, header, secret) {
           role="tab"
           :aria-selected="tab === entry.id"
           class="focus-ring h-9 flex-1 basis-24 rounded-lg text-sm font-semibold transition"
-          :class="tab === entry.id ? 'bg-[var(--ink)] text-[var(--canvas)]' : 'muted hover:text-[var(--ink)]'"
+          :class="tab === entry.id ? 'bg-[var(--primary)] text-[var(--primary-ink)]' : 'muted hover:text-[var(--ink)]'"
           @click="tab = entry.id"
         >
           {{ entry.label }}
