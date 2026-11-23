@@ -38,7 +38,23 @@ async function load() {
 watch(() => [props.boardId, props.refreshKey], load, { immediate: true })
 
 // Done work stays on by default: the timeline is the whole plan. Off, it shows what is ahead.
+// The choice is remembered per board in this browser.
+const showDoneKey = computed(() => `open-bugster-timeline-show-done:${props.boardId}`)
 const showDone = ref(true)
+function loadShowDone() {
+  try {
+    showDone.value = localStorage.getItem(showDoneKey.value) !== 'false'
+  } catch {
+    showDone.value = true
+  }
+}
+onMounted(loadShowDone)
+watch(showDoneKey, loadShowDone)
+watch(showDone, (value) => {
+  try {
+    localStorage.setItem(showDoneKey.value, String(value))
+  } catch { /* A private window keeps it for the visit only. */ }
+})
 const shown = computed(() => roots.value
   .filter(root => props.visibleIds.has(root.id) && (showDone.value || !root.done))
   .map(root => ({ root, start: timelineBounds(root)?.start ?? '9999-12-31' }))
