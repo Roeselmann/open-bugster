@@ -283,15 +283,20 @@ function measure() {
     layout.value = null
     return
   }
+  // Screen rectangles carry any transform around the chart, such as the full-screen dialog
+  // scaling in while this runs, and a resize observer never sees that end. So everything is
+  // divided back by the scale, to the chart's own unscaled pixels the arrows are drawn in.
   const box = element.getBoundingClientRect()
+  const scaleX = element.offsetWidth ? box.width / element.offsetWidth : 1
+  const scaleY = element.offsetHeight ? box.height / element.offsetHeight : 1
   const first = cells[0]!.getBoundingClientRect()
   layout.value = {
-    left: first.left - box.left,
-    width: first.width,
-    height: box.height,
+    left: (first.left - box.left) / scaleX,
+    width: first.width / scaleX,
+    height: element.offsetHeight,
     centers: cells.map((cell) => {
       const rect = cell.getBoundingClientRect()
-      return rect.top - box.top + rect.height / 2
+      return (rect.top - box.top + rect.height / 2) / scaleY
     })
   }
 }
