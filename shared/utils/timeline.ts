@@ -46,21 +46,33 @@ export function roundMarks(node: Pick<TimelineNode, 'recurrence' | 'rounds' | 'd
   return marks
 }
 
-/** Every node of the tree in display order, each with how deep it sits; the root is depth 0. */
-export function flattenTimeline(root: TimelineNode, collapsed: ReadonlySet<string> = new Set()): Array<{ node: TimelineNode; depth: number; path: string }> {
+/**
+ * Every node of the tree in display order, each with how deep it sits; the root is depth 0.
+ * A path names a row by where it sits: the root's own, then each child's index below it.
+ */
+export function flattenTimeline(root: TimelineNode, collapsed: ReadonlySet<string> = new Set(), rootPath = '0'): Array<{ node: TimelineNode; depth: number; path: string }> {
   const rows: Array<{ node: TimelineNode; depth: number; path: string }> = []
   const walk = (node: TimelineNode, depth: number, path: string) => {
     rows.push({ node, depth, path })
     if (collapsed.has(path)) return
     node.children.forEach((child, index) => walk(child, depth + 1, `${path}/${index}`))
   }
-  walk(root, 0, '0')
+  walk(root, 0, rootPath)
   return rows
 }
 
+/**
+ * Several trees one after the other, as a board's timeline lists its tickets. Each root's path
+ * is its id, so a branch stays folded while the trees around it come and go.
+ */
+export function flattenForest(roots: readonly TimelineNode[], collapsed: ReadonlySet<string> = new Set()): Array<{ node: TimelineNode; depth: number; path: string }> {
+  return roots.flatMap(root => flattenTimeline(root, collapsed, root.id))
+}
+
 /** The days the whole tree covers, from the earliest start to the latest end; null when nothing is dated. */
-export function timelineBounds(root: TimelineNode): Span | null {
-  const spans = flattenTimeline(root).flatMap(({ node }) => [spanOf(node), liveSpanOf(node)]).filter((span): span is Span => Boolean(span))
+export function timelineBounds(root: TimelineNode | readonly TimelineNode[]): Span | null {
+  const rows = Array.isArray(root) ? flattenForest(root) : flattenTimeline(root as TimelineNode)
+  const spans = rows.flatMap(({ node }) => [spanOf(node), liveSpanOf(node)]).filter((span): span is Span => Boolean(span))
   if (!spans.length) return null
   return {
     start: spans.reduce((earliest, span) => (span.start < earliest ? span.start : earliest), spans[0]!.start),

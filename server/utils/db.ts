@@ -3829,7 +3829,7 @@ const TIMELINE_LIMIT = 500
  * which boards the caller may open; a ticket elsewhere is listed but not descended into. A
  * ticket that turns up again among its own ancestors ends the branch there rather than loop.
  */
-export function ticketTimeline(rootId: string, canRead: (boardId: string) => boolean): TimelineNode | null {
+export function ticketTimeline(rootId: string, canRead: (boardId: string) => boolean, budget = { left: TIMELINE_LIMIT }): TimelineNode | null {
   const db = getDb()
   const readNode = db.prepare(`
     SELECT t.id, t.ticket_number, t.title, t.board_id, t.type_id, t.schedule, t.start_date, t.due_date, t.live_from, t.live_until, t.archived_at,
@@ -3853,17 +3853,16 @@ export function ticketTimeline(rootId: string, canRead: (boardId: string) => boo
     if (!readable.has(boardId)) readable.set(boardId, canRead(boardId))
     return readable.get(boardId)!
   }
-  let budget = TIMELINE_LIMIT
   const build = (id: string, ancestors: Set<string>): TimelineNode | null => {
     const row = readNode.get(id) as {
       id: string; ticket_number: number; title: string; board_id: string; type_id: string | null; schedule: TicketSchedule
       start_date: string | null; due_date: string | null; live_from: string | null; live_until: string | null; archived_at: string | null
       board_name: string; lane_name: string; is_done: number; is_live: number
     } & Pick<TicketRow, 'recurrence_frequency' | 'recurrence_interval' | 'recurrence_anchor' | 'recurrence_until' | 'recurrence_reset_todos' | 'recurrence_lane_id'> | undefined
-    if (!row || budget <= 0) return null
+    if (!row || budget.left <= 0) return null
     // Archived subtickets are out of the plan, as they are off the board. The root is shown as asked.
     if (row.archived_at && ancestors.size) return null
-    budget -= 1
+    budget.left -= 1
     const open = mayRead(row.board_id)
     const node: TimelineNode = {
       id: row.id,
@@ -3896,6 +3895,34 @@ export function ticketTimeline(rootId: string, canRead: (boardId: string) => boo
     return node
   }
   return build(rootId, new Set())
+}
+
+const BOARD_TIMELINE_LIMIT = 3000
+
+/**
+ * A board as a timeline: each ticket on it that is no subticket of another ticket on the same
+ * board, in lane order, with its subtickets below it as `ticketTimeline` draws them. A ticket
+ * that is a subticket of one on another board still leads here, since that parent is not on
+ * this board to hold it. The whole board shares one budget, so a huge board ends early rather
+ * than read without end.
+ */
+export function boardTimeline(boardId: string, canRead: (boardId: string) => boolean): TimelineNode[] {
+  const rows = getDb().prepare(`
+    SELECT t.id FROM tickets t JOIN lanes l ON l.id = t.lane_id
+    WHERE t.board_id = ? AND t.archived_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM ticket_todos td JOIN tickets p ON p.id = td.ticket_id
+        WHERE td.subticket_id = t.id AND p.board_id = t.board_id AND p.archived_at IS NULL AND p.id != t.id
+      )
+    ORDER BY l.position, t.position
+  `).all(boardId) as Array<{ id: string }>
+  const budget = { left: BOARD_TIMELINE_LIMIT }
+  const roots: TimelineNode[] = []
+  for (const { id } of rows) {
+    const node = ticketTimeline(id, canRead, budget)
+    if (node) roots.push(node)
+  }
+  return roots
 }
 
 type DependencyRow = {

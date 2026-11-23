@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, RefreshCcw, Search, Settings2, X } from '@lucide/vue'
+import { ChartGantt, Check, Columns3, List, RefreshCcw, Search, Settings2, X } from '@lucide/vue'
 import type { Attachment, CategorySummary, IntegrationProvider, LabelSummary, SyncRun, Ticket, TicketPatch, TicketTodoInput, TicketTypeSummary } from '~~/shared/types/domain'
 import { PROVIDER_LABELS } from '~~/shared/utils/ticket-source'
 import { ticketNumberList } from '~~/shared/utils/ticket-search'
@@ -222,6 +222,30 @@ const filteredTickets = computed(() => {
     return matchesCategory && matchesType && matchesLabels && matchesAssignee && matchesText
   })
 })
+
+// --- Views: the Kanban board, the lanes as a list, and the plan as a timeline ----------------
+
+type BoardView = 'kanban' | 'list' | 'timeline'
+const VIEWS: Array<{ value: BoardView; label: string; icon: typeof List }> = [
+  { value: 'kanban', label: 'Board', icon: Columns3 },
+  { value: 'list', label: 'List', icon: List },
+  { value: 'timeline', label: 'Timeline', icon: ChartGantt },
+]
+// Kept in the URL, so a reload, a shared link or the back button lands on the same view.
+const view = computed<BoardView>(() => {
+  const requested = route.query.view
+  return requested === 'list' || requested === 'timeline' ? requested : 'kanban'
+})
+function selectView(next: BoardView) {
+  if (next === view.value) return
+  const { view: _view, ...rest } = route.query
+  router.replace({ query: next === 'kanban' ? rest : { ...rest, view: next } })
+}
+const visibleTicketIds = computed(() => new Set(filteredTickets.value.map(ticket => ticket.id)))
+// Any change to a ticket's dates, lane or to-dos may move the plan; the timeline reads it again.
+const timelineRefreshKey = computed(() => tickets.value
+  .map(ticket => `${ticket.id}:${ticket.laneId}:${ticket.startDate}:${ticket.dueDate}:${ticket.liveFrom}:${ticket.liveUntil}:${ticket.updatedAt}`)
+  .join())
 
 // --- Phone layout: one lane at a time, picked from a chip row -------------------------------
 
@@ -672,7 +696,24 @@ async function sync(provider: IntegrationProvider) {
           <input ref="searchInput" v-model="query" type="search" class="focus-ring surface h-11 w-full rounded-xl pl-10 pr-9 text-sm outline-none [&::-webkit-search-cancel-button]:appearance-none" placeholder="Search tickets">
           <button v-if="query" class="muted absolute right-2 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-lg hover:bg-[var(--panel-strong)]" aria-label="Clear search" @click="query = ''"><X :size="14" /></button>
         </div>
-        <div v-if="mobileLanes.length" role="tablist" aria-label="Lanes" class="scrollbar-none -mx-3 mb-3 flex gap-1.5 overflow-x-auto px-3 pb-0.5">
+        <div class="mb-3 flex">
+          <div role="tablist" aria-label="View" class="flex shrink-0 rounded-xl border border-[var(--line)] bg-[var(--panel)] p-0.5">
+            <button
+              v-for="option in VIEWS"
+              :key="option.value"
+              type="button"
+              role="tab"
+              :aria-selected="view === option.value"
+              class="focus-ring flex h-9 items-center gap-1.5 rounded-[10px] px-3 text-[13px] font-semibold transition"
+              :class="view === option.value ? 'bg-[var(--ink)] text-[var(--canvas)]' : 'muted hover:text-[var(--ink)]'"
+              :data-view="option.value"
+              @click="selectView(option.value)"
+            >
+              <component :is="option.icon" :size="15" aria-hidden="true" /> <span :class="''">{{ option.label }}</span>
+            </button>
+          </div>
+        </div>
+        <div v-if="mobileLanes.length && view === 'kanban'" role="tablist" aria-label="Lanes" class="scrollbar-none -mx-3 mb-3 flex gap-1.5 overflow-x-auto px-3 pb-0.5">
           <button
             v-for="lane in mobileLanes"
             :key="lane.id"
@@ -694,6 +735,21 @@ async function sync(provider: IntegrationProvider) {
       <div class="mb-6 flex-col gap-4 max-md:hidden md:flex md:flex-row md:items-end">
         <BoardSwitcher :board="board" :boards="workspaceBoards" :syncing="syncing" :latest-runs="latestRuns" :sync-providers="syncProviders" @sync="sync" />
         <div class="flex flex-wrap gap-2 md:ml-auto md:justify-end">
+          <div role="tablist" aria-label="View" class="flex shrink-0 rounded-xl border border-[var(--line)] bg-[var(--panel)] p-0.5">
+            <button
+              v-for="option in VIEWS"
+              :key="option.value"
+              type="button"
+              role="tab"
+              :aria-selected="view === option.value"
+              class="focus-ring flex h-9 items-center gap-1.5 rounded-[10px] px-3 text-[13px] font-semibold transition"
+              :class="view === option.value ? 'bg-[var(--ink)] text-[var(--canvas)]' : 'muted hover:text-[var(--ink)]'"
+              :data-view="option.value"
+              @click="selectView(option.value)"
+            >
+              <component :is="option.icon" :size="15" aria-hidden="true" /> <span :class="'max-lg:sr-only'">{{ option.label }}</span>
+            </button>
+          </div>
           <div class="relative w-full sm:w-72">
             <Search :size="17" class="muted absolute left-3 top-1/2 -translate-y-1/2" />
             <input v-model="query" type="search" class="focus-ring surface h-11 w-full rounded-xl pl-10 pr-9 text-sm outline-none [&::-webkit-search-cancel-button]:appearance-none" placeholder="Search tickets">
@@ -719,6 +775,10 @@ async function sync(provider: IntegrationProvider) {
         <h2 class="font-bold">Could not load the board</h2><p class="muted mt-2 text-sm">{{ errorText(error) }}</p>
         <button class="mt-5 inline-flex items-center gap-2 rounded-xl bg-[var(--ink)] px-4 py-2 text-sm font-semibold text-[var(--canvas)]" @click="refresh()"><RefreshCcw :size="15" /> Try again</button>
       </div>
+      <BoardList v-else-if="view === 'list'" :board-id="board.id" :lanes="lanes" :tickets="filteredTickets" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" @open="openTicket" />
+      <ClientOnly v-else-if="view === 'timeline'">
+        <BoardTimeline :board-id="board.id" :visible-ids="visibleTicketIds" :refresh-key="timelineRefreshKey" />
+      </ClientOnly>
       <!-- The server renders the desktop board; the phone view takes over once the viewport is known. -->
       <div v-else-if="isMobile" class="md:hidden" @touchstart.passive="beginSwipe" @touchend.passive="endSwipe">
         <KanbanBoard v-if="selectedLaneId" :board-id="board.id" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" :lane-id="selectedLaneId" @open="openTicket" @move="moveTicket" @create="newTicket" @upload="uploadAttachmentsFromCard" />

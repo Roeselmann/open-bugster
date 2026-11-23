@@ -66,6 +66,7 @@ export const v1Routes: readonly V1Route[] = [
   { method: 'DELETE', path: '/boards/{boardId}', operation: ops.boardDelete, status: 204 },
 
   // Lanes
+  { method: 'GET', path: '/boards/{boardId}/timeline', operation: ops.boardTimelineGet, response: z.object({ timeline: z.array(timelineNodeSchema).describe('The board\'s tickets that lead a tree, in lane order, each with its subtickets below; only trees with a date somewhere.') }) },
   { method: 'GET', path: '/boards/{boardId}/lanes', operation: ops.laneList, response: z.object({ lanes: z.array(laneSummarySchema) }) },
   { method: 'POST', path: '/boards/{boardId}/lanes', operation: ops.laneCreate, status: 201, response: z.object({ lanes: z.array(laneSummarySchema) }) },
   { method: 'PATCH', path: '/boards/{boardId}/lanes/{laneId}', operation: ops.laneUpdate, response: z.object({ lanes: z.array(laneSummarySchema) }) },

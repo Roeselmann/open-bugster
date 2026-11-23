@@ -265,6 +265,23 @@ describe('the operation registry', () => {
       db.deleteBoard(review.id)
     })
 
+    it('reads a board as a timeline: its scheduled tickets that lead a tree, subtickets below', async () => {
+      type Node = { title: string; children: Node[] }
+      const board = db.createBoard('Planning')
+      db.setBoardMember(board.id, people.editor!, 'editor', false)
+      const lane = db.findBoardSummary(board.id)!.lanes.find(item => !item.isImport)!.id
+      const campaign = db.createTicket(board.id, { title: 'Campaign', laneId: lane, startDate: '2026-03-01', dueDate: '2026-03-31' })!
+      db.createSubticket(campaign.id, { boardId: board.id, laneId: lane, title: 'Banner' }, null)
+      db.createTicket(board.id, { title: 'Go-live', laneId: lane, schedule: 'milestone', dueDate: '2026-04-02' })
+      db.createTicket(board.id, { title: 'Someday', laneId: lane })
+
+      const { timeline } = await ops.run(ops.boardTimelineGet, actorOf('editor'), { boardId: board.id }) as { timeline: Node[] }
+      // The banner sits under its campaign, not beside it; the undated ticket is no part of the plan.
+      expect(timeline.map(node => node.title)).toEqual(['Campaign', 'Go-live'])
+      expect(timeline[0]!.children.map(node => node.title)).toEqual(['Banner'])
+      db.deleteBoard(board.id)
+    })
+
     it('lists where a ticket is used: its parents on boards the caller can read', async () => {
       type Parents = { parents: Array<{ ticketNumber: number; title: string; archived: boolean }> }
       const other = db.createBoard('Elsewhere')

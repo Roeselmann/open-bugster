@@ -4,12 +4,12 @@ import { boardMemberIds, boardViewer, requireBoardAccess, requireTicketAccess } 
 import type { Actor } from '../utils/actor'
 import {
   archiveTicket, closeRound, reopenRound, createSubticket, createTicket, listActivity, listDueTickets, listBoardActivity, listTickets, listTicketsPage,
-  atomically, dependencyRefs, findBoard, findLane, findTicket, listBoards, moveTicket, parentTicketRefsOf, searchSubticketCandidates, personById, restoreTicket, subticketIdsOf, ticketIdByNumber, ticketTimeline, ticketTypeBelongsToBoard, transferTicket, updateTicket, ticketsWaitingOn, waitingTicketIds, waitsOnTransitively
+  atomically, dependencyRefs, findBoard, findLane, findTicket, listBoards, moveTicket, boardTimeline, parentTicketRefsOf, searchSubticketCandidates, personById, restoreTicket, subticketIdsOf, ticketIdByNumber, ticketTimeline, ticketTypeBelongsToBoard, transferTicket, updateTicket, ticketsWaitingOn, waitingTicketIds, waitsOnTransitively
 } from '../utils/db'
 import { importedTicketUpdateSchema, subticketCreateSchema, ticketCreateSchema, ticketMoveSchema, ticketRoundCloseSchema, ticketShiftSchema, ticketTransferSchema, ticketUpdateSchema } from '../utils/validation'
 import { deleteLinkThumbnails } from '../utils/link-preview'
 import { cardImageCandidates } from '../../shared/utils/card-images'
-import { addDays } from '../../shared/utils/timeline'
+import { addDays, timelineBounds } from '../../shared/utils/timeline'
 import { settleSchedule, touchesSchedule, type ScheduleFields } from '../../shared/utils/schedule'
 import type { ShiftMove, ShiftResult, ShiftSkip, TicketDecisionInput } from '../../shared/types/domain'
 import { createdId, defineOperation } from './types'
@@ -300,6 +300,20 @@ export const ticketTimelineGet = defineOperation({
   requires: { scope: 'ticket', role: 'viewer', ticketId: input => input.ticketId },
   audit: false,
   run: ctx => ({ timeline: orNotFound(ticketTimeline(ctx.ticket!.id, boardId => readable(ctx.actor, boardId)), 'Ticket') })
+})
+
+/**
+ * A board's plan: its tickets that lead a tree — no subticket of another ticket on the board —
+ * each with its subtickets below, as on a ticket's own timeline. Only trees with a date
+ * somewhere are listed; an unplanned ticket has no place on a timeline.
+ */
+export const boardTimelineGet = defineOperation({
+  name: 'board.timeline.get',
+  summary: 'Read a board\'s scheduled tickets and their subtickets as a timeline',
+  input: z.object({ boardId: z.string().trim().min(1).max(64) }),
+  requires: { scope: 'board', role: 'viewer', boardId: input => input.boardId },
+  audit: false,
+  run: (ctx, input) => ({ timeline: boardTimeline(input.boardId, boardId => readable(ctx.actor, boardId)).filter(node => timelineBounds(node)) })
 })
 
 /**
