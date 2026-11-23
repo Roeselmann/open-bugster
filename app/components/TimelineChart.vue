@@ -386,37 +386,37 @@ const arrows = computed(() => {
     >
     <div :style="{ width: contentWidth }">
     <!-- The scale: month starts, and weeks when there is room. -->
-    <div class="sticky top-0 z-10 grid grid-cols-[var(--timeline-label)_minmax(0,1fr)] border-b border-[var(--line)] bg-[var(--panel-strong)] font-semibold uppercase tracking-wider" :class="full ? 'text-[11px]' : 'text-[10px]'">
-      <div class="sticky left-0 z-20 flex cursor-default items-center gap-1 bg-[var(--panel-strong)] py-0.5 pr-1 pl-1 sm:pr-2 sm:pl-3">
-        <span class="muted max-sm:sr-only">Ticket</span>
+    <div class="sticky top-0 z-10 grid grid-cols-[var(--timeline-label)_minmax(0,1fr)] border-b-2 border-[var(--line)] bg-[var(--panel-strong)] font-bold uppercase tracking-wider text-[var(--ink)]" :class="full ? 'text-xs' : 'text-[11px]'">
+      <div class="sticky left-0 z-20 flex cursor-default items-center gap-1 bg-[var(--panel-strong)] py-1 pr-1 pl-1 sm:pr-2 sm:pl-3">
+        <span class="max-sm:sr-only">Ticket</span>
         <!-- Zoom: out, in, back to fitting everything, and today in the middle. -->
-        <div class="ml-auto flex items-center gap-0.5 normal-case tracking-normal" role="group" aria-label="Zoom">
-          <button type="button" class="focus-ring muted grid size-6 place-items-center rounded-md hover:bg-[var(--panel)] hover:text-[var(--ink)] disabled:opacity-40" :disabled="Boolean(pxPerDay && pxPerDay <= MIN_PX_PER_DAY)" aria-label="Zoom out" title="Zoom out · Ctrl/⌘ + scroll" data-zoom-out @click="zoomOut"><ZoomOut :size="14" /></button>
-          <button type="button" class="focus-ring muted grid size-6 place-items-center rounded-md hover:bg-[var(--panel)] hover:text-[var(--ink)] disabled:opacity-40" :disabled="Boolean(pxPerDay && pxPerDay >= MAX_PX_PER_DAY)" aria-label="Zoom in" title="Zoom in · Ctrl/⌘ + scroll" data-zoom-in @click="zoomIn"><ZoomIn :size="14" /></button>
+        <div class="ml-auto flex items-center gap-1 normal-case tracking-normal" role="group" aria-label="Zoom">
+          <button type="button" class="focus-ring grid size-7 place-items-center rounded-md border border-[var(--line)] bg-[var(--panel)] text-[var(--ink)] shadow-sm hover:border-[var(--accent)] hover:text-[var(--accent)] active:translate-y-px disabled:opacity-40" :disabled="Boolean(pxPerDay && pxPerDay <= MIN_PX_PER_DAY)" aria-label="Zoom out" title="Zoom out · Ctrl/⌘ + scroll" data-zoom-out @click="zoomOut"><ZoomOut :size="14" /></button>
+          <button type="button" class="focus-ring grid size-7 place-items-center rounded-md border border-[var(--line)] bg-[var(--panel)] text-[var(--ink)] shadow-sm hover:border-[var(--accent)] hover:text-[var(--accent)] active:translate-y-px disabled:opacity-40" :disabled="Boolean(pxPerDay && pxPerDay >= MAX_PX_PER_DAY)" aria-label="Zoom in" title="Zoom in · Ctrl/⌘ + scroll" data-zoom-in @click="zoomIn"><ZoomIn :size="14" /></button>
           <button
             type="button"
-            class="focus-ring h-6 rounded-md px-1.5 text-[11px] font-semibold"
-            :class="pxPerDay ? 'muted hover:bg-[var(--panel)] hover:text-[var(--ink)]' : 'bg-[var(--accent-soft)] text-[var(--accent)]'"
+            class="focus-ring h-7 rounded-md border px-2 text-[11px] font-bold shadow-sm active:translate-y-px"
+            :class="pxPerDay ? 'border-[var(--line)] bg-[var(--panel)] text-[var(--ink)] hover:border-[var(--accent)] hover:text-[var(--accent)]' : 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'"
             :aria-pressed="!pxPerDay"
             title="Fit everything into the width"
             data-zoom-auto
             @click="fitAll"
           >Auto</button>
-          <button type="button" class="focus-ring muted grid size-6 place-items-center rounded-md hover:bg-[var(--panel)] hover:text-[var(--ink)]" aria-label="Go to today" title="Go to today" data-zoom-today @click="goToToday"><LocateFixed :size="14" /></button>
+          <button type="button" class="focus-ring grid size-7 place-items-center rounded-md border border-[var(--line)] bg-[var(--panel)] text-[var(--ink)] shadow-sm hover:border-[var(--accent)] hover:text-[var(--accent)] active:translate-y-px" aria-label="Go to today" title="Go to today" data-zoom-today @click="goToToday"><LocateFixed :size="14" /></button>
         </div>
       </div>
-      <div class="relative h-6">
+      <div class="relative h-9">
         <span
           v-for="tick in ticks"
           :key="tick.date"
-          class="absolute top-1.5 -translate-x-1/2 whitespace-nowrap"
-          :class="[tick.major ? '' : 'muted font-medium normal-case tracking-normal', tick.date === today ? '!text-rose-600' : '']"
+          class="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap"
+          :class="[tick.major ? '' : 'font-semibold normal-case tracking-normal opacity-70', tick.date === today ? '!text-rose-600' : '']"
           :style="{ left: `${daily ? (offset(tick.date) + offset(tick.date, true)) / 2 : offset(tick.date)}%` }"
         ><template v-if="clearOfToday(tick.date)">{{ tick.label }}</template></span>
         <!-- Without a day of its own on the scale, today says what the red line is. -->
         <span
           v-if="todayVisible && !daily"
-          class="absolute top-1.5 -translate-x-1/2 whitespace-nowrap font-medium normal-case tracking-normal text-rose-600"
+          class="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap font-bold normal-case tracking-normal text-rose-600"
           :style="{ left: `${offset(today)}%` }"
         >Today</span>
       </div>
