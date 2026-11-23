@@ -17,7 +17,9 @@ const props = withDefaults(defineProps<{
   tickets: Ticket[]
   dueWarningDays?: number
   dueAlertDays?: number
-}>(), { dueWarningDays: 7, dueAlertDays: 1 })
+  /** The ticket open in the detail panel, marked on its row. */
+  selectedId?: string | null
+}>(), { selectedId: null, dueWarningDays: 7, dueAlertDays: 1 })
 const emit = defineEmits<{ open: [ticket: Ticket] }>()
 
 const today = boardToday()
@@ -125,6 +127,8 @@ const PRIORITY_DOT = { low: 'bg-slate-400', medium: 'bg-blue-500', high: 'bg-amb
             <!-- The whole row opens the ticket to a pointer; the title is the way in by keyboard. -->
             <div
               class="flex w-full cursor-pointer flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-2.5 text-left hover:bg-[color-mix(in_srgb,var(--accent)_6%,transparent)] md:grid md:gap-x-4 md:grid-cols-[var(--list-columns)]"
+              :class="ticket.id === selectedId && 'bg-[color-mix(in_srgb,var(--accent)_10%,transparent)] shadow-[inset_3px_0_0_var(--accent)]'"
+              :aria-current="ticket.id === selectedId ? 'true' : undefined"
               :data-list-ticket="ticket.ticketNumber"
               @click="emit('open', ticket)"
             >

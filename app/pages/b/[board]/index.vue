@@ -90,6 +90,8 @@ const typeFilter = ref('all')
 const labelFilter = ref<string[]>([])
 const selected = ref<Ticket | null>(null)
 const editorOpen = ref(false)
+// The ticket whose details are open, so the board can point at its card.
+const openTicketId = computed(() => editorOpen.value ? selected.value?.id ?? null : null)
 const deletingAttachmentId = ref<string | null>(null)
 const saving = ref(false)
 /** The editor's footer word for its field-by-field saves: nothing, in flight, done, or failed. */
@@ -775,16 +777,16 @@ async function sync(provider: IntegrationProvider) {
         <h2 class="font-bold">Could not load the board</h2><p class="muted mt-2 text-sm">{{ errorText(error) }}</p>
         <button class="mt-5 inline-flex items-center gap-2 rounded-xl bg-[var(--ink)] px-4 py-2 text-sm font-semibold text-[var(--canvas)]" @click="refresh()"><RefreshCcw :size="15" /> Try again</button>
       </div>
-      <BoardList v-else-if="view === 'list'" :board-id="board.id" :lanes="lanes" :tickets="filteredTickets" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" @open="openTicket" />
+      <BoardList v-else-if="view === 'list'" :board-id="board.id" :lanes="lanes" :tickets="filteredTickets" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" :selected-id="openTicketId" @open="openTicket" />
       <ClientOnly v-else-if="view === 'timeline'">
         <BoardTimeline :board-id="board.id" :visible-ids="visibleTicketIds" :refresh-key="timelineRefreshKey" />
       </ClientOnly>
       <!-- The server renders the desktop board; the phone view takes over once the viewport is known. -->
       <div v-else-if="isMobile" class="md:hidden" @touchstart.passive="beginSwipe" @touchend.passive="endSwipe">
-        <KanbanBoard v-if="selectedLaneId" :board-id="board.id" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" :lane-id="selectedLaneId" @open="openTicket" @move="moveTicket" @create="newTicket" @upload="uploadAttachmentsFromCard" />
+        <KanbanBoard v-if="selectedLaneId" :board-id="board.id" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" :lane-id="selectedLaneId" :selected-id="openTicketId" @open="openTicket" @move="moveTicket" @create="newTicket" @upload="uploadAttachmentsFromCard" />
         <p v-else class="muted py-16 text-center text-sm">This board has no lanes yet.</p>
       </div>
-      <div v-else class="scrollbar-thin overflow-x-auto max-md:hidden"><KanbanBoard :board-id="board.id" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" @open="openTicket" @move="moveTicket" @create="newTicket" @upload="uploadAttachmentsFromCard" /></div>
+      <div v-else class="scrollbar-thin overflow-x-auto max-md:hidden"><KanbanBoard :board-id="board.id" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" :lanes="lanes" :tickets="filteredTickets" :can-edit="canEdit" :selected-id="openTicketId" @open="openTicket" @move="moveTicket" @create="newTicket" @upload="uploadAttachmentsFromCard" /></div>
     </main>
 
     <TicketEditor v-if="editorOpen" :ticket="selected" :lanes="lanes" :members="board.members" :can-edit="canEdit" :can-moderate="canModerate" :categories="categories" :labels="labels" :ticket-types="ticketTypes" :saving="saving" :save-state="saveState" :deleting-attachment-id="deletingAttachmentId" :initial-lane-id="newTicketLaneId" :initial-placement="newTicketPlacement" :lane-ticket-count="selectedLaneTicketCount" :boards="transferableBoards" :subticket-boards="subticketBoards" :testflight="board.credentials.complete" :due-warning-days="board.dueWarningDays" :due-alert-days="board.dueAlertDays" @close="editorOpen = false" @save="saveTicket" @move="moveTicketFromEditor" @reorder="reorderTicketFromEditor" @transfer="transferTicketFromEditor" @archive="requestArchive" @remove-attachment="requestAttachmentRemoval" @save-description="saveDescriptionFromEditor" @save-title="saveTitleFromEditor" @patch="patchTicketFromEditor" @upload="uploadAttachmentsFromEditor" @create-subticket="createSubticketFromEditor" @commented="refresh()" @shifted="shiftedFromEditor" @close-round="closeRoundFromEditor" @reopen-round="reopenRoundFromEditor" @notify="notify" />

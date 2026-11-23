@@ -11,7 +11,9 @@ const props = withDefaults(defineProps<{
   laneId?: string | null
   dueWarningDays?: number
   dueAlertDays?: number
-}>(), { canEdit: true, laneId: null, dueWarningDays: 7, dueAlertDays: 1 })
+  /** The ticket open in the detail panel, marked on its card. */
+  selectedId?: string | null
+}>(), { canEdit: true, selectedId: null, laneId: null, dueWarningDays: 7, dueAlertDays: 1 })
 const emit = defineEmits<{ open: [ticket: Ticket]; move: [id: string, laneId: string, index: number]; create: [laneId: string, placement: 'top' | 'bottom']; upload: [ticket: Ticket, files: File[]] }>()
 
 const showScreenshotByLane = reactive<Record<string, boolean>>({})
@@ -381,6 +383,7 @@ onBeforeUnmount(cleanupPointerDrag)
                 :droppable="canEdit"
                 :due-warning-days="dueWarningDays"
                 :due-alert-days="dueAlertDays"
+                :selected="item.id === selectedId"
                 @open="emit('open', $event)"
                 @move="nextLaneId => emit('move', item.id, nextLaneId, ticketsFor(nextLaneId).length)"
                 @reorder="placement => reorderTicket(item, placement)"

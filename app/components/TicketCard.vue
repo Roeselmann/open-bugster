@@ -22,6 +22,8 @@ const props = withDefaults(defineProps<{
   /** The board's lead times: orange from this many days before the due date, red from the other. */
   dueWarningDays?: number
   dueAlertDays?: number
+  /** The ticket open in the detail panel: the card says so while the panel covers the board. */
+  selected?: boolean
 }>(), { laneCount: 0, draggable: true, droppable: false, dueWarningDays: 7, dueAlertDays: 1 })
 const emit = defineEmits<{
   open: [ticket: Ticket]
@@ -171,7 +173,9 @@ const reorderButtons = computed(() => [
     @dragleave="fileDragLeave"
     @drop="fileDrop"
   >
-    <button class="focus-ring block w-full text-left" :tabindex="preview ? -1 : undefined" @click="!preview && emit('open', ticket)">
+    <!-- Open in the detail panel: a bracket down the card's left edge, following its rounded corners. -->
+    <span v-if="selected" class="pointer-events-none absolute inset-y-0 left-0 z-10 w-3.5 rounded-l-[10px] border-y-4 border-l-[5px] border-[var(--accent)]" aria-hidden="true" data-card-selected />
+    <button class="focus-ring block w-full text-left" :aria-current="selected ? 'true' : undefined" :tabindex="preview ? -1 : undefined" @click="!preview && emit('open', ticket)">
       <!--
         Only the header wears the type's tone: title on the left, the type's mark on the right.
         An untyped ticket — or a type without a colour — keeps the plain panel.
