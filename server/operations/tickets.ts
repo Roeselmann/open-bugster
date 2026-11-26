@@ -4,14 +4,14 @@ import { boardMemberIds, boardViewer, requireBoardAccess, requireTicketAccess } 
 import type { Actor } from '../utils/actor'
 import {
   archiveTicket, closeRound, reopenRound, createSubticket, createTicket, listActivity, listDueTickets, listBoardActivity, listTickets, listTicketsPage,
-  atomically, dependencyRefs, findBoard, findLane, findTicket, listBoards, moveTicket, boardTimeline, parentTicketRefsOf, searchSubticketCandidates, personById, restoreTicket, subticketIdsOf, ticketIdByNumber, ticketTimeline, ticketTypeBelongsToBoard, transferTicket, updateTicket, ticketsWaitingOn, waitingTicketIds, waitsOnTransitively
+  atomically, defaultLaneFor, dependencyRefs, findBoard, parentTicketIdsOf, findLane, findTicket, listBoards, moveTicket, boardTimeline, parentTicketRefsOf, searchSubticketCandidates, personById, restoreTicket, subticketIdsOf, ticketIdByNumber, ticketTimeline, ticketTypeBelongsToBoard, transferTicket, updateTicket, ticketsWaitingOn, waitingTicketIds, waitsOnTransitively
 } from '../utils/db'
 import { importedTicketUpdateSchema, subticketCreateSchema, ticketCreateSchema, ticketMoveSchema, ticketRoundCloseSchema, ticketShiftSchema, ticketTransferSchema, ticketUpdateSchema } from '../utils/validation'
 import { deleteLinkThumbnails } from '../utils/link-preview'
 import { cardImageCandidates } from '../../shared/utils/card-images'
 import { addDays, timelineBounds } from '../../shared/utils/timeline'
 import { settleSchedule, touchesSchedule, type ScheduleFields } from '../../shared/utils/schedule'
-import type { ShiftMove, ShiftResult, ShiftSkip, TicketDecisionInput } from '../../shared/types/domain'
+import type { ShiftMove, ShiftResult, ShiftSkip, Ticket, TicketDecisionInput } from '../../shared/types/domain'
 import { createdId, defineOperation } from './types'
 import { orNotFound } from './run'
 
@@ -456,8 +456,39 @@ export const ticketMove = defineOperation({
   input: ticketMoveSchema.extend({ ticketId }),
   requires: { scope: 'ticket', role: 'editor', ticketId: input => input.ticketId },
   audit: { targetType: 'ticket', targetId: input => input.ticketId, changes: ['laneId', 'index'] },
-  run: (ctx, input) => ({ ticket: orNotFound(moveTicket(input.ticketId, input.laneId, input.index, ctx.actor), 'Ticket') })
+  run: (ctx, input) => {
+    checkStrictOrderBeforeFinishing(ctx.ticket!, input.laneId)
+    return { ticket: orNotFound(moveTicket(input.ticketId, input.laneId, input.index, ctx.actor), 'Ticket') }
+  }
 })
+
+/**
+ * A strict to-do list is worked top to bottom, and a subticket is ticked by reaching a done
+ * or live lane — so moving it there is the same act as ticking a plain to-do, and is refused
+ * the same way while something above it in the list is open. Without this the order held for
+ * the to-dos a person ticks and not for the ones that are tickets, which are the ones an
+ * approval chain is made of.
+ *
+ * Only entering a finishing lane is checked: moving within one, or back out, completes
+ * nothing. A dependency set by hand (`waitsOn`) is never refused, only warned about.
+ */
+function checkStrictOrderBeforeFinishing(ticket: Ticket, laneId: string | null | undefined) {
+  const finishes = (id: string | null | undefined) => {
+    const lane = id ? findLane(id) : null
+    return Boolean(lane && (lane.isDone || lane.isLive))
+  }
+  if (!finishes(laneId) || finishes(ticket.laneId)) return
+  for (const parentId of parentTicketIdsOf(ticket.id)) {
+    const parent = findTicket(parentId)
+    if (!parent || !parent.strictOrder || parent.archivedAt) continue
+    const own = parent.todos.findIndex(todo => todo.subticketId === ticket.id)
+    const open = parent.todos.slice(0, Math.max(own, 0)).find(todo => !todo.completed)
+    if (open) {
+      const first = open.subticket ? `#${open.subticket.ticketNumber} “${open.text}”` : `“${open.text}”`
+      throw createError({ statusCode: 422, statusMessage: `The to-dos of #${parent.ticketNumber} go in strict order: ${first} comes before #${ticket.ticketNumber}.` })
+    }
+  }
+}
 
 export const ticketTransfer = defineOperation({
   name: 'ticket.transfer',
@@ -476,6 +507,7 @@ export const ticketTransfer = defineOperation({
     if (target.workspaceId !== orNotFound(findBoard(ctx.ticket!.boardId), 'Board').workspaceId) {
       throw createError({ statusCode: 422, statusMessage: 'Tickets can only move between boards of the same workspace.' })
     }
+    checkStrictOrderBeforeFinishing(ctx.ticket!, input.laneId ?? defaultLaneFor(input.boardId)?.id)
     const result = transferTicket(input.ticketId, input.boardId, input.laneId ?? null, ctx.actor)
     if (!result) throw createError({ statusCode: 422, statusMessage: 'The lane does not belong to the destination board.' })
     return result

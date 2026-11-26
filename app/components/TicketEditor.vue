@@ -852,8 +852,10 @@ watch(() => props.ticket?.id, () => {
 }, { immediate: true })
 
 /** Why a ticket this one waits on is worth a look: it is late, or it ends after this one starts. */
-function blockerConcern(blocker: DependencyRef): 'late' | 'overlap' | null {
-  if (blocker.done || blocker.archived || inDoneLane.value) return null
+function blockerConcern(blocker: DependencyRef): 'late' | 'overlap' | 'open' | null {
+  if (blocker.done || blocker.archived) return null
+  // Finished while what it waits on is not: the one thing left to say about a done ticket.
+  if (inDoneLane.value) return 'open'
   if (blocker.dueDate && blocker.dueDate < today) return 'late'
   const start = form.startDate || form.dueDate
   return start && blocker.dueDate && start < blocker.dueDate ? 'overlap' : null
@@ -2107,8 +2109,8 @@ function focusTitle(event: Event) {
                     v-if="blockerConcern(blocker)"
                     class="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold"
                     :class="blockerConcern(blocker) === 'late' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700'"
-                    :title="blockerConcern(blocker) === 'late' ? 'It is past its due date and not done' : 'It ends after this ticket starts'"
-                  >{{ blockerConcern(blocker) === 'late' ? 'Late' : 'Ends later' }}</span>
+                    :title="{ late: 'It is past its due date and not done', overlap: 'It ends after this ticket starts', open: 'This ticket is done, but this one is not' }[blockerConcern(blocker)!]"
+                  >{{ { late: 'Late', overlap: 'Ends later', open: 'Still open' }[blockerConcern(blocker)!] }}</span>
                   <span
                     v-if="blocker.strictOrderOf !== null"
                     class="muted flex shrink-0 items-center gap-1 rounded-md bg-[var(--panel)] px-1.5 py-0.5 text-[10px] font-semibold"

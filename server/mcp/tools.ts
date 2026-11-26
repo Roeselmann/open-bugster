@@ -9,7 +9,7 @@ import { DEFAULT_PREVIEW_DIMENSION, imagePreview } from '~~/server/utils/image-p
 import { findTicketType, isServiceIdentity, parentTicketIdsOf, principalDescription } from '~~/server/utils/db'
 import { todoLight } from '~~/shared/utils/todo-progress'
 import { boardToday } from '~~/shared/utils/due-date'
-import { timelineBounds, timelineWarnings } from '~~/shared/utils/timeline'
+import { dependencyWarnings, timelineBounds, timelineWarnings } from '~~/shared/utils/timeline'
 import { describeRecurrence } from '~~/shared/utils/recurrence'
 import { categoryColors, ticketTypeColors } from '~~/shared/types/domain'
 import type { BoardMember, BoardSummary, CategorySummary, DependencyRef, LabelSummary, LaneSummary, ShiftResult, TimelineNode, Ticket, TicketTodo, TicketActivityEntry, TicketComment, TicketType, TicketTypeSummary, WorkspaceSummary } from '~~/shared/types/domain'
@@ -249,6 +249,20 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       categories: categories.map(categoryOf),
       ticketTypes: types.map(type => ({ id: type.id, name: type.name }))
     }
+  }
+
+  /**
+   * What to tell an agent that has just finished a ticket still waiting on open work. Moving
+   * it is allowed — only a strict to-do list refuses — so the reply is where it learns of it,
+   * rather than from a timeline it may never read.
+   */
+  const finishedEarly = async (ticket: Ticket, lanes?: LaneSummary[]): Promise<string[]> => {
+    if (!ticket.waitsOn.some(blocker => !blocker.done && !blocker.archived)) return []
+    const known = lanes ?? (await call<{ lanes: LaneSummary[] }>(ops.laneList, { boardId: ticket.boardId })).lanes
+    const lane = known.find(candidate => candidate.id === ticket.laneId)
+    if (!lane || !(lane.isDone || lane.isLive)) return []
+    return dependencyWarnings({ id: ticket.id, ticketNumber: ticket.ticketNumber, startDate: ticket.startDate, dueDate: ticket.dueDate, done: true, waitsOn: ticket.waitsOn }, boardToday())
+      .map(warning => warning.message)
   }
 
   server.registerTool('whoami', {
@@ -662,7 +676,7 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
 
   server.registerTool('move_ticket', {
     title: 'Move a ticket',
-    description: 'Move a ticket to a lane, and optionally to a position within it. A lane with isDone finishes the ticket: as a subticket it is then ticked off on every parent. A lane with isLive does the same for a ticket that is finished and now running — a campaign in market — whose live window then warns instead of its due date. With a boardId the ticket moves onto that other board of the same workspace instead, into laneId there (its default lane when omitted); labels and category come along by name, an assignee who is no member over there is dropped. Ids come from list_boards and board_overview.',
+    description: 'Move a ticket to a lane, and optionally to a position within it. A lane with isDone finishes the ticket: as a subticket it is then ticked off on every parent. A lane with isLive does the same for a ticket that is finished and now running — a campaign in market — whose live window then warns instead of its due date. With a boardId the ticket moves onto that other board of the same workspace instead, into laneId there (its default lane when omitted); labels and category come along by name, an assignee who is no member over there is dropped. Ids come from list_boards and board_overview. Finishing a subticket of a strict to-do list while something above it in that list is open is refused. Finishing a ticket that waits on open work by a dependency set by hand is allowed, and the reply then carries `warnings`.',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: {
       ticketId: z.string(),
@@ -673,11 +687,13 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
   }, async ({ ticketId, laneId, boardId, index }) => {
     if (boardId) {
       const { ticket, assigneeCleared } = await call<{ ticket: Ticket; assigneeCleared: boolean }>(ops.ticketTransfer, { ticketId, boardId, laneId })
-      return reply({ ...slim(ticket), assigneeCleared })
+      const warnings = await finishedEarly(ticket)
+      return reply({ ...slim(ticket), assigneeCleared, ...(warnings.length ? { warnings } : {}) })
     }
     if (!laneId) throw new Error('Either laneId or boardId is needed.')
     const { ticket } = await call<{ ticket: Ticket }>(ops.ticketMove, { ticketId, laneId, index: index ?? 0 })
-    return reply(slim(ticket))
+    const warnings = await finishedEarly(ticket)
+    return reply({ ...slim(ticket), ...(warnings.length ? { warnings } : {}) })
   })
 
   server.registerTool('comment_on_ticket', {
@@ -1146,7 +1162,7 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       + 'first at index (0 is the top, the default) counted among the lane\'s other tickets. Tickets '
       + 'already in the lane are reordered the same way. Each move is its own change, recorded and '
       + 'announced like move_ticket; a lane with isDone or isLive finishes them as it does there. If one '
-      + 'fails the rest are not attempted, and the reply says what moved and why the one stopped. '
+      + 'fails the rest are not attempted, and the reply says what moved and why the one stopped — a strict to-do list refuses a subticket finished out of turn, so give those in list order. `warnings` names tickets finished while something they wait on is open. '
       + 'Moving onto another board stays with move_ticket and boardId. Needs editor, like move_ticket.',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: {
@@ -1197,6 +1213,7 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       rest.splice(position, 0, ticketId)
       lane = rest
     }
-    return reply({ laneId, moved: moved.map(ticket => ({ id: ticket.id, number: ticket.ticketNumber, title: ticket.title })) })
+    const warnings = (await Promise.all(moved.map(ticket => finishedEarly(ticket, lanes)))).flat()
+    return reply({ laneId, moved: moved.map(ticket => ({ id: ticket.id, number: ticket.ticketNumber, title: ticket.title })), ...(warnings.length ? { warnings } : {}) })
   })
 }

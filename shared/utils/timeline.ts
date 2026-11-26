@@ -80,7 +80,7 @@ export function timelineBounds(root: TimelineNode | readonly TimelineNode[]): Sp
   }
 }
 
-export type TimelineWarningKind = 'overdue' | 'ends_after_plan' | 'starts_before_plan' | 'live_ended' | 'starts_before_blocker' | 'waits_on_late'
+export type TimelineWarningKind = 'overdue' | 'ends_after_plan' | 'starts_before_plan' | 'live_ended' | 'starts_before_blocker' | 'waits_on_late' | 'done_before_blocker'
 
 export interface TimelineWarning {
   kind: TimelineWarningKind
@@ -136,11 +136,19 @@ type Waiting = Pick<TimelineNode, 'id' | 'ticketNumber' | 'startDate' | 'dueDate
 
 /**
  * What a ticket's dependencies say about its plan: it starts before something it waits on
- * ends, or something it waits on is late. Finish-to-start allows the same day. A finished
- * ticket, and a finished or archived blocker, has nothing left to say.
+ * ends, or something it waits on is late. Finish-to-start allows the same day. A finished or
+ * archived blocker has nothing left to say.
+ *
+ * A finished ticket has one thing left to say: that it was finished while something it waits
+ * on is still open — an approval given before the text it approves was done. Its dates no
+ * longer matter then, so that is the only warning it gets.
  */
 export function dependencyWarnings(ticket: Waiting, today: string): TimelineWarning[] {
-  if (ticket.done) return []
+  if (ticket.done) {
+    return ticket.waitsOn
+      .filter(blocker => !blocker.done && !blocker.archived)
+      .map(blocker => ({ kind: 'done_before_blocker' as const, ticketId: ticket.id, ticketNumber: ticket.ticketNumber, message: `#${ticket.ticketNumber} is done, but #${blocker.ticketNumber} it waits on is still open.` }))
+  }
   const start = ticket.startDate ?? ticket.dueDate
   const warnings: TimelineWarning[] = []
   for (const blocker of ticket.waitsOn) {

@@ -354,6 +354,37 @@ describe('the MCP tool surface', () => {
       expect(sub.waitsOn).toEqual([first.number])
     })
 
+    it('refuses to finish a subticket out of turn in a strict list, and only warns for a dependency set by hand', async () => {
+      const doneLane = (await call('board_overview', { boardId })).lanes.find((lane: { isDone: boolean }) => lane.isDone)
+      const parent = await call('create_ticket', { boardId, laneId, title: 'Launch mail', todos: [{ text: 'Brief' }], strictOrder: true })
+      const copy = await call('create_ticket', { boardId, title: 'Copy', parentTicketId: parent.id })
+      const approval = await call('create_ticket', { boardId, title: 'Approval', parentTicketId: parent.id })
+
+      // The plain to-do above comes first, then the subtickets in list order.
+      await expect(call('move_ticket', { ticketId: copy.id, laneId: doneLane.id }))
+        .rejects.toMatchObject({ statusCode: 422, statusMessage: `The to-dos of #${parent.number} go in strict order: “Brief” comes before #${copy.number}.` })
+      const full = await call('get_ticket', { ticketId: parent.id })
+      await call('update_ticket', { ticketId: parent.id, todos: full.todos.map(({ subticket: _ref, ...todo }: Record<string, unknown>) => (todo.text === 'Brief' ? { ...todo, completed: true } : todo)) })
+      await expect(call('move_ticket', { ticketId: approval.id, laneId: doneLane.id }))
+        .rejects.toMatchObject({ statusCode: 422, statusMessage: `The to-dos of #${parent.number} go in strict order: #${copy.number} “Copy” comes before #${approval.number}.` })
+      // In one call, in list order, both go through; out of order the batch stops at the first.
+      const stopped = await call('move_tickets', { laneId: doneLane.id, ticketIds: [approval.id, copy.id] })
+      expect(stopped).toMatchObject({ moved: [], failed: { number: approval.number } })
+      const moved = await call('move_tickets', { laneId: doneLane.id, ticketIds: [copy.id, approval.id] })
+      expect(moved.moved.map((ticket: { number: number }) => ticket.number)).toEqual([copy.number, approval.number])
+      expect(moved).not.toHaveProperty('warnings')
+
+      // A dependency somebody set by hand never refuses; the reply and the timeline say so.
+      const text = await call('create_ticket', { boardId, laneId, title: 'Text' })
+      const layout = await call('create_ticket', { boardId, laneId, title: 'Layout', waitsOn: [text.id] })
+      const early = await call('move_ticket', { ticketId: layout.id, laneId: doneLane.id })
+      expect(early.warnings).toEqual([`#${layout.number} is done, but #${text.number} it waits on is still open.`])
+      expect((await call('move_ticket', { ticketId: text.id, laneId: doneLane.id }))).not.toHaveProperty('warnings')
+      await call('move_ticket', { ticketId: text.id, laneId })
+      const batch = await call('move_tickets', { laneId: doneLane.id, ticketIds: [layout.id] })
+      expect(batch.warnings).toEqual([`#${layout.number} is done, but #${text.number} it waits on is still open.`])
+    })
+
     it('lets an agent trace a subticket both ways and see where it gets done', async () => {
       // The lanes say which one finishes a ticket, so an agent need not guess from a name.
       const overview = await call('board_overview', { boardId })
