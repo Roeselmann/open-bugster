@@ -752,6 +752,21 @@ describe('the MCP tool surface', () => {
       expect(db.listActivity(waiting.id).map(entry => entry.payload)).toContainEqual({ change: 'removed', reason: 'board_deleted', number: String(open.number), title: 'Landing page', board: 'Doomed' })
     })
 
+    it('marks an agent that is on a board by a grant, and says why it cannot be removed there', async () => {
+      const board = await call('create_board', { name: 'Granted board' })
+      const agent = db.createServiceIdentity('Grant Bot')
+      db.setAgentAccess(agent.id, { mode: 'all', role: 'editor' })
+      const overview = await call('board_overview', { boardId: board.id })
+      expect(overview.members.find((member: { id: string }) => member.id === agent.id)).toMatchObject({ isAgent: true, through: 'grant for every board' })
+      expect(overview.members.find((member: { id: string }) => member.id === ownerId)).not.toHaveProperty('through')
+      await expect(call('remove_board_member', { boardId: board.id, userId: agent.id }))
+        .rejects.toMatchObject({ statusCode: 409, statusMessage: expect.stringContaining('through a grant for every board') })
+      // Somebody who is simply not there is still a 404.
+      const stranger = db.createUser({ email: 'nobody@example.com', firstName: 'No', lastName: 'Body', role: 'member' })
+      await expect(call('remove_board_member', { boardId: board.id, userId: stranger.id })).rejects.toMatchObject({ statusCode: 404 })
+      db.setAgentAccess(agent.id, { mode: 'boards' })
+    })
+
     it('adds, re-roles and removes members, and keeps the last administrator', async () => {
       const board = await call('create_board', { name: 'People board' })
       const bob = db.createUser({ email: 'bob@example.com', firstName: 'Bob', lastName: 'Builder', role: 'member' })

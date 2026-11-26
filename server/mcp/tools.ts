@@ -145,9 +145,17 @@ function laneOf(lane: LaneSummary) {
   return { id: lane.id, name: lane.name, ticketCount: lane.ticketCount, isImport: lane.isImport, isDone: lane.isDone, isLive: lane.isLive }
 }
 
-/** A board member as every tool shows one. No address: an agent assigns by id. */
+/**
+ * A board member as every tool shows one. No address: an agent assigns by id. `through` is
+ * there only for an agent on the roster by a grant rather than a membership — the one member
+ * remove_board_member cannot take off, which is worth knowing before trying.
+ */
 function memberOf(member: BoardMember) {
-  return { id: member.userId, name: `${member.firstName} ${member.lastName}`.trim(), role: member.role, mayAutomate: member.mayAutomate, ...(member.isService ? { isAgent: true } : {}) }
+  return {
+    id: member.userId, name: `${member.firstName} ${member.lastName}`.trim(), role: member.role, mayAutomate: member.mayAutomate,
+    ...(member.isService ? { isAgent: true } : {}),
+    ...(member.via !== 'board' ? { through: member.via === 'instance' ? 'grant for every board' : 'workspace grant' } : {})
+  }
 }
 
 function categoryOf(category: Pick<CategorySummary, 'name' | 'color'>) {
@@ -846,8 +854,8 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
     description:
       'Open a new board in a workspace; you become its administrator. Without lanes it gets the '
       + 'default Import, Backlog, In Progress and Done. With lanes it gets exactly those, left to '
-      + 'right, and no import lane — that one belongs to the TestFlight and Jira connections, set up '
-      + 'in the UI. New tickets land in the first lane that is not the import lane unless they name one. '
+      + 'right; an import lane is added by the first TestFlight or Jira import, should the board ever '
+      + 'get one. New tickets land in the first lane that is not the import lane unless they name one. '
       + `${WORKSPACE_NOTE} Replies with the board as board_overview shows it.`,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     inputSchema: {
@@ -1038,8 +1046,8 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
     description:
       'Take somebody off a board. Tickets assigned to them keep that assignee until somebody '
       + 'changes it; their comments and history stay. The last administrator cannot be removed, and '
-      + 'an agent that reaches the board through a workspace-wide grant is not a member to remove '
-      + `here. Replies with the members left. ${STRUCTURE_NOTE}`,
+      + 'an agent listed with `through` is on the board by a grant, not a membership, and is refused '
+      + `here: an instance administrator changes the grant. Replies with the members left. ${STRUCTURE_NOTE}`,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     inputSchema: { boardId: z.string(), userId: z.string() }
   }, async (input) => {

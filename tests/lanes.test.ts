@@ -14,6 +14,18 @@ describe('boards and lanes', () => {
     db = await import('../server/utils/db')
   })
 
+  it('adds an import lane on demand to a board opened without one', () => {
+    const board = db.createBoard('Campaign', null, undefined, { lanes: [{ name: 'Open' }, { name: 'Closed', isDone: true }] })
+    expect(db.importLaneFor(board.id)).toBeNull()
+    const lane = db.ensureImportLane(board.id)!
+    expect(lane).toMatchObject({ name: 'Import', isImport: true })
+    expect(db.listLanes(board.id).map(item => item.name)).toEqual(['Import', 'Open', 'Closed'])
+    // New tickets still land in the first lane that is not the import lane, and asking again adds nothing.
+    expect(db.defaultLaneFor(board.id)?.name).toBe('Open')
+    expect(db.ensureImportLane(board.id)!.id).toBe(lane.id)
+    expect(db.listLanes(board.id)).toHaveLength(3)
+  })
+
   it('gives a new board its own lanes with one import lane', () => {
     const board = db.createBoard('Radio app')
     expect(board.lanes.map(lane => lane.name)).toEqual(['Import', 'Backlog', 'In Progress', 'Done'])

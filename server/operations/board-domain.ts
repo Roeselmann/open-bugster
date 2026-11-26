@@ -13,7 +13,7 @@ import {
   BoardNotEmptyError, CategoryNameTakenError, boardDeletionImpact, LaneDeleteError, boardMembers, boardRoleFor, countBoardAdmins, countBoards,
   createBoard, createCategory, createComment, createLane, defaultWorkspaceId, deleteBoard, deleteCategory, deleteComment, deleteLabel, deleteLane, duplicateBoard, findBoard, findBoardSummary,
   renameLabel,
-  boardJiraCredentials, boardSyncCredentials, clearBoardJiraToken, clearBoardPrivateKey, findCategory, findLane, importLaneFor, latestSyncRun, listBoards, listCategories, listComments, listLabels, listLanes,
+  boardJiraCredentials, boardSyncCredentials, clearBoardJiraToken, clearBoardPrivateKey, ensureImportLane, findCategory, findLane, latestSyncRun, listBoards, listCategories, listComments, listLabels, listLanes,
   listAgents, listUsers, moveBoardToWorkspace, personById, removeBoardMember, reorderLanes, setBoardJiraToken, setBoardMember, setBoardPrivateKey, ticketTypeBelongsToBoard, updateBoard, updateCategory, updateComment, updateLane
 } from '../utils/db'
 import {
@@ -212,8 +212,8 @@ export const importRun = defineOperation({
   requires: { scope: 'board', role: 'admin', boardId: boardOf },
   audit: { targetType: 'board', targetId: input => input.boardId, changes: ['provider'] },
   run: async (_ctx, input) => {
-    const importLane = importLaneFor(input.boardId)
-    if (!importLane) throw createError({ statusCode: 409, statusMessage: 'This board has no import lane.' })
+    // A board opened with lanes of its own has no import lane until its first import.
+    const importLane = orNotFound(ensureImportLane(input.boardId), 'Board')
     const attachmentsPath = getServerConfig().attachmentsPath
     try {
       if (input.provider === 'jira') {
@@ -374,6 +374,15 @@ export const memberRemove = defineOperation({
       throw createError({ statusCode: 409, statusMessage: 'A board needs at least one administrator.' })
     }
     if (!removeBoardMember(input.boardId, input.userId)) {
+      // An agent with a workspace-wide grant is on the roster without a membership row, so
+      // there is nothing here to remove — and "not a member" would contradict the list.
+      const granted = boardMembers(input.boardId).find(member => member.userId === input.userId && member.via !== 'board')
+      if (granted) {
+        throw createError({
+          statusCode: 409,
+          statusMessage: `This agent reaches the board through a grant for ${granted.via === 'instance' ? 'every board' : 'its whole workspace'}, not through a membership here. An instance administrator changes that grant in the agent's settings.`
+        })
+      }
       throw createError({ statusCode: 404, statusMessage: 'This account is not a member of the board.' })
     }
     return { board: findBoardSummary(input.boardId, boardViewer(ctx.account)) }

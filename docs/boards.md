@@ -16,7 +16,7 @@ Deleting a board removes all of it, including attachments and the stored key. Ti
 
 Lanes are the columns of the board and are configured under **Board settings → Board**. Drag a lane by its handle to reorder it, or focus the handle and use the arrow keys. Top to bottom in the settings is left to right on the board.
 
-Every board opened in the UI has exactly one **import lane**, which is where imports from TestFlight and Jira land. A board opened through the API or MCP with lanes of its own has none, and imports refuse until it has one. It can be renamed and reordered, but not deleted, and it only appears on the board once something has been imported into it.
+Every board opened in the UI has exactly one **import lane**, which is where imports from TestFlight and Jira land. A board opened through the API or MCP with lanes of its own starts without one; its first import adds it, named Import and leftmost (`ensureImportLane`). It can be renamed and reordered, but not deleted, and it only appears on the board once something has been imported into it.
 
 A lane can be marked **Done** in the same list. Tickets in a done lane count as finished: their card loses its due date border and they drop out of the header's due date list. A new board starts with its Done lane marked; on upgrade, every existing board had its rightmost lane (the import lane aside) marked, since that is where finished work sat until then.
 

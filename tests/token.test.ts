@@ -99,8 +99,9 @@ describe('service identities and API tokens', () => {
 
       // Outside the workspace, nothing.
       expect(await statusOf(ops.run(ops.ticketList, scout, { boardId }))).toBe(404)
-      // And a grant is not a membership a board admin can remove.
-      expect(await statusOf(ops.run(ops.memberRemove, actorOf('owner'), { boardId: later.id, userId: service.id }))).toBe(404)
+      // And a grant is not a membership a board admin can remove — said as such, since the
+      // agent is on the roster and "not a member" would contradict it.
+      expect(await statusOf(ops.run(ops.memberRemove, actorOf('owner'), { boardId: later.id, userId: service.id }))).toBe(409)
     })
 
     it('lets the higher role win where a board membership and a grant meet', async () => {

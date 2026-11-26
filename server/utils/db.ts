@@ -3199,6 +3199,27 @@ export function importLaneFor(boardId: string): Lane | null {
   return row ? toLane(row) : null
 }
 
+/**
+ * The board's import lane, added when it has none.
+ *
+ * Every board the UI opens is seeded with one; a board opened with lanes of its own (over the
+ * API or MCP) is not, and there is no way to give a lane that role afterwards. Rather than have
+ * an import refuse such a board for good, the lane appears the first time one is needed: named
+ * Import, leftmost, where the seeded one sits. The board hides it while it is empty.
+ */
+export function ensureImportLane(boardId: string): Lane | null {
+  const existing = importLaneFor(boardId)
+  if (existing) return existing
+  const db = getDb()
+  if (!findBoard(boardId)) return null
+  const id = randomUUID()
+  db.transaction(() => {
+    db.prepare('UPDATE lanes SET position = position + 1 WHERE board_id = ?').run(boardId)
+    db.prepare('INSERT INTO lanes (id, board_id, name, position, is_import) VALUES (?, ?, ?, 0, 1)').run(id, boardId, 'Import')
+  })()
+  return findLane(id)
+}
+
 /** Where manual tickets are created and archived tickets land when their lane disappears. */
 export function defaultLaneFor(boardId: string): Lane | null {
   const db = getDb()
