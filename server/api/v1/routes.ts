@@ -90,6 +90,15 @@ export const v1Routes: readonly V1Route[] = [
   { method: 'PATCH', path: '/boards/{boardId}', operation: ops.boardUpdate, response: z.object({ board: boardSummarySchema }) },
   // `?onlyIfEmpty=true` refuses with 409 while the board holds any ticket, archived ones too.
   { method: 'DELETE', path: '/boards/{boardId}', operation: ops.boardDelete, status: 204 },
+  // Ask before deleting: tickets on other boards keep a subticket from here as a plain to-do
+  // and lose a dependency on one, and this says how many.
+  { method: 'GET', path: '/boards/{boardId}/deletion-impact', operation: ops.boardGetDeletionImpact, response: z.object({ impact: z.object({
+    tickets: z.number().int().describe('Tickets on the board, archived ones included; all are deleted.'),
+    archived: z.number().int(),
+    parents: z.number().int().describe('Tickets on other boards that hold a subticket here. Each keeps the step as a plain to-do.'),
+    subtickets: z.number().int().describe('How many such subticket links there are.'),
+    waiting: z.number().int().describe('Tickets on other boards that wait on a ticket here and lose that dependency.')
+  }) }) },
   // What was done to the board's lanes, members, categories and labels — readable by every
   // member, unlike the full audit log, which stays off this surface.
   { method: 'GET', path: '/boards/{boardId}/structure-log', operation: ops.boardStructureList, response: z.object({ entries: z.array(structureEntrySchema) }) },

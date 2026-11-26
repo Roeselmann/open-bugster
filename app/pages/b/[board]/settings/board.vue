@@ -64,6 +64,23 @@ async function saveDueWarnings() {
 
 const confirmation = ref<PendingConfirmation | null>(null)
 const confirmationPending = ref(false)
+
+// What the deletion would change on other boards, read when the dialog opens so the question
+// carries its own answer. Missing (still loading, or the read failed) the dialog says nothing
+// about it rather than claiming there is nothing.
+type DeletionImpact = { tickets: number; archived: number; parents: number; subtickets: number; waiting: number }
+const deletionImpact = ref<DeletionImpact | null>(null)
+
+async function askToDeleteBoard(target: BoardSummary) {
+  deletionImpact.value = null
+  confirmation.value = { kind: 'delete-board', board: target }
+  try {
+    const { impact } = await $fetch<{ impact: DeletionImpact }>(`/api/boards/${target.id}/deletion-impact`)
+    if (confirmation.value?.kind === 'delete-board' && confirmation.value.board.id === target.id) deletionImpact.value = impact
+  } catch {
+    deletionImpact.value = null
+  }
+}
 const { notify } = useNotify()
 
 async function refreshAll() {
@@ -166,10 +183,16 @@ const confirmationCopy = computed(() => {
       tone: 'neutral' as const,
     }
   }
-  const total = action.board.ticketCount
+  const impact = deletionImpact.value
+  const total = impact?.tickets ?? action.board.ticketCount
+  const count = (value: number, one: string, many: string) => (value === 1 ? `1 ${one}` : `${value} ${many}`)
+  const elsewhere = [
+    impact?.parents ? `${count(impact.parents, 'ticket on another board keeps', 'tickets on other boards keep')} ${impact.subtickets === 1 ? 'its subticket from here as a plain to-do' : 'their subtickets from here as plain to-dos'}.` : '',
+    impact?.waiting ? `${count(impact.waiting, 'ticket on another board stops', 'tickets on other boards stop')} waiting on a ticket from here.` : '',
+  ].filter(Boolean).join(' ')
   return {
     title: `Delete board “${action.board.name}”?`,
-    description: `All lanes, ${total === 1 ? '1 ticket' : `${total} tickets`}, their attachments, categories, sync history and the stored App Store Connect key are removed for good. This cannot be undone.`,
+    description: `All lanes, ${count(total, 'ticket', 'tickets')}${impact?.archived ? ` (${impact.archived} archived)` : ''}, their attachments, categories, sync history and the stored App Store Connect key are removed for good.${elsewhere ? ` ${elsewhere}` : ''} This cannot be undone.`,
     confirmLabel: 'Delete board',
     tone: 'danger' as const,
   }
@@ -391,7 +414,7 @@ async function executeConfirmation() {
         <button
           :disabled="isLastBoard"
           class="focus-ring flex h-10 items-center gap-2 rounded-xl bg-rose-600 px-4 text-sm font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-40"
-          @click="confirmation = { kind: 'delete-board', board }"
+          @click="askToDeleteBoard(board)"
         ><Trash2 :size="16" /> Delete board</button>
       </div>
     </section>

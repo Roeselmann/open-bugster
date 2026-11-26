@@ -722,6 +722,36 @@ describe('the MCP tool surface', () => {
       expect(db.findLane(board.lanes[1].id)).not.toBeNull()
     })
 
+    it('leaves tickets on other boards their steps when a board is deleted, and says so in their history', async () => {
+      const doomed = await call('create_board', { name: 'Doomed' })
+      const backlog = doomed.lanes.find((lane: { name: string }) => lane.name === 'Backlog')
+      const done = doomed.lanes.find((lane: { isDone: boolean }) => lane.isDone)
+      const parent = await call('create_ticket', { boardId, laneId, title: 'Campaign', todos: [{ text: 'Kickoff', completed: true }] })
+      const open = await call('create_ticket', { boardId: doomed.id, laneId: backlog.id, title: 'Landing page', parentTicketId: parent.id })
+      const finished = await call('create_ticket', { boardId: doomed.id, laneId: backlog.id, title: 'Key visual', parentTicketId: parent.id })
+      await call('move_ticket', { ticketId: finished.id, laneId: done.id })
+      const waiting = await call('create_ticket', { boardId, laneId, title: 'Send-out', waitsOn: [open.id] })
+
+      expect(db.boardDeletionImpact(doomed.id)).toEqual({ tickets: 2, archived: 0, parents: 1, subtickets: 2, waiting: 1 })
+      expect(db.deleteBoard(doomed.id)).toMatchObject({ keptTodos: 2, droppedDependencies: 1 })
+
+      // The steps stay, as plain to-dos in their place: open where the subticket was open.
+      const after = await call('get_ticket', { ticketId: parent.id })
+      expect(after.todos).toEqual([
+        { text: 'Kickoff', completed: true },
+        { text: 'Landing page', completed: false },
+        { text: 'Key visual', completed: true }
+      ])
+      expect(after.progress).toMatchObject({ done: 2, total: 3, subtickets: 0 })
+      expect(db.listActivity(parent.id).filter(entry => entry.kind === 'subticket').map(entry => entry.payload)).toEqual(expect.arrayContaining([
+        { change: 'board_deleted', number: String(open.number), title: 'Landing page', board: 'Doomed' },
+        { change: 'board_deleted', number: String(finished.number), title: 'Key visual', board: 'Doomed' }
+      ]))
+      const stillWaiting = await call('get_ticket', { ticketId: waiting.id })
+      expect(stillWaiting.waitsOn).toEqual([])
+      expect(db.listActivity(waiting.id).map(entry => entry.payload)).toContainEqual({ change: 'removed', reason: 'board_deleted', number: String(open.number), title: 'Landing page', board: 'Doomed' })
+    })
+
     it('adds, re-roles and removes members, and keeps the last administrator', async () => {
       const board = await call('create_board', { name: 'People board' })
       const bob = db.createUser({ email: 'bob@example.com', firstName: 'Bob', lastName: 'Builder', role: 'member' })

@@ -10,7 +10,7 @@ import { SecretBoxError } from '../utils/secret-box'
 import { boardViewer, candidateVisibility, isInstanceAdmin, requireWorkspaceAccess } from '../utils/access'
 import { listAudit, listBoardStructureAudit } from '../utils/audit'
 import {
-  BoardNotEmptyError, CategoryNameTakenError, LaneDeleteError, boardMembers, boardRoleFor, countBoardAdmins, countBoards,
+  BoardNotEmptyError, CategoryNameTakenError, boardDeletionImpact, LaneDeleteError, boardMembers, boardRoleFor, countBoardAdmins, countBoards,
   createBoard, createCategory, createComment, createLane, defaultWorkspaceId, deleteBoard, deleteCategory, deleteComment, deleteLabel, deleteLane, duplicateBoard, findBoard, findBoardSummary,
   renameLabel,
   boardJiraCredentials, boardSyncCredentials, clearBoardJiraToken, clearBoardPrivateKey, findCategory, findLane, importLaneFor, latestSyncRun, listBoards, listCategories, listComments, listLabels, listLanes,
@@ -163,11 +163,11 @@ export const boardDelete = defineOperation({
   }),
   requires: { scope: 'board', role: 'admin', boardId: boardOf },
   audit: { targetType: 'board', targetId: input => input.boardId, changes: input => (input.onlyIfEmpty ? { onlyIfEmpty: true } : {}) },
-  run: async (_ctx, input) => {
+  run: async (ctx, input) => {
     if (countBoards() <= 1) throw createError({ statusCode: 409, statusMessage: 'The last board cannot be deleted.' })
     let deleted: { ticketIds: string[] } | null
     try {
-      deleted = deleteBoard(input.boardId, { onlyIfEmpty: input.onlyIfEmpty })
+      deleted = deleteBoard(input.boardId, { onlyIfEmpty: input.onlyIfEmpty, actor: ctx.actor })
     } catch (error) {
       if (error instanceof BoardNotEmptyError) throw createError({ statusCode: 409, statusMessage: error.message })
       throw error
@@ -180,6 +180,20 @@ export const boardDelete = defineOperation({
     await Promise.all(ticketIds.map(ticketId => rm(join(root, ticketId), { recursive: true, force: true }).catch(() => undefined)))
     return null
   }
+})
+
+/**
+ * What deleting a board would cut on other boards, so the question "really?" can be asked
+ * with the answer in it. Tickets elsewhere that hold a subticket here keep the step as a plain
+ * to-do; tickets waiting on one here lose that dependency. Both get a history entry.
+ */
+export const boardGetDeletionImpact = defineOperation({
+  name: 'board.getDeletionImpact',
+  summary: 'Read what deleting a board would remove, and what it would change on other boards',
+  input: z.object({ boardId: id }),
+  requires: { scope: 'board', role: 'admin', boardId: boardOf },
+  audit: false,
+  run: (_ctx, input) => ({ impact: orNotFound(boardDeletionImpact(input.boardId), 'Board') })
 })
 
 /** Turns what a sync or connection test threw into the HTTP error the caller should see. */

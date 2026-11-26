@@ -37,8 +37,10 @@ const sentences: Record<ActivityKind, (entry: TicketActivityEntry) => string> = 
   archived: () => 'archived it',
   restored: entry => `restored it to ${entry.payload.lane || 'the board'}`,
   commented: () => 'wrote a comment',
-  subticket: entry => `added subticket #${entry.payload.number} “${entry.payload.title}” on ${entry.payload.board || 'a board'}`,
-  waits_on: entry => entry.payload.change === 'removed' ? `no longer waits on #${entry.payload.number} “${entry.payload.title}”` : `now waits on #${entry.payload.number} “${entry.payload.title}”`,
+  subticket: entry => entry.payload.change === 'board_deleted'
+    ? `kept subticket #${entry.payload.number} “${entry.payload.title}” as a plain to-do: its board ${entry.payload.board || ''} was deleted`
+    : `added subticket #${entry.payload.number} “${entry.payload.title}” on ${entry.payload.board || 'a board'}`,
+  waits_on: entry => entry.payload.change === 'removed' ? `no longer waits on #${entry.payload.number} “${entry.payload.title}”${entry.payload.reason === 'board_deleted' ? `: its board ${entry.payload.board || ''} was deleted` : ''}` : `now waits on #${entry.payload.number} “${entry.payload.title}”`,
   decided: entry => `decided “${entry.payload.question}”: ${entry.payload.answer}`,
   reopened: entry => `reopened the decision “${entry.payload.question}”`,
   strict_order: entry => (entry.payload.to === 'strict' ? 'set the to-dos to strict order' : 'set the to-dos to loose order'),

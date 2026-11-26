@@ -3035,15 +3035,83 @@ export class BoardNotEmptyError extends Error {
  * `onlyIfEmpty` refuses a board with any ticket on it, archived ones included. The count and
  * the delete share one transaction, so a ticket filed in between cannot be swept away with it.
  */
-export function deleteBoard(id: string, options: { onlyIfEmpty?: boolean } = {}): { ticketIds: string[] } | null {
+export function deleteBoard(id: string, options: { onlyIfEmpty?: boolean; actor?: Actor | null } = {}): { ticketIds: string[]; keptTodos: number; droppedDependencies: number } | null {
   const db = getDb()
-  if (!findBoard(id)) return null
+  const board = findBoard(id)
+  if (!board) return null
   return db.transaction(() => {
     const rows = db.prepare('SELECT id, archived_at FROM tickets WHERE board_id = ?').all(id) as Array<{ id: string; archived_at: string | null }>
     if (options.onlyIfEmpty && rows.length) throw new BoardNotEmptyError(rows.length, rows.filter(row => row.archived_at).length)
+    const left = detachFromOtherBoards(db, board, options.actor ?? null)
     db.prepare('DELETE FROM boards WHERE id = ?').run(id)
-    return { ticketIds: rows.map(row => row.id) }
+    return { ticketIds: rows.map(row => row.id), ...left }
   })()
+}
+
+/** The links from tickets on other boards into this one: what deleting it would cut. */
+function linksIntoBoard(db: Database.Database, boardId: string) {
+  const subtickets = db.prepare(`
+    SELECT td.id AS todoId, td.ticket_id AS parentId, st.ticket_number AS number, st.title,
+           COALESCE(MAX(sl.is_done, sl.is_live), 0) AS done
+    FROM ticket_todos td
+    JOIN tickets st ON st.id = td.subticket_id
+    JOIN tickets p ON p.id = td.ticket_id
+    LEFT JOIN lanes sl ON sl.id = st.lane_id
+    WHERE st.board_id = ? AND p.board_id != ?
+  `).all(boardId, boardId) as Array<{ todoId: string; parentId: string; number: number; title: string; done: number }>
+  const dependencies = db.prepare(`
+    SELECT d.blocked_id AS waitingId, b.ticket_number AS number, b.title
+    FROM ticket_dependencies d
+    JOIN tickets b ON b.id = d.blocker_id
+    JOIN tickets w ON w.id = d.blocked_id
+    WHERE b.board_id = ? AND w.board_id != ?
+  `).all(boardId, boardId) as Array<{ waitingId: string; number: number; title: string }>
+  return { subtickets, dependencies }
+}
+
+/**
+ * What a board's deletion would leave behind on other boards, for the dialog that asks first.
+ * `parents` are tickets elsewhere holding a subticket here; `waiting` ones that wait on a
+ * ticket here.
+ */
+export function boardDeletionImpact(boardId: string): { tickets: number; archived: number; parents: number; subtickets: number; waiting: number } | null {
+  const db = getDb()
+  if (!findBoard(boardId)) return null
+  const counts = db.prepare('SELECT COUNT(*) AS tickets, COUNT(archived_at) AS archived FROM tickets WHERE board_id = ?').get(boardId) as { tickets: number; archived: number }
+  const { subtickets, dependencies } = linksIntoBoard(db, boardId)
+  return {
+    ...counts,
+    parents: new Set(subtickets.map(row => row.parentId)).size,
+    subtickets: subtickets.length,
+    waiting: new Set(dependencies.map(row => row.waitingId)).size
+  }
+}
+
+/**
+ * Before a board's tickets go, tickets on other boards let go of them — visibly.
+ *
+ * Both links cascade with the ticket they point at, so left alone a parent elsewhere would
+ * simply have a shorter to-do list afterwards, and might read as finished because the one
+ * open step was a ticket on the board somebody deleted. Instead the step stays, as a plain
+ * to-do under the subticket's title: open if the subticket was, ticked if it had reached a
+ * done lane. The parent's history says what happened and why, and so does that of a ticket
+ * that was waiting on one of these.
+ */
+function detachFromOtherBoards(db: Database.Database, board: Board, actor: Actor | null): { keptTodos: number; droppedDependencies: number } {
+  const { subtickets, dependencies } = linksIntoBoard(db, board.id)
+  const now = new Date().toISOString()
+  const keep = db.prepare('UPDATE ticket_todos SET subticket_id = NULL, text = ?, completed = ? WHERE id = ?')
+  const touch = db.prepare('UPDATE tickets SET updated_at = ? WHERE id = ?')
+  for (const row of subtickets) {
+    keep.run(row.title, row.done ? 1 : 0, row.todoId)
+    touch.run(now, row.parentId)
+    recordActivity(row.parentId, actor, 'subticket', { change: 'board_deleted', number: String(row.number), title: row.title, board: board.name })
+  }
+  for (const row of dependencies) {
+    touch.run(now, row.waitingId)
+    recordActivity(row.waitingId, actor, 'waits_on', { change: 'removed', reason: 'board_deleted', number: String(row.number), title: row.title, board: board.name })
+  }
+  return { keptTodos: subtickets.length, droppedDependencies: dependencies.length }
 }
 
 export function setBoardPrivateKey(id: string, pem: string, filename: string, viewer?: BoardViewer | null): BoardSummary | null {
