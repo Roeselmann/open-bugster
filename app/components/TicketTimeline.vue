@@ -136,11 +136,25 @@ function toggle(path: string) {
             </button>
           </header>
           <div class="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 sm:p-6">
-            <ul v-if="warnings.length" class="space-y-1 rounded-xl bg-orange-400/10 p-3 text-sm text-orange-800">
-              <li v-for="warning in warnings" :key="warning.message" class="flex items-start gap-2">
-                <TriangleAlert :size="15" class="mt-0.5 shrink-0" aria-hidden="true" /> <span>{{ warning.message }}</span>
-              </li>
-            </ul>
+            <!-- Folded to one bar by default, so the chart is what greets you; the same switch as the editor's link. -->
+            <div v-if="warnings.length" class="rounded-xl bg-orange-400/10 text-sm text-orange-800" :class="!warningsOpen && 'w-fit'" data-timeline-full-warnings>
+              <button
+                type="button"
+                class="focus-ring flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left font-semibold hover:bg-orange-400/10"
+                :aria-expanded="warningsOpen"
+                aria-controls="ticket-timeline-full-warnings"
+                @click="warningsOpen = !warningsOpen"
+              >
+                <TriangleAlert :size="15" class="shrink-0" aria-hidden="true" />
+                <span>{{ warnings.length }} {{ warnings.length === 1 ? 'warning' : 'warnings' }}</span>
+                <ChevronDown :size="15" class="shrink-0 transition-transform" :class="warningsOpen && 'rotate-180'" aria-hidden="true" />
+              </button>
+              <ul v-if="warningsOpen" id="ticket-timeline-full-warnings" class="space-y-1 px-3 pb-3">
+                <li v-for="warning in warnings" :key="warning.message" class="flex items-start gap-2">
+                  <TriangleAlert :size="15" class="mt-0.5 shrink-0" aria-hidden="true" /> <span>{{ warning.message }}</span>
+                </li>
+              </ul>
+            </div>
             <TimelineChart :timeline="timeline" :warned="warned" :collapsed="collapsed" size="full" @toggle="toggle" />
           </div>
         </DialogContent>
