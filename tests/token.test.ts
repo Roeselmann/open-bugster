@@ -384,4 +384,57 @@ describe('service identities and API tokens', () => {
       expect(token.resolveToken(result.secret, 'api')).toBeNull()
     })
   })
+
+  describe('who is offered as a member', () => {
+    type Candidate = { id: string; email: string | null }
+    let agencyBoard = ''
+    let agencyWorkspace = ''
+    const ids: Record<string, string> = {}
+    const candidatesFor = async (who: string, email?: string) =>
+      (await ops.run(ops.memberCandidates, actorModule.actorFor(db.findUser(ids[who]!)!), { boardId: agencyBoard, email }) as { candidates: Candidate[] }).candidates
+
+    beforeAll(() => {
+      const person = (name: string) => db.createUser({ email: `${name}@agency.example`, firstName: name, lastName: 'Test', role: 'member' }).id
+      ids.lead = person('lead')
+      ids.colleague = person('colleague')
+      ids.stranger = person('stranger')
+      // The lead administers a board in a workspace of their own; the colleague is on another
+      // board of that workspace, the stranger only on a board somewhere else.
+      const workspace = db.createWorkspace('Agency', null)
+      agencyWorkspace = workspace.id
+      agencyBoard = db.createBoard('Agency board', ids.lead, workspace.id).id
+      const second = db.createBoard('Agency second', null, workspace.id).id
+      db.setBoardMember(second, ids.colleague!, 'viewer')
+      db.setBoardMember(otherBoardId, ids.stranger!, 'viewer')
+    })
+
+    it('shows a board admin the people of their own workspaces, without addresses', async () => {
+      const candidates = await candidatesFor('lead')
+      expect(candidates.map(candidate => candidate.id)).toContain(ids.colleague)
+      expect(candidates.map(candidate => candidate.id)).not.toContain(ids.stranger)
+      expect(candidates.map(candidate => candidate.id)).not.toContain(people.owner)
+      expect(candidates.every(candidate => candidate.email === null)).toBe(true)
+    })
+
+    it('adds one account for its whole address, and nothing for a part of it', async () => {
+      const found = await candidatesFor('lead', 'Stranger@agency.example')
+      expect(found.find(candidate => candidate.id === ids.stranger)).toEqual(expect.objectContaining({ email: 'stranger@agency.example' }))
+      // The address typed is the only one given out.
+      expect(found.filter(candidate => candidate.email !== null)).toHaveLength(1)
+      expect((await candidatesFor('lead', 'stranger')).map(candidate => candidate.id)).not.toContain(ids.stranger)
+      expect((await candidatesFor('lead', '@agency.example')).map(candidate => candidate.id)).not.toContain(ids.stranger)
+    })
+
+    it('still shows an instance administrator everybody, with addresses', async () => {
+      const { candidates } = await ops.run(ops.memberCandidates, actorOf('owner'), { boardId: agencyBoard }) as { candidates: Candidate[] }
+      expect(candidates.find(candidate => candidate.id === ids.stranger)).toEqual(expect.objectContaining({ email: 'stranger@agency.example' }))
+    })
+
+    it('applies the same rule to a workspace', async () => {
+      db.setWorkspaceMember(agencyWorkspace, ids.lead!, 'admin')
+      const run = async (email?: string) => (await ops.run(ops.workspaceMemberCandidates, actorModule.actorFor(db.findUser(ids.lead!)!), { workspaceId: agencyWorkspace, email }) as { candidates: Candidate[] }).candidates
+      expect((await run()).map(candidate => candidate.id)).toEqual([ids.colleague])
+      expect((await run('stranger@agency.example')).map(candidate => candidate.id)).toContain(ids.stranger)
+    })
+  })
 })

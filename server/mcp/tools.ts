@@ -981,11 +981,16 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
 
   server.registerTool('member_candidates', {
     title: 'Who can join a board',
-    description: `The people and agents with an account here who are not on this board yet — the userIds set_board_member takes. ${STRUCTURE_NOTE}`,
+    description: 'The people and agents who are not on this board yet — the userIds set_board_member takes. Unless the principal administers the instance, '
+      + 'the list holds only those it shares a workspace with: nobody is shown the accounts of other workspaces. To add somebody from outside, give their whole '
+      + `e-mail address as email; the account it belongs to, if any, joins the list. ${STRUCTURE_NOTE}`,
     annotations: readsOnly,
-    inputSchema: { boardId: z.string() }
-  }, async ({ boardId }) => {
-    const { candidates } = await call<{ candidates: Array<{ id: string; firstName: string; lastName: string; isService: boolean }> }>(ops.memberCandidates, { boardId })
+    inputSchema: {
+      boardId: z.string(),
+      email: z.string().max(254).optional().describe('The whole address of one account to look up, exactly; no partial matches.')
+    }
+  }, async ({ boardId, email }) => {
+    const { candidates } = await call<{ candidates: Array<{ id: string; firstName: string; lastName: string; isService: boolean }> }>(ops.memberCandidates, { boardId, email })
     // Names only, as board_overview shows its members: an agent adds somebody by id.
     return reply(candidates.map(person => ({ id: person.id, name: `${person.firstName} ${person.lastName}`.trim(), ...(person.isService ? { isAgent: true } : {}) })))
   })

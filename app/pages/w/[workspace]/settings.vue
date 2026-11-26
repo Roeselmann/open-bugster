@@ -4,7 +4,7 @@ import type { BoardSummary, UserStatus, WorkspaceMember, WorkspaceRole } from '~
 
 definePageMeta({ middleware: 'workspace' })
 
-type Candidate = { id: string; email: string; firstName: string; lastName: string; status: UserStatus }
+type Candidate = { id: string; email: string | null; firstName: string; lastName: string; status: UserStatus }
 
 const route = useRoute()
 const workspaceId = computed(() => String(route.params.workspace || ''))
@@ -295,7 +295,7 @@ const adding = ref(false)
 
 const candidateOptions = computed(() => candidates.value.map(candidate => ({
   value: candidate.id,
-  label: `${displayName(candidate)} · ${candidate.email}`,
+  label: candidate.email ? `${displayName(candidate)} · ${candidate.email}` : displayName(candidate),
 })))
 
 async function loadCandidates() {
@@ -311,6 +311,32 @@ async function loadCandidates() {
 }
 
 watch(() => [workspaceId.value, workspace.value?.members.length], loadCandidates, { immediate: true })
+
+// Without instance rights the list above holds only people from one's own workspaces. Somebody
+// else is reached by their whole address — knowing it is what shows one knows the person.
+const lookupEmail = ref('')
+const lookupBusy = ref(false)
+
+async function findByEmail() {
+  const email = lookupEmail.value.trim()
+  if (!email) return
+  lookupBusy.value = true
+  try {
+    const response = await $fetch<{ candidates: Candidate[] }>(`/api/workspaces/${workspaceId.value}/members/candidates`, { query: { email } })
+    const found = response.candidates.find(candidate => candidate.email?.toLowerCase() === email.toLowerCase())
+    if (!found) {
+      notify('error', 'No account with this address is left to add. An instance administrator can invite new people under Users.')
+      return
+    }
+    candidates.value = response.candidates
+    selectedCandidate.value = found.id
+    lookupEmail.value = ''
+  } catch (error) {
+    notify('error', errorText(error))
+  } finally {
+    lookupBusy.value = false
+  }
+}
 
 async function addMember() {
   if (!selectedCandidate.value) return
@@ -546,7 +572,7 @@ async function deleteWorkspace() {
           <div v-if="candidateOptions.length" class="min-w-56 flex-1">
             <UiSelect v-model="selectedCandidate" :options="candidateOptions" aria-label="Account to add to this workspace" />
           </div>
-          <p v-else class="muted flex-1 text-sm">Every account already belongs to this workspace. New people are created under Users.</p>
+          <p v-else class="muted flex-1 text-sm">{{ instanceAdmin ? 'Every account already belongs to this workspace. New people are created under Users.' : 'Nobody else you work with is left to add.' }}</p>
           <div v-if="candidateOptions.length" class="w-40 shrink-0">
             <UiSelect v-model="selectedRole" :options="roleOptions" aria-label="Role for the new member" />
           </div>
@@ -556,6 +582,15 @@ async function deleteWorkspace() {
             class="focus-ring flex h-11 items-center gap-2 rounded-xl bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-ink)] transition hover:opacity-85 disabled:opacity-50"
           >
             <UserPlus :size="16" aria-hidden="true" /> {{ adding ? 'Adding…' : 'Add member' }}
+          </button>
+        </form>
+        <form v-if="!instanceAdmin" class="flex flex-wrap items-center gap-3 border-t border-[var(--line)] px-5 py-4" @submit.prevent="findByEmail">
+          <label class="min-w-56 flex-1">
+            <span class="muted mb-1.5 block text-xs">Somebody not in the list? The list shows people you share a workspace with. Enter the whole e-mail address of anyone else.</span>
+            <input v-model="lookupEmail" type="email" autocomplete="off" placeholder="name@example.com" aria-label="E-mail address of an account to add to this workspace" class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none">
+          </label>
+          <button :disabled="lookupBusy || !lookupEmail.trim()" class="focus-ring surface-strong mt-auto flex h-11 items-center rounded-xl px-4 text-sm font-semibold transition hover:opacity-85 disabled:opacity-50">
+            {{ lookupBusy ? 'Looking…' : 'Find account' }}
           </button>
         </form>
       </section>

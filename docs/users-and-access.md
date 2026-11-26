@@ -48,6 +48,8 @@ The account exists from the moment you create it, so it can already be added to 
 
 **Board settings → Users** lists who has access and at what role, and board administrators add and remove people and change their role there. Anyone else who has the address sees the roster without controls. A board always keeps at least one administrator.
 
+**Who can be added.** An instance administrator picks from every account. Any other board or workspace administrator is offered only the people they already share a workspace with: members of a workspace they are in, and anybody on one of its boards. Somebody from outside is reached by typing their whole e-mail address under the list, which adds that one account to it; part of an address finds nothing. This keeps one customer or agency from reading the names of all the others off the picker. The same rule holds for `GET /boards/{boardId}/member-candidates` (`?email=`), where addresses are returned to instance administrators and for the address that was looked up, and for the MCP tool `member_candidates`.
+
 <p align="center">
 <img src="images/screenshot-settings-users.png">
 </p>
@@ -103,7 +105,7 @@ So Open-Bugster separates the two. **Anonymize** clears the email, the name, the
 ## Surfaces
 
 - **Internal routes:** `server/api/auth/login.post.ts`, `logout.post.ts`; `server/api/users/index.get.ts`, `index.post.ts`, `[id].patch.ts`, `[id].delete.ts`, `[id]/anonymize.post.ts`, `[id]/invite.post.ts`, `[id]/invite.delete.ts`; `server/api/invite/[token].get.ts`, `[token].post.ts`; `server/api/profile/index.patch.ts`, `password.post.ts`, `avatar.get.ts`, `avatar.put.ts`, `avatar.delete.ts`, `avatar/original.get.ts`; `server/api/avatars/[id].get.ts`; `server/api/boards/[id]/members/*`.
-- **REST v1:** board membership only (`/boards/{boardId}/members`, `/member-candidates`). User administration is deliberately absent, and a test keeps it that way.
+- **REST v1:** board membership only (`/boards/{boardId}/members`, `/member-candidates`, which takes `?email=` to look one account up by its whole address). User administration is deliberately absent, and a test keeps it that way.
 - **MCP:** `whoami` reports the principal behind the token. No user tools.
 - **Webhooks:** none.
 

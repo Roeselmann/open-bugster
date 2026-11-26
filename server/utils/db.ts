@@ -2529,6 +2529,29 @@ export function workspaceRoleFor(workspaceId: string, userId: string): Workspace
   return row?.role || null
 }
 
+/**
+ * Everybody who shares a workspace with this user: a member of one the user is in, or on a
+ * board of one. "In" a workspace reads the same both ways — a membership row, or any of its
+ * boards letting them in — so two people on different boards of one workspace count, and two
+ * people in different workspaces of the same instance do not.
+ *
+ * It is what somebody without instance rights may be shown of the account list: the people
+ * they could already come across, and nobody else's customers.
+ */
+export function principalsSharingWorkspaceWith(userId: string): Set<string> {
+  const rows = getDb().prepare(`
+    WITH mine AS (
+      SELECT workspace_id FROM workspace_members WHERE user_id = ?
+      UNION
+      SELECT b.workspace_id FROM boards b JOIN board_access a ON a.board_id = b.id WHERE a.user_id = ?
+    )
+    SELECT user_id FROM workspace_members WHERE workspace_id IN (SELECT workspace_id FROM mine)
+    UNION
+    SELECT a.user_id FROM board_access a JOIN boards b ON b.id = a.board_id WHERE b.workspace_id IN (SELECT workspace_id FROM mine)
+  `).all(userId, userId) as Array<{ user_id: string }>
+  return new Set(rows.map(row => row.user_id))
+}
+
 /** Whether one of the workspace's boards lets this user in, membership row or not. */
 export function workspaceReachableThroughBoards(workspaceId: string, userId: string): boolean {
   return Boolean(getDb().prepare(`

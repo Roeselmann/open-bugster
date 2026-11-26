@@ -1,6 +1,6 @@
 import { createError } from 'h3'
 import { z } from 'zod'
-import { boardViewer } from '../utils/access'
+import { boardViewer, candidateVisibility } from '../utils/access'
 import {
   countWorkspaceBoards, countWorkspaces, createWorkspace, deleteWorkspace, findWorkspaceSummary,
   listUsers, listWorkspaces, removeWorkspaceMember, reorderWorkspaceBoards, setWorkspaceMember,
@@ -106,15 +106,17 @@ export const workspaceMemberRemove = defineOperation({
 export const workspaceMemberCandidates = defineOperation({
   name: 'workspace.member.candidates',
   summary: 'List accounts that could still be added to a workspace',
-  input: z.object({ workspaceId: id }),
+  input: z.object({ workspaceId: id, email: z.string().trim().max(254).optional() }),
   requires: { scope: 'workspace', role: 'admin', workspaceId: workspaceOf },
   audit: false,
-  run: (_ctx, input) => {
+  run: (ctx, input) => {
     const existing = new Set(workspaceMembers(input.workspaceId).map(member => member.userId))
+    // The same rule as a board's candidates: see `candidateVisibility`.
+    const visible = candidateVisibility(ctx.actor, input.email)
     return {
       candidates: listUsers()
-        .filter(user => !existing.has(user.id) && !user.anonymizedAt)
-        .map(user => ({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, status: user.status }))
+        .filter(user => !existing.has(user.id) && !user.anonymizedAt && visible.sees(user.id))
+        .map(user => ({ id: user.id, email: visible.emailOf(user.id, user.email), firstName: user.firstName, lastName: user.lastName, status: user.status }))
     }
   }
 })

@@ -7,7 +7,7 @@ import { JiraApiError, syncJira, verifyJiraAccess } from '../utils/jira'
 import { tokenLabel } from '../utils/jira-policy'
 import { getServerConfig } from '../utils/config'
 import { SecretBoxError } from '../utils/secret-box'
-import { boardViewer, isInstanceAdmin, requireWorkspaceAccess } from '../utils/access'
+import { boardViewer, candidateVisibility, isInstanceAdmin, requireWorkspaceAccess } from '../utils/access'
 import { listAudit, listBoardStructureAudit } from '../utils/audit'
 import {
   BoardNotEmptyError, CategoryNameTakenError, LaneDeleteError, boardMembers, boardRoleFor, countBoardAdmins, countBoards,
@@ -304,20 +304,25 @@ export const memberList = defineOperation({
 export const memberCandidates = defineOperation({
   name: 'member.candidates',
   summary: 'List accounts that could still be added to a board',
-  input: z.object({ boardId: id }),
+  input: z.object({
+    boardId: id,
+    email: z.string().trim().max(254).optional()
+      .describe('The whole e-mail address of somebody not in the list. Without instance rights the list holds only people you share a workspace with; an exact address adds that one account to it.')
+  }),
   requires: { scope: 'board', role: 'admin', boardId: boardOf },
   audit: false,
-  run: (_ctx, input) => {
+  run: (ctx, input) => {
     const existing = new Set(boardMembers(input.boardId).map(member => member.userId))
+    const visible = candidateVisibility(ctx.actor, input.email)
     return {
       candidates: [
         ...listUsers()
           // An anonymized account is a tombstone: it keeps its history and is offered to nobody.
-          .filter(user => !existing.has(user.id) && !user.anonymizedAt)
-          .map(user => ({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, status: user.status, isService: false })),
+          .filter(user => !existing.has(user.id) && !user.anonymizedAt && visible.sees(user.id))
+          .map(user => ({ id: user.id, email: visible.emailOf(user.id, user.email), firstName: user.firstName, lastName: user.lastName, status: user.status, isService: false })),
         // Agents join a board like anybody else; a disabled one would be a member who cannot act.
         ...listAgents()
-          .filter(agent => !existing.has(agent.id) && agent.status === 'active')
+          .filter(agent => !existing.has(agent.id) && agent.status === 'active' && visible.sees(agent.id))
           .map(agent => ({ id: agent.id, email: null, firstName: agent.name, lastName: '', status: agent.status, isService: true })),
       ]
     }

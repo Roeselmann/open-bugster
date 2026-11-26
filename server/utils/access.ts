@@ -3,8 +3,8 @@ import type { BoardRole, WorkspaceRole } from '../../shared/types/domain'
 import type { Actor } from './actor'
 import { ceilingFor } from './token'
 import {
-  boardAutomationAllowed, boardMembers, boardRoleFor, findBoard, findComment, findTicket,
-  findWorkspace, workspaceReachableThroughBoards, workspaceRoleFor, type UserRecord
+  boardAutomationAllowed, boardMembers, boardRoleFor, findBoard, findComment, findTicket, findUserByEmail,
+  findWorkspace, principalsSharingWorkspaceWith, workspaceReachableThroughBoards, workspaceRoleFor, type UserRecord
 } from './db'
 
 const rank: Record<BoardRole, number> = { viewer: 0, editor: 1, admin: 2 }
@@ -142,6 +142,28 @@ export function requireTicketAccess(actor: Actor, ticketId: string, minimum: Boa
   // id is not a way to keep reading it, its comments, or its history.
   if (ticket.archivedAt && role !== 'admin') throw createError({ statusCode: 404, statusMessage: 'Ticket not found.' })
   return { actor, account, role, ticket }
+}
+
+/**
+ * Which accounts somebody adding a member may be shown.
+ *
+ * An instance administrator sees every account: managing them is the job. Anybody else — a
+ * board or workspace admin who is an agency, a customer, an agent with one workspace — sees
+ * the people they already share a workspace with, and can reach one more by typing that
+ * person's whole e-mail address. Knowing the address is the proof of knowing the person; a
+ * list of everybody on the instance would hand one customer the names of all the others.
+ *
+ * `email` is only returned to an instance administrator, or for the address the caller typed.
+ */
+export function candidateVisibility(actor: Actor, lookupEmail?: string) {
+  const everyone = isInstanceAdmin(actor.principal)
+  const known = everyone ? null : principalsSharingWorkspaceWith(actor.principal.id)
+  const lookedUp = lookupEmail ? findUserByEmail(lookupEmail) : null
+  const lookedUpId = lookedUp && !lookedUp.anonymizedAt ? lookedUp.id : null
+  return {
+    sees: (id: string) => everyone || known!.has(id) || id === lookedUpId,
+    emailOf: (id: string, email: string | null) => (everyone || id === lookedUpId ? email : null)
+  }
 }
 
 /** The people a ticket on this board may be assigned to, or attributed to. */
