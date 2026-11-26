@@ -8,17 +8,19 @@ import { tokenLabel } from '../utils/jira-policy'
 import { getServerConfig } from '../utils/config'
 import { SecretBoxError } from '../utils/secret-box'
 import { boardViewer, isInstanceAdmin, requireWorkspaceAccess } from '../utils/access'
-import { listAudit } from '../utils/audit'
+import { listAudit, listBoardStructureAudit } from '../utils/audit'
 import {
-  CategoryNameTakenError, LaneDeleteError, boardMembers, boardRoleFor, countBoardAdmins, countBoards,
-  createBoard, createComment, createLane, defaultWorkspaceId, deleteBoard, deleteCategory, deleteComment, deleteLane, duplicateBoard, findBoard, findBoardSummary,
+  BoardNotEmptyError, CategoryNameTakenError, LaneDeleteError, boardMembers, boardRoleFor, countBoardAdmins, countBoards,
+  createBoard, createCategory, createComment, createLane, defaultWorkspaceId, deleteBoard, deleteCategory, deleteComment, deleteLabel, deleteLane, duplicateBoard, findBoard, findBoardSummary,
+  renameLabel,
   boardJiraCredentials, boardSyncCredentials, clearBoardJiraToken, clearBoardPrivateKey, findCategory, findLane, importLaneFor, latestSyncRun, listBoards, listCategories, listComments, listLabels, listLanes,
   listAgents, listUsers, moveBoardToWorkspace, personById, removeBoardMember, reorderLanes, setBoardJiraToken, setBoardMember, setBoardPrivateKey, ticketTypeBelongsToBoard, updateBoard, updateCategory, updateComment, updateLane
 } from '../utils/db'
 import {
   boardCreateSchema, boardMemberSchema, boardUpdateSchema, categoryUpdateSchema, commentSaveSchema, connectionTestSchema,
-  importRequestSchema, jiraConnectionTestSchema, jiraTokenSchema, laneCreateSchema, laneOrderSchema, laneUpdateSchema
+  importRequestSchema, jiraConnectionTestSchema, jiraTokenSchema, labelNameSchema, laneCreateSchema, laneOrderSchema, laneUpdateSchema
 } from '../utils/validation'
+import { categoryColors } from '../../shared/types/domain'
 import { createdId, defineOperation, type OperationContext } from './types'
 import { orNotFound } from './run'
 
@@ -56,13 +58,30 @@ export const boardGet = defineOperation({
 export const boardCreate = defineOperation({
   name: 'board.create',
   summary: 'Open a new board',
-  input: boardCreateSchema,
+  // `description` and `lanes` came later and are optional, so a client that sends only a name
+  // still gets the seeded lanes it always did. They live here rather than on the shared
+  // schema because `board.duplicate` extends that one and copies its lanes from the source.
+  input: boardCreateSchema.extend({
+    description: boardUpdateSchema.shape.description.unwrap().optional(),
+    lanes: z.array(laneCreateSchema).min(1).max(30).optional()
+      .describe('The board\'s lanes, left to right, instead of the default Import, Backlog, In Progress and Done. None of them is an import lane. A lane with isLive is not also isDone.')
+  }),
   // Was instance-scoped before workspaces existed. A workspace admin opens boards in their
   // own workspace now; an omitted id resolves to the default workspace, so pre-workspace
   // clients keep working — and instance admins pass either way, as they always did.
   requires: { scope: 'workspace', role: 'admin', workspaceId: input => input.workspaceId ?? defaultWorkspaceId() },
-  audit: { targetType: 'board', targetId: createdId('board'), changes: ['name', 'workspaceId'] },
-  run: (ctx, input) => ({ board: createBoard(input.name, ctx.account.id, input.workspaceId ?? defaultWorkspaceId()) })
+  audit: {
+    targetType: 'board',
+    targetId: createdId('board'),
+    changes: input => ({
+      name: input.name,
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      ...(input.lanes ? { lanes: input.lanes.map(lane => lane.name) } : {})
+    })
+  },
+  run: (ctx, input) => ({
+    board: createBoard(input.name, ctx.account.id, input.workspaceId ?? defaultWorkspaceId(), { description: input.description, lanes: input.lanes })
+  })
 })
 
 export const boardUpdate = defineOperation({
@@ -72,7 +91,7 @@ export const boardUpdate = defineOperation({
   requires: { scope: 'board', role: 'admin', boardId: boardOf },
   // The App Store Connect ids are configuration, not secrets — the private key never passes
   // through this operation at all, and could not be logged even by mistake.
-  audit: { targetType: 'board', targetId: input => input.boardId, changes: input => ({ fields: Object.keys(input).filter(key => key !== 'boardId').sort() }) },
+  audit: { targetType: 'board', targetId: input => input.boardId, changes: input => ({ fields: changedFields(input, 'boardId') }) },
   run: (ctx, input) => {
     const { boardId, ...fields } = input
     if (fields.importTypeId && !ticketTypeBelongsToBoard(fields.importTypeId, boardId)) {
@@ -135,12 +154,25 @@ export const boardDuplicate = defineOperation({
 export const boardDelete = defineOperation({
   name: 'board.delete',
   summary: 'Delete a board and everything on it',
-  input: z.object({ boardId: id }),
+  input: z.object({
+    boardId: id,
+    // Off by default, which is how this operation always behaved. The MCP tool always sets it:
+    // an agent tidying up should never be one call away from deleting somebody's tickets.
+    onlyIfEmpty: z.boolean().default(false)
+      .describe('Refuse with 409 while the board holds any ticket, archived ones included.')
+  }),
   requires: { scope: 'board', role: 'admin', boardId: boardOf },
-  audit: { targetType: 'board', targetId: input => input.boardId },
+  audit: { targetType: 'board', targetId: input => input.boardId, changes: input => (input.onlyIfEmpty ? { onlyIfEmpty: true } : {}) },
   run: async (_ctx, input) => {
     if (countBoards() <= 1) throw createError({ statusCode: 409, statusMessage: 'The last board cannot be deleted.' })
-    const { ticketIds } = orNotFound(deleteBoard(input.boardId), 'Board')
+    let deleted: { ticketIds: string[] } | null
+    try {
+      deleted = deleteBoard(input.boardId, { onlyIfEmpty: input.onlyIfEmpty })
+    } catch (error) {
+      if (error instanceof BoardNotEmptyError) throw createError({ statusCode: 409, statusMessage: error.message })
+      throw error
+    }
+    const { ticketIds } = orNotFound(deleted, 'Board')
     // The attachments belong to the tickets that just went, so clearing them belongs here
     // rather than in a route — every surface that can delete a board owes the same cleanup.
     // The rows are gone either way; a leftover folder beats failing the request.
@@ -198,10 +230,10 @@ export const laneCreate = defineOperation({
   summary: 'Add a lane to a board',
   input: laneCreateSchema.extend({ boardId: id }),
   requires: { scope: 'board', role: 'admin', boardId: boardOf },
-  audit: { targetType: 'lane', changes: ['name'] },
+  audit: { targetType: 'lane', targetId: createdId('lane'), changes: ['name', 'isDone', 'isLive'] },
   run: (_ctx, input) => {
-    orNotFound(createLane(input.boardId, input.name), 'Board')
-    return { lanes: listLanes(input.boardId) }
+    const lane = orNotFound(createLane(input.boardId, input.name, { isDone: input.isDone, isLive: input.isLive }), 'Board')
+    return { lane, lanes: listLanes(input.boardId) }
   }
 })
 
@@ -236,14 +268,21 @@ export const laneDelete = defineOperation({
   summary: 'Remove a lane, archiving or moving what is on it',
   input: z.discriminatedUnion('mode', [
     z.object({ boardId: id, laneId: id, mode: z.literal('move'), targetLaneId: id }),
-    z.object({ boardId: id, laneId: id, mode: z.literal('archive') })
+    z.object({ boardId: id, laneId: id, mode: z.literal('archive') }),
+    // Checked inside the deleting transaction, so a ticket landing meanwhile is not swept along.
+    z.object({ boardId: id, laneId: id, mode: z.literal('empty').describe('Delete only a lane holding no open tickets; 409 otherwise.') })
   ]),
   requires: { scope: 'board', role: 'admin', boardId: boardOf },
-  audit: { targetType: 'lane', targetId: input => input.laneId, changes: ['mode'] },
+  // The name goes into the log because the lane is gone afterwards: an entry that only held
+  // its id would tell a reader of the board's history nothing.
+  audit: { targetType: 'lane', targetId: input => input.laneId, changes: (input, result) => ({ mode: input.mode, ...deletedName(result) }) },
   run: (_ctx, input) => {
-    laneOfBoard(input.laneId, input.boardId)
+    const lane = laneOfBoard(input.laneId, input.boardId)
     try {
-      return { lanes: deleteLane(input.laneId, input.mode, input.mode === 'move' ? input.targetLaneId : undefined) }
+      return {
+        lanes: deleteLane(input.laneId, input.mode, input.mode === 'move' ? input.targetLaneId : undefined),
+        deleted: { id: lane.id, name: lane.name }
+      }
     } catch (error) {
       if (error instanceof LaneDeleteError) throw createError({ statusCode: error.statusCode, statusMessage: error.message })
       throw error
@@ -292,6 +331,11 @@ export const memberSet = defineOperation({
   requires: { scope: 'board', role: 'admin', boardId: boardOf },
   audit: { targetType: 'user', targetId: input => input.userId, changes: ['role', 'mayAutomate'] },
   run: (ctx, input) => {
+    // The same rule `member.remove` keeps: demoting the last administrator would leave the
+    // board's settings reachable to instance administrators only.
+    if (input.role !== 'admin' && boardRoleFor(input.boardId, input.userId) === 'admin' && countBoardAdmins(input.boardId) <= 1) {
+      throw createError({ statusCode: 409, statusMessage: 'A board needs at least one administrator.' })
+    }
     const member = setBoardMember(input.boardId, input.userId, input.role, input.mayAutomate)
     if (!member) throw createError({ statusCode: 404, statusMessage: 'This account does not exist.' })
     return { member, board: findBoardSummary(input.boardId, boardViewer(ctx.account)) }
@@ -373,6 +417,30 @@ export const categoryList = defineOperation({
   run: (_ctx, input) => ({ categories: listCategories(input.boardId) })
 })
 
+/**
+ * A ticket naming a category it does not know opens one on the fly, always neutral. This is the
+ * deliberate way: a name the board already has is refused rather than reused.
+ */
+export const categoryCreate = defineOperation({
+  name: 'category.create',
+  summary: 'Add a category to a board',
+  input: z.object({
+    boardId: id,
+    name: categoryUpdateSchema.shape.name.unwrap(),
+    color: z.enum(categoryColors).default('neutral')
+  }),
+  requires: { scope: 'board', role: 'admin', boardId: boardOf },
+  audit: { targetType: 'category', targetId: createdId('category'), changes: ['name', 'color'] },
+  run: (_ctx, input) => {
+    try {
+      return { category: orNotFound(createCategory(input.boardId, input.name, input.color), 'Board') }
+    } catch (error) {
+      if (error instanceof CategoryNameTakenError) throw createError({ statusCode: 409, statusMessage: error.message })
+      throw error
+    }
+  }
+})
+
 export const categoryUpdate = defineOperation({
   name: 'category.update',
   summary: 'Rename or recolour a category',
@@ -394,10 +462,12 @@ export const categoryDelete = defineOperation({
   summary: 'Remove a category from a board',
   input: z.object({ categoryId: id }),
   requires: { scope: 'board', role: 'admin', boardId: input => categoryBoard(input.categoryId) },
-  audit: { targetType: 'category', targetId: input => input.categoryId },
+  audit: { targetType: 'category', targetId: input => input.categoryId, changes: (_input, result) => deletedName(result) },
   run: (_ctx, input) => {
-    if (!deleteCategory(input.categoryId)) throw createError({ statusCode: 404, statusMessage: 'Category not found.' })
-    return null
+    const category = findCategory(input.categoryId)
+    if (!category || !deleteCategory(input.categoryId)) throw createError({ statusCode: 404, statusMessage: 'Category not found.' })
+    // Answered with 204 over REST; the name is here for the log, as with a deleted lane.
+    return { deleted: { id: category.id, name: category.name } }
   }
 })
 
@@ -408,6 +478,39 @@ export const labelList = defineOperation({
   requires: { scope: 'board', role: 'viewer', boardId: boardOf },
   audit: false,
   run: (_ctx, input) => ({ labels: listLabels(input.boardId) })
+})
+
+/**
+ * Labels have no settings page of their own — they come and go with the tickets that carry
+ * them — so these two are the only way to tidy them up in bulk. Board admin, like every other
+ * change to a board's vocabulary. Addressed by name, which is all a ticket ever shows.
+ */
+export const labelRename = defineOperation({
+  name: 'label.rename',
+  summary: 'Rename a board’s label, merging it into one that already has the new name',
+  input: z.object({
+    boardId: id,
+    name: labelNameSchema.describe('The label as it is now; matched case-insensitively.'),
+    newName: labelNameSchema.describe('Onto a name another label already has, the two merge: every ticket keeps the one label.')
+  }),
+  requires: { scope: 'board', role: 'admin', boardId: boardOf },
+  audit: { targetType: 'label', targetId: (_input, result) => (result as { label?: { id?: string } } | null)?.label?.id ?? null, changes: ['name', 'newName'] },
+  run: (_ctx, input) => {
+    const change = orNotFound(renameLabel(input.boardId, input.name, input.newName), 'Label')
+    return { ...change, labels: listLabels(input.boardId) }
+  }
+})
+
+export const labelDelete = defineOperation({
+  name: 'label.delete',
+  summary: 'Take a label off every ticket of a board',
+  input: z.object({ boardId: id, name: labelNameSchema.describe('Matched case-insensitively.') }),
+  requires: { scope: 'board', role: 'admin', boardId: boardOf },
+  audit: { targetType: 'label', changes: ['name'] },
+  run: (_ctx, input) => {
+    const change = orNotFound(deleteLabel(input.boardId, input.name), 'Label')
+    return { ticketsTouched: change.ticketsTouched, labels: listLabels(input.boardId) }
+  }
 })
 
 /* ── App Store Connect credentials ──────────────────────────────────────── */
@@ -566,7 +669,81 @@ export const auditList = defineOperation({
   }
 })
 
+/**
+ * What has been done to a board's shape — its name, lanes, people, categories and labels —
+ * for anybody who can read the board.
+ *
+ * A separate read from `audit.list` rather than a looser rule on it: that one is the whole
+ * log, refusals, channels and all, and stays with the board's administrators. This returns
+ * only successful entries of the operations below, and of each only the fields its own audit
+ * spec already allowlisted — never an IP, a token id, or an attempt somebody was refused.
+ * Ticket changes are not here; the ticket history covers them.
+ */
+export const structureOperations = [
+  'board.create', 'board.update',
+  'lane.create', 'lane.update', 'lane.reorder', 'lane.delete',
+  'member.set', 'member.remove',
+  'category.create', 'category.update', 'category.delete',
+  'label.rename', 'label.delete'
+] as const
+
+export const boardStructureList = defineOperation({
+  name: 'board.structure.list',
+  summary: 'Read how a board’s lanes, members, categories and labels were changed',
+  input: z.object({
+    boardId: id,
+    since: z.string().trim().max(40).optional().describe('ISO timestamp; only entries at or after it.'),
+    limit: z.number().int().min(1).max(200).optional()
+  }),
+  requires: { scope: 'board', role: 'viewer', boardId: boardOf },
+  audit: false,
+  run: (_ctx, input) => ({
+    entries: listBoardStructureAudit(input.boardId, structureOperations, { since: input.since, limit: input.limit ?? 50 }).map(entry => ({
+      operation: entry.operation,
+      at: entry.at,
+      // Who, by name only: the person directory carries an address, and a viewer reading the
+      // board's history has no business with somebody's e-mail.
+      principal: nameOnly(personById(entry.principalId)),
+      agentId: entry.agentId,
+      targetType: entry.targetType,
+      targetId: entry.targetId,
+      // The name as it is now, where the thing still exists; a deleted lane is just its id.
+      targetName: structureTargetName(entry.targetType, entry.targetId),
+      changes: entry.changes
+    }))
+  })
+})
+
+function nameOnly(person: { id: string; firstName: string; lastName: string } | null) {
+  return person ? { id: person.id, firstName: person.firstName, lastName: person.lastName } : null
+}
+
+function structureTargetName(targetType: string, targetId: string | null): string | null {
+  if (!targetId) return null
+  switch (targetType) {
+    case 'board': return findBoard(targetId)?.name ?? null
+    case 'lane': return findLane(targetId)?.name ?? null
+    case 'category': return findCategory(targetId)?.name ?? null
+    case 'user': {
+      const person = personById(targetId)
+      return person ? `${person.firstName} ${person.lastName}`.trim() || null : null
+    }
+    default: return null
+  }
+}
+
 /* ── helpers ────────────────────────────────────────────────────────────── */
+
+/** The fields a partial update actually carried. A key present but undefined was not sent. */
+function changedFields(input: Record<string, unknown>, idKey: string): string[] {
+  return Object.keys(input).filter(key => key !== idKey && input[key] !== undefined).sort()
+}
+
+/** What a delete leaves for the log: the name of the thing that is no longer there to look up. */
+function deletedName(result: unknown): { name?: string } {
+  const name = (result as { deleted?: { name?: unknown } } | null | undefined)?.deleted?.name
+  return typeof name === 'string' ? { name } : {}
+}
 
 /**
  * A lane id alone would let a board admin reach into another board's lanes, so every lane

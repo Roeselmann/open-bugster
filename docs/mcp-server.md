@@ -17,15 +17,15 @@ Mint a token under **Your profile → Integrations** (see [api.md](api.md) for s
 }
 ```
 
-The tools are shaped around what somebody actually asks for: searching one board or every reachable one, filing a ticket with its to-do list, commenting, asking `whats_new` for everything that happened on a board since a timestamp, restoring what was archived by mistake, and attaching a file. For a file online the agent hands over a link (a Telegram file URL, say) and the server downloads it itself; for one on the agent's own disk it asks for a one-time upload address and sends the file there with `curl`. Either way no bytes ever travel through the model's context.
+The tools are shaped around what somebody actually asks for: searching one board or every reachable one, filing a ticket with its to-do list, commenting, asking `whats_new` for everything that happened on a board since a timestamp, restoring what was archived by mistake, and attaching a file. A second, smaller group lets an agent with an account of its own organise its boards: open and rename boards, lay out lanes, add people, tidy labels and categories, and keep the workspace's ticket types. For a file online the agent hands over a link (a Telegram file URL, say) and the server downloads it itself; for one on the agent's own disk it asks for a one-time upload address and sends the file there with `curl`. Either way no bytes ever travel through the model's context.
 
 The **What an agent can do** panel under **Your profile → Integrations** lists the tools of the running build. An agent's actions appear in ticket histories and the audit log as *via <agent label>*, beside the person who answers for it.
 
-## The surface: sixteen tools, on purpose
+## The surface: twenty-eight tools, on purpose
 
-Tool-selection accuracy falls off well before thirty options, so the surface is capped in the
-low teens — `tests/mcp.test.ts` enforces `tools.size <= 16`, and the answer to a new need is a
-better-shaped tool, not another one. That cap is why to-do lists ride on `create_ticket` /
+Tool-selection accuracy falls off well before thirty options, so the surface is capped:
+sixteen tools for tickets and twelve for a board's structure — `tests/mcp.test.ts` enforces
+`tools.size <= 28`, and the answer to a new need is a better-shaped tool, not another one. That cap is why to-do lists ride on `create_ticket` /
 `update_ticket` (whole-list replace) instead of having tools of their own, and why cross-board
 search is `search_tickets` without a `boardId` rather than a second search tool. The one
 exception so far is `get_attachment`: returning image content is something no existing tool
@@ -35,14 +35,14 @@ unrelated jobs and two sets of annotations.
 
 | Tool | Does | Annotations |
 |---|---|---|
-| `whoami` | The principal, agent label, and scopes behind this token; `kind` says whether the principal is a person or the agent itself | read-only |
-| `list_boards` | Boards with lanes and counts, plus the workspaces around them | read-only |
-| `board_overview` | One board: lanes, members, labels, categories, its workspace | read-only |
+| `whoami` | The principal, agent label, and scopes behind this token; `kind` says whether the principal is a person or the agent itself; `canChangeStructure` whether the token permits the structure tools | read-only |
+| `list_boards` | Boards with lanes and counts, plus the workspaces around them, each with `yourRole` | read-only |
+| `board_overview` | One board: lanes, members (with `mayAutomate`), labels, categories with their colour, its workspace | read-only |
 | `search_tickets` | Filtered slim listing; instance-wide when `boardId` is omitted | read-only |
 | `get_ticket` | Everything about one ticket, by id or ticket number | read-only |
 | `get_attachment` | Look at an attachment: images as a scaled JPEG, other files as details | read-only |
 | `list_lanes` | Just the lanes, when the overview would be overkill | read-only |
-| `whats_new` | Board-wide activity since a timestamp — the digest | read-only |
+| `whats_new` | Board-wide activity since a timestamp — the digest; `structure` lists what was done to the board itself | read-only |
 | `create_ticket` | File a ticket, to-dos included, at the top or bottom of its lane; with `parentTicketId` as a subticket of another | additive |
 | `update_ticket` | Change given fields | destructive (overwrites) |
 | `move_ticket` | Lane and position, or with `boardId` onto another board of the workspace | idempotent |
@@ -51,6 +51,18 @@ unrelated jobs and two sets of annotations.
 | `restore_ticket` | The undo of archiving (board admin) | idempotent |
 | `add_attachment` | Download a URL server-side and attach it | **open-world** |
 | `create_upload_url` | A one-time address to `curl` a local file to | additive |
+| `move_tickets` | Up to 50 tickets of one board into a lane, together and in the given order | idempotent |
+| `create_board` | A new board, with its own lanes or the default four; the creator becomes its admin | additive |
+| `update_board` | A board's name and description | destructive (overwrites) |
+| `delete_board` | A board with no tickets at all, archived ones included | **destructive** |
+| `save_lane` | Add a lane, or rename, flag (`isDone`/`isLive`) and place one | destructive (overwrites) |
+| `delete_lane` | A lane, its tickets moved to another lane or archived | **destructive** |
+| `member_candidates` | Accounts that could still join a board, by name and id | read-only |
+| `set_board_member` | Add somebody or change their role and `mayAutomate` | destructive (overwrites) |
+| `remove_board_member` | Take somebody off a board | **destructive** |
+| `edit_label` | Rename (merging onto an existing name) or delete a label on every ticket | **destructive** |
+| `edit_category` | Create, rename or recolour, or delete a category, by name | **destructive** |
+| `edit_ticket_type` | Create, rename or recolour, or delete a ticket type of the workspace | **destructive** |
 
 ### Subtickets
 
@@ -61,10 +73,21 @@ A to-do can be a ticket of its own, and an agent can follow it both ways without
 - **Up, from the subticket.** `get_ticket` lists `parents`: the tickets whose lists hold this one, each with its own `progress`. Only parents this token can read appear; others are left out without a trace.
 - **Progress at a glance.** `search_tickets` and the replies of the write tools carry `progress: { done, total, light, openSubtickets, subtickets }`, or null without to-dos. `light` is the card's traffic light: `green` when everything is done, `orange` from half, `red` below. The list itself stays in `get_ticket`, so a search stays cheap.
 - **The whole plan at once.** `get_ticket` with `timeline: true` adds `timeline: { covers, warnings, subtickets }`: every subticket down through theirs with board, lane, `startDate` and `dueDate`, plus warnings for overdue work and anything outside the ticket's own window. Subtickets on boards the token cannot read carry `readable: false` and nothing below them. `create_ticket` and `update_ticket` take `startDate` beside `dueDate`, and `liveFrom`/`liveUntil` for the days a ticket is out in the world. Both take `schedule` too — `none`, `milestone` (one day, given as `dueDate`, no start, no live window) or `lifecycle` — and tickets and timeline nodes report it; switching clears what the new schedule has no room for, and dates sent to an undated ticket without one make it a lifecycle. Lanes carry `isLive` beside `isDone`: a subticket in a live lane counts as done too. `schedule` may also be `recurring`, with `recurrence` (`frequency`, `interval`, `anchor`, `until`, `resetTodos`, `returnLaneId`): the card comes round again, `dueDate` is the round that is on now, and the server closes each round when the next is due, done or missed. Search results carry `repeats`, `nextRound` and `lastRound` for such a ticket, `get_ticket` its rule and last `rounds`; `update_ticket` with `closeRound: "done" | "skipped"` ends the round at once and `reopenRound: true` undoes the last close while the next round is not yet due, and `whats_new` reports `new_round` and `round_missed`.
-- **Dependencies.** `get_ticket` lists `waitsOn` (finish-to-start: the ticket starts once these end) and `waitedOnBy`, each with number, board, lane, `done` and dates; search results carry `waitsOn` as numbers, and so do timeline nodes. The timeline's warnings include tickets starting before what they wait on ends, and tickets waiting on something late. `create_ticket` and `update_ticket` take `waitsOn` as the whole list of ticket ids. `update_ticket` with `shift: { days, dryRun }` moves the ticket's start and due date, and everything waiting on it, by the same days, and replies with what moved and what stayed put. Finished work and tickets the token may not edit stay put, and live windows never move. A dry run has to come on its own; the server instructions tell agents to dry-run first. This keeps the tool count at 16.
+- **Dependencies.** `get_ticket` lists `waitsOn` (finish-to-start: the ticket starts once these end) and `waitedOnBy`, each with number, board, lane, `done` and dates; search results carry `waitsOn` as numbers, and so do timeline nodes. The timeline's warnings include tickets starting before what they wait on ends, and tickets waiting on something late. `create_ticket` and `update_ticket` take `waitsOn` as the whole list of ticket ids. `update_ticket` with `shift: { days, dryRun }` moves the ticket's start and due date, and everything waiting on it, by the same days, and replies with what moved and what stayed put. Finished work and tickets the token may not edit stay put, and live windows never move. A dry run has to come on its own; the server instructions tell agents to dry-run first. This added no tool.
 - **Decisions.** A to-do can carry `decision: { options, multiple, allowOther }`, making its `text` a question for people to settle — which logo, which channels. `get_ticket` shows it with `answer`, `decidedBy` and `decidedAt` once decided. Agents can ask one and read it but not answer it: whatever they send, the result stays what a person decided, and one they add starts open. Sent back through `update_ticket` with the same question and options, it keeps its result.
 - **Strict order.** `create_ticket` and `update_ticket` take `strictOrder`, and `get_ticket` reports it. A strict list is worked top to bottom: an update completing a to-do or decision while one above is open is refused, and each subticket waits on the one before it — listed in `waitsOn` with `strictOrderOf` (the parent's number), counted by the timeline and by `shift`. Such entries need not be sent back and cannot be removed on their own.
 - **Writing.** `create_ticket` with `parentTicketId` files a new subticket on any board of the workspace; `update_ticket` links an existing ticket by naming its id as `subticketId` in the to-dos, and unlinks one by leaving it out.
+
+### Structure
+
+The twelve tools after `create_upload_url` in the table let an agent organise its boards. All of them but `move_tickets` change a board's shape rather than its tickets, and the server refuses them unless the token carries the `admin` scope **and** the principal is an administrator of the board — or of the workspace, for `create_board` and `edit_ticket_type`. There is no separate structure scope: `admin` is it. `whoami` answers `canChangeStructure` (true for an unrestricted token or one with `admin`) with a sentence saying that the role still applies, and `list_boards` carries `yourRole` per board and per workspace, so an agent can tell where it may act before it tries.
+
+- **Boards.** `create_board` opens a board in a workspace (the default one when `workspaceId` is omitted). Without `lanes` it gets the seeded Import, Backlog, In Progress and Done; with `lanes` exactly those, left to right, in the same transaction as the board — and no import lane, which belongs to the TestFlight and Jira connections and is set up in the UI. The creator becomes the board's administrator, so the board turns up in their next `list_boards` even over MCP, where only boards one may automate are listed. It replies with the board as `board_overview` shows it. `update_board` changes the name and description only; the sync settings stay with the UI. `delete_board` deletes only an empty board: the tool always sends `onlyIfEmpty`, and `board.delete` counts the tickets — archived ones too — inside the transaction that deletes, so nothing filed meanwhile is swept away. REST callers that leave the flag out keep the old behaviour.
+- **Lanes.** `save_lane` creates a lane without `laneId` and changes one with it; `index` places it (0 is the leftmost) through `lane.reorder`. Done and live exclude each other: switching `isLive` on switches `isDone` off and the other way round, and the import lane is neither. When a change makes a lane's tickets count as finished, or open again, the reply carries a `note` with their number and what follows: subtickets ticked or unticked on their parents, due dates quiet or warning, a recurring ticket's round closing as done or missed. `delete_lane` deletes an empty lane directly; one holding tickets needs `moveTicketsTo` (another lane of the board) or `archiveTickets: true`, and is refused with the ticket count and both options otherwise. The tool's empty case runs `lane.delete` with mode `empty`, which re-counts inside the transaction.
+- **People.** `member_candidates` lists who could still join, by name and id and with `isAgent` for agents, never an address. `set_board_member` adds somebody or changes their role and `mayAutomate` — whether that account may work the board through a token. Board administrators and agents always may; an instance administrator is exempt as well. `remove_board_member` takes somebody off; tickets assigned to them keep the assignee. Neither will leave a board without an administrator.
+- **Vocabulary.** `edit_label` renames a label on every ticket of the board or deletes it (`label.rename`, `label.delete`). Labels are per board and matched case-insensitively. Renaming onto a name another label already has merges the two: each ticket keeps the one label, once. `edit_category` creates (`category.create`), renames or recolours, or deletes a category by name; the colours are those of `categoryColors`. A deleted category leaves its tickets without one. `edit_ticket_type` creates, renames or recolours, or deletes a type of the workspace; picking an icon other than the default is left to the UI, since the curated set has thirty names.
+- **Many tickets at once.** `move_tickets` puts up to 50 tickets of one board into a lane, together and in the given order, the first at `index` among the lane's other tickets. It calls `ticket.move` once per ticket, so each move is audited, announced and in the ticket's history as usual. Each is placed right after the one before, which keeps the order right when some of them already sit in the lane above the insertion point. Everything is checked before the first move; if one fails anyway, the reply lists what moved, the one that failed and why, and the rest as not attempted. Moving between boards stays with `move_ticket`.
+- **What changed.** `whats_new` carries `structure` beside `entries`: the board's successful structural operations since `since`, newest first, each with `operation`, `by`, `via`, `at` and `detail` — the fields the operation's audit spec allowlisted, plus the target's current name. It reads `board.structure.list`, which board *viewers* may call: a fixed list of operations (`board.create`, `board.update`, `lane.*`, `member.set`, `member.remove`, `category.*`, `label.*`), successful entries only, and never an IP, token id or refused attempt. `board.create` runs against the workspace, so its row carries no board id; the read matches it by its target instead. It reaches back as far as `AUDIT_RETENTION_DAYS` keeps entries, a year by default. The full log, `audit.list`, stays with board administrators.
 
 ### An agent as a user of its own
 
@@ -93,7 +116,8 @@ A client meets two independent mechanisms that are easy to conflate:
   exists so an agent can find out why.
 
 One consequence worth knowing: `restore_ticket` needs board-admin, so a `read · write` token
-answers 403 there until it is granted the `admin` scope.
+answers 403 there until it is granted the `admin` scope. The same holds for every structure
+tool except `move_tickets`; `whoami` reports it as `canChangeStructure`.
 
 ## The finding: unannotated tools read as dangerous (2026-09-01)
 
@@ -208,11 +232,11 @@ client's view, the client is on an older build or a cached list.
 
 ## Surfaces
 
-Every tool is a thin shape over one or more operations: `whoami` reads the actor; `list_boards` and `board_overview` use `board.list`, `board.get`, `lane.list`, `member.list`, `category.list`, `label.list`; `search_tickets` and `get_ticket` use `ticket.list`, `ticket.get`, `ticket.getByNumber`, `ticket.timeline.get`, `ticket.dependents.list`; `get_attachment` uses `attachment.get`; `whats_new` uses `board.activity`; the write tools map to `ticket.create`, `ticket.update`, `ticket.shift`, `ticket.move`, `comment.add`, `ticket.archive`, `ticket.restore`, `attachment.addFromUrl`, `attachment.uploadUrl`. Because they go through `run()`, every call is audited and fires webhooks like any other.
+Every tool is a thin shape over one or more operations: `whoami` reads the actor; `list_boards` and `board_overview` use `board.list`, `board.get`, `lane.list`, `member.list`, `category.list`, `label.list`; `search_tickets` and `get_ticket` use `ticket.list`, `ticket.get`, `ticket.getByNumber`, `ticket.timeline.get`, `ticket.dependents.list`; `get_attachment` uses `attachment.get`; `whats_new` uses `board.activity` and `board.structure.list`; the write tools map to `ticket.create`, `ticket.update`, `ticket.shift`, `ticket.move` (also behind `move_tickets`), `comment.add`, `ticket.archive`, `ticket.restore`, `attachment.addFromUrl`, `attachment.uploadUrl`. The structure tools map to `board.create`, `board.update`, `board.delete` (with `onlyIfEmpty`), `lane.create`, `lane.update`, `lane.reorder`, `lane.delete`, `member.candidates`, `member.set`, `member.remove`, `label.rename`, `label.delete`, `category.create`, `category.update`, `category.delete`, `ticket.type.create`, `ticket.type.update`, `ticket.type.delete`. Every one of them is also a REST v1 route. Because they go through `run()`, every call is audited and fires webhooks like any other.
 
 ## Tests
 
-- `tests/mcp.test.ts`: the tool cap, titles and descriptions, the exact read-only and open-world split, the naming rules, and each tool's behaviour against a stub server.
+- `tests/mcp.test.ts`: the tool cap, titles and descriptions, the exact read-only and open-world split, the naming rules, and each tool's behaviour against a stub server — for the structure tools also the write-scope refusal, the empty-board and full-lane refusals, the last administrator, the label merge, the order `move_tickets` leaves, and a viewer's `whats_new.structure` without refused attempts.
 - `tests/token.test.ts`, `tests/access.test.ts`: the scope ceiling the tools inherit.
 - `tests/upload-slot.test.ts`: upload addresses are single-use, expire, die with their token, keep their secret out of the database and the log, and act as the agent that asked.
 

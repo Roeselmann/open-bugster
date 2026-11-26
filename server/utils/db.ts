@@ -2919,18 +2919,34 @@ export function countBoards(): number {
   return (getDb().prepare('SELECT COUNT(*) AS value FROM boards').get() as { value: number }).value
 }
 
-export function createBoard(name: string, creatorId: string | null = null, workspaceId?: string): BoardSummary {
+export interface BoardCreateOptions {
+  description?: string
+  /**
+   * The board's lanes, left to right, instead of the seeded Import/Backlog/In Progress/Done.
+   * None of them is an import lane: that one belongs to the TestFlight and Jira connections,
+   * which a board opened this way simply does not have until somebody sets one up in the UI.
+   * Done and live exclude each other as they do in `updateLane`; live wins.
+   */
+  lanes?: Array<{ name: string; isDone?: boolean; isLive?: boolean }>
+}
+
+export function createBoard(name: string, creatorId: string | null = null, workspaceId?: string, options: BoardCreateOptions = {}): BoardSummary {
   const db = getDb()
   const id = randomUUID()
   const now = new Date().toISOString()
   // Callers that predate workspaces — and clients that never picked one — land in the default.
   const workspace = workspaceId ?? defaultWorkspaceId()
   const position = (db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM boards WHERE workspace_id = ?').get(workspace) as { position: number }).position
+  // One transaction with the board itself, so a board never exists without its lanes — the
+  // first non-import lane is its default lane, and every ticket write expects one to be there.
+  const lanes = options.lanes?.length
+    ? options.lanes.map(lane => ({ name: lane.name, isImport: false, isDone: Boolean(lane.isDone) && !lane.isLive, isLive: Boolean(lane.isLive) }))
+    : newBoardLanes.map(lane => ({ ...lane, isDone: Boolean(lane.isDone), isLive: false }))
   db.transaction(() => {
-    db.prepare('INSERT INTO boards (id, workspace_id, name, position, created_at) VALUES (?, ?, ?, ?, ?)').run(id, workspace, name, position, now)
+    db.prepare('INSERT INTO boards (id, workspace_id, name, description, position, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, workspace, name, options.description ?? '', position, now)
     db.prepare(`UPDATE boards SET import_type_id = (${DEFAULT_IMPORT_TYPE_SQL}) WHERE id = ?`).run(id)
-    const insertLane = db.prepare('INSERT INTO lanes (id, board_id, name, position, is_import, is_done) VALUES (?, ?, ?, ?, ?, ?)')
-    newBoardLanes.forEach((lane, lanePosition) => insertLane.run(randomUUID(), id, lane.name, lanePosition, lane.isImport ? 1 : 0, lane.isDone ? 1 : 0))
+    const insertLane = db.prepare('INSERT INTO lanes (id, board_id, name, position, is_import, is_done, is_live) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    lanes.forEach((lane, lanePosition) => insertLane.run(randomUUID(), id, lane.name, lanePosition, lane.isImport ? 1 : 0, lane.isDone ? 1 : 0, lane.isLive ? 1 : 0))
     if (creatorId) {
       db.prepare("INSERT INTO board_members (board_id, user_id, role, added_at) VALUES (?, ?, 'admin', ?)").run(id, creatorId, now)
     }
@@ -2984,12 +3000,27 @@ function pick(values: Record<string, string | undefined>): Record<string, string
 }
 
 /** Returns the ids of the deleted tickets so the caller can drop their attachment folders. */
-export function deleteBoard(id: string): { ticketIds: string[] } | null {
+export class BoardNotEmptyError extends Error {
+  constructor(public ticketCount: number, public archivedCount: number) {
+    super(`This board still holds ${ticketCount} ticket${ticketCount === 1 ? '' : 's'}${archivedCount ? `, ${archivedCount} of them archived` : ''}. Only an empty board can be deleted this way.`)
+  }
+}
+
+/**
+ * Returns the ids of the deleted tickets so the caller can drop their attachment folders.
+ *
+ * `onlyIfEmpty` refuses a board with any ticket on it, archived ones included. The count and
+ * the delete share one transaction, so a ticket filed in between cannot be swept away with it.
+ */
+export function deleteBoard(id: string, options: { onlyIfEmpty?: boolean } = {}): { ticketIds: string[] } | null {
   const db = getDb()
   if (!findBoard(id)) return null
-  const ticketIds = (db.prepare('SELECT id FROM tickets WHERE board_id = ?').all(id) as Array<{ id: string }>).map(row => row.id)
-  db.prepare('DELETE FROM boards WHERE id = ?').run(id)
-  return { ticketIds }
+  return db.transaction(() => {
+    const rows = db.prepare('SELECT id, archived_at FROM tickets WHERE board_id = ?').all(id) as Array<{ id: string; archived_at: string | null }>
+    if (options.onlyIfEmpty && rows.length) throw new BoardNotEmptyError(rows.length, rows.filter(row => row.archived_at).length)
+    db.prepare('DELETE FROM boards WHERE id = ?').run(id)
+    return { ticketIds: rows.map(row => row.id) }
+  })()
 }
 
 export function setBoardPrivateKey(id: string, pem: string, filename: string, viewer?: BoardViewer | null): BoardSummary | null {
@@ -3085,12 +3116,15 @@ export function defaultLaneFor(boardId: string): Lane | null {
   return row ? toLane(row) : null
 }
 
-export function createLane(boardId: string, name: string): Lane | null {
+/** Added at the right end. Done and live exclude each other as in `updateLane`; live wins. */
+export function createLane(boardId: string, name: string, flags: { isDone?: boolean; isLive?: boolean } = {}): Lane | null {
   const db = getDb()
   if (!findBoard(boardId)) return null
   const id = randomUUID()
+  const isLive = Boolean(flags.isLive)
+  const isDone = Boolean(flags.isDone) && !isLive
   const position = (db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM lanes WHERE board_id = ?').get(boardId) as { position: number }).position
-  db.prepare('INSERT INTO lanes (id, board_id, name, position, is_import) VALUES (?, ?, ?, ?, 0)').run(id, boardId, name, position)
+  db.prepare('INSERT INTO lanes (id, board_id, name, position, is_import, is_done, is_live) VALUES (?, ?, ?, ?, 0, ?, ?)').run(id, boardId, name, position, Number(isDone), Number(isLive))
   return findLane(id)
 }
 
@@ -3120,7 +3154,8 @@ export function reorderLanes(boardId: string, orderedIds: string[]): LaneSummary
   return listLanes(boardId)
 }
 
-export type LaneDeleteMode = 'move' | 'archive'
+/** `empty` deletes only a lane with no open tickets on it, and refuses otherwise. */
+export type LaneDeleteMode = 'move' | 'archive' | 'empty'
 
 export class LaneDeleteError extends Error {
   constructor(public statusCode: number, message: string) {
@@ -3148,6 +3183,13 @@ export function deleteLane(id: string, mode: LaneDeleteMode, targetLaneId?: stri
 
   const now = new Date().toISOString()
   db.transaction(() => {
+    // Counted inside the transaction, so a ticket landing in the lane meanwhile is refused
+    // rather than quietly moved. Archived tickets do not count: they go to the fallback lane
+    // as in `archive` mode, so restoring one still has somewhere to return to.
+    if (mode === 'empty') {
+      const open = (db.prepare('SELECT COUNT(*) AS value FROM tickets WHERE lane_id = ? AND archived_at IS NULL').get(id) as { value: number }).value
+      if (open) throw new LaneDeleteError(409, `This lane still holds ${open} ticket${open === 1 ? '' : 's'}. Move them to another lane or archive them.`)
+    }
     if (mode === 'archive') {
       db.prepare('UPDATE tickets SET archived_at = ?, updated_at = ? WHERE lane_id = ? AND archived_at IS NULL').run(now, now, id)
     }
@@ -3608,6 +3650,87 @@ export function updateCategory(id: string, input: { name?: string; color?: Categ
 
 export function deleteCategory(id: string) {
   return getDb().prepare('DELETE FROM categories WHERE id = ?').run(id).changes > 0
+}
+
+/**
+ * A category opened on its own rather than by a ticket naming it. Same row `resolveCategoryId`
+ * writes, with a colour; a name the board already has (in any case) is refused, not reused,
+ * because the caller asked for a new one and should learn that it exists.
+ */
+export function createCategory(boardId: string, name: string, color: CategoryColor = 'neutral'): Category | null {
+  const db = getDb()
+  if (!findBoard(boardId)) return null
+  const cleanName = name.trim()
+  if (db.prepare('SELECT 1 FROM categories WHERE board_id = ? AND name = ? COLLATE NOCASE').get(boardId, cleanName)) {
+    throw new CategoryNameTakenError(`This board already has a category named “${cleanName}”.`)
+  }
+  const id = randomUUID()
+  db.prepare('INSERT INTO categories (id, board_id, name, color) VALUES (?, ?, ?, ?)').run(id, boardId, cleanName, color)
+  return { id, name: cleanName, color }
+}
+
+/** A board's label by name, matched the way tickets match them: case-insensitively. */
+function findLabelByName(boardId: string, name: string): { id: string; name: string } | null {
+  return (getDb().prepare('SELECT id, name FROM labels WHERE board_id = ? AND name = ? COLLATE NOCASE').get(boardId, name.trim()) as { id: string; name: string } | undefined) ?? null
+}
+
+export interface LabelChange {
+  /** The label that carries the tickets afterwards; null after a delete. */
+  label: { id: string; name: string } | null
+  /** Tickets that carried the label before. */
+  ticketsTouched: number
+  /** Whether the new name already belonged to another label, which now holds the tickets of both. */
+  merged: boolean
+}
+
+/**
+ * Renames a board's label. Onto a name another label of the board already has, the two merge:
+ * every ticket ends up with that one label, once — `INSERT OR IGNORE` skips the tickets that
+ * carried both — and the old row goes. A merge never raises a ticket's label count, so the
+ * twelve-label cap holds without being checked. Null when the board has no such label.
+ */
+export function renameLabel(boardId: string, name: string, newName: string): LabelChange | null {
+  const db = getDb()
+  const source = findLabelByName(boardId, name)
+  if (!source) return null
+  const cleanName = newName.trim()
+  const now = new Date().toISOString()
+  return db.transaction(() => {
+    const ticketIds = (db.prepare('SELECT ticket_id FROM ticket_labels WHERE label_id = ?').all(source.id) as Array<{ ticket_id: string }>).map(row => row.ticket_id)
+    const target = findLabelByName(boardId, cleanName)
+    let label = { id: source.id, name: cleanName }
+    const merged = Boolean(target && target.id !== source.id)
+    if (target && merged) {
+      db.prepare('INSERT OR IGNORE INTO ticket_labels (ticket_id, label_id) SELECT ticket_id, ? FROM ticket_labels WHERE label_id = ?').run(target.id, source.id)
+      db.prepare('DELETE FROM labels WHERE id = ?').run(source.id)
+      label = target
+    } else {
+      // Also the case-only rename, "ios" to "iOS": the same row under its new spelling.
+      db.prepare('UPDATE labels SET name = ? WHERE id = ?').run(cleanName, source.id)
+    }
+    touchTickets(ticketIds, now)
+    return { label, ticketsTouched: ticketIds.length, merged }
+  })()
+}
+
+/** Takes the label off every ticket of the board and drops it. Null when there is none. */
+export function deleteLabel(boardId: string, name: string): LabelChange | null {
+  const db = getDb()
+  const source = findLabelByName(boardId, name)
+  if (!source) return null
+  const now = new Date().toISOString()
+  return db.transaction(() => {
+    const ticketIds = (db.prepare('SELECT ticket_id FROM ticket_labels WHERE label_id = ?').all(source.id) as Array<{ ticket_id: string }>).map(row => row.ticket_id)
+    // `ticket_labels` cascades with the label.
+    db.prepare('DELETE FROM labels WHERE id = ?').run(source.id)
+    touchTickets(ticketIds, now)
+    return { label: null, ticketsTouched: ticketIds.length, merged: false }
+  })()
+}
+
+function touchTickets(ticketIds: string[], at: string) {
+  const update = getDb().prepare('UPDATE tickets SET updated_at = ? WHERE id = ?')
+  for (const ticketId of ticketIds) update.run(at, ticketId)
 }
 
 /* ── ticket types ───────────────────────────────────────────────────────── */

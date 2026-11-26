@@ -9,6 +9,8 @@ const emailSchema = z.email('A valid email address is required.').trim().toLower
 const passwordSchema = z.string().min(12, 'Use at least 12 characters.').max(512)
 
 const labelSchema = z.string().trim().min(1).max(30)
+/** A label's name, as a ticket's `labels` takes it: trimmed, 1–30 characters. */
+export const labelNameSchema = labelSchema
 const idSchema = z.string().trim().min(1).max(64)
 
 const todoSchema = z.object({
@@ -250,7 +252,10 @@ export const ticketTypeOrderSchema = z.object({
 })
 
 export const laneCreateSchema = z.object({
-  name: z.string().trim().min(1, 'A lane name is required.').max(30)
+  name: z.string().trim().min(1, 'A lane name is required.').max(30),
+  /** Both default to false, as a lane added before these existed always was. Live wins over done. */
+  isDone: z.boolean().optional(),
+  isLive: z.boolean().optional()
 })
 
 export const laneUpdateSchema = z.object({

@@ -6,12 +6,13 @@ import * as ops from '~~/server/operations'
 import type { Actor } from '~~/server/utils/actor'
 import { resolveAttachmentFile } from '~~/server/utils/attachment-file'
 import { DEFAULT_PREVIEW_DIMENSION, imagePreview } from '~~/server/utils/image-preview'
-import { isServiceIdentity, parentTicketIdsOf, principalDescription } from '~~/server/utils/db'
+import { findTicketType, isServiceIdentity, parentTicketIdsOf, principalDescription } from '~~/server/utils/db'
 import { todoLight } from '~~/shared/utils/todo-progress'
 import { boardToday } from '~~/shared/utils/due-date'
 import { timelineBounds, timelineWarnings } from '~~/shared/utils/timeline'
 import { describeRecurrence } from '~~/shared/utils/recurrence'
-import type { BoardSummary, DependencyRef, LaneSummary, ShiftResult, TimelineNode, Ticket, TicketTodo, TicketActivityEntry, TicketComment, TicketTypeSummary, WorkspaceSummary } from '~~/shared/types/domain'
+import { categoryColors, ticketTypeColors } from '~~/shared/types/domain'
+import type { BoardMember, BoardSummary, CategorySummary, DependencyRef, LabelSummary, LaneSummary, ShiftResult, TimelineNode, Ticket, TicketTodo, TicketActivityEntry, TicketComment, TicketType, TicketTypeSummary, WorkspaceSummary } from '~~/shared/types/domain'
 
 /**
  * The agent-facing surface.
@@ -23,6 +24,13 @@ import type { BoardSummary, DependencyRef, LaneSummary, ShiftResult, TimelineNod
  * and fifty of them is most of a context window for information nobody asked for.
  *
  * `get_ticket` is the one tool that returns everything, which is the point of it.
+ *
+ * The structure tools — boards, lanes, members, labels, categories, ticket types — are a
+ * second, smaller group that only an agent organising its own boards needs. They are kept
+ * just as task-shaped (one `save_lane` for create, update and position; one `edit_label` for
+ * rename and delete) so the group adds a dozen names rather than thirty, and each one is
+ * refused by the server unless the token carries the `admin` scope and the principal is an
+ * administrator of the board or workspace in question.
  */
 
 const SCHEDULE_FIELD = 'How the ticket sits in time. "milestone": an event on one day — a meeting, a go-live — given as dueDate, with no start and no live window. "lifecycle": work from startDate to dueDate, then optionally a live window; a dueDate alone is a plain deadline. "recurring": the same card comes round again, like a calendar series — give its rule as recurrence; dueDate is then the round that is on now. "none": no dates. Sending dates without it to an undated ticket makes it a lifecycle.'
@@ -137,6 +145,25 @@ function laneOf(lane: LaneSummary) {
   return { id: lane.id, name: lane.name, ticketCount: lane.ticketCount, isImport: lane.isImport, isDone: lane.isDone, isLive: lane.isLive }
 }
 
+/** A board member as every tool shows one. No address: an agent assigns by id. */
+function memberOf(member: BoardMember) {
+  return { id: member.userId, name: `${member.firstName} ${member.lastName}`.trim(), role: member.role, mayAutomate: member.mayAutomate, ...(member.isService ? { isAgent: true } : {}) }
+}
+
+function categoryOf(category: Pick<CategorySummary, 'name' | 'color'>) {
+  return { name: category.name, color: category.color }
+}
+
+function ticketTypeOf(type: Pick<TicketType, 'id' | 'name' | 'color'>) {
+  return { id: type.id, name: type.name, color: type.color }
+}
+
+/** Whether a lane's tickets count as finished — what ticks a subticket and closes a round as done. */
+const finishes = (lane: { isDone: boolean; isLive: boolean }) => lane.isDone || lane.isLive
+
+const STRUCTURE_NOTE = 'Needs a token with the admin scope, and the principal has to be an administrator of this board — whoami says whether the token allows it.'
+const WORKSPACE_NOTE = 'Needs a token with the admin scope that is not pinned to one board, and the principal has to be an administrator of the workspace — whoami says whether the token allows it.'
+
 function nameOf(person: { firstName: string; lastName: string } | null): string | null {
   if (!person) return null
   return `${person.firstName} ${person.lastName}`.trim() || null
@@ -167,6 +194,16 @@ const LINK_INPUT = z.object({
 
 const MARKDOWN_FIELD = 'Markdown. Headings, lists, links and fenced code blocks render; raw HTML is shown as text, not interpreted.'
 
+/** One entry of `board.structure.list`, as that operation returns it. */
+interface StructureEntry {
+  operation: string
+  at: string
+  principal: { firstName: string; lastName: string } | null
+  agentId: string | null
+  targetName: string | null
+  changes: Record<string, unknown>
+}
+
 export interface ToolOptions {
   /** This instance as the caller reached it, for the addresses a tool hands back. */
   origin?: string
@@ -189,6 +226,31 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       .map(parent => ({ id: parent.id, number: parent.ticketNumber, title: parent.title, boardId: parent.boardId, laneId: parent.laneId, progress: progressOf(parent.todos) }))
   }
 
+  /** board_overview's answer, which create_board gives back too. */
+  const overviewOf = async (boardId: string) => {
+    const [{ board }, { labels }, { categories }, { types }, { workspaces }] = await Promise.all([
+      call<{ board: BoardSummary }>(ops.boardGet, { boardId }),
+      call<{ labels: LabelSummary[] }>(ops.labelList, { boardId }),
+      call<{ categories: CategorySummary[] }>(ops.categoryList, { boardId }),
+      call<{ types: TicketTypeSummary[] }>(ops.ticketTypeList, { boardId }),
+      call<{ workspaces: WorkspaceSummary[] }>(ops.workspaceList, {})
+    ])
+    const home = workspaces.find(workspace => workspace.id === board.workspaceId)
+    return {
+      id: board.id,
+      workspace: { id: board.workspaceId, name: home?.name ?? null, description: home?.description ?? null },
+      name: board.name,
+      description: board.description,
+      yourRole: board.role,
+      lanes: board.lanes.map(laneOf),
+      members: board.members.map(memberOf),
+      labels: labels.map(label => label.name),
+      // With the colour, which is what edit_category sets; a ticket still names one by name.
+      categories: categories.map(categoryOf),
+      ticketTypes: types.map(type => ({ id: type.id, name: type.name }))
+    }
+  }
+
   server.registerTool('whoami', {
     title: 'Who am I',
     description:
@@ -196,11 +258,16 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       + 'kind says whether that principal is a person you act for or an agent with an identity of '
       + 'its own — in which case it is you, and the tickets assigned to principalId are your work. '
       + 'Worth calling first when a write is unexpectedly refused: a token is a ceiling on what its '
-      + 'principal can do, so being denied usually means the scopes are narrower than the person.',
+      + 'principal can do, so being denied usually means the scopes are narrower than the person. '
+      + 'canChangeStructure says whether the token itself permits the structure tools (create_board, '
+      + 'save_lane, set_board_member, edit_label, edit_category, edit_ticket_type and the like): true '
+      + 'with the admin scope or an unrestricted token. The principal still needs the admin role on '
+      + 'the board or workspace in question — list_boards shows yourRole on both.',
     annotations: readsOnly,
     inputSchema: {}
   }, async () => {
     const isAgent = isServiceIdentity(actor.principal)
+    const canChangeStructure = !actor.scopes || actor.scopes.includes('admin')
     return reply({
       principalId: actor.principalId,
       name: nameOf(actor.principal),
@@ -216,13 +283,18 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       agent: actor.agentId,
       channel: actor.channel,
       scopes: actor.scopes ?? 'unrestricted',
-      boardScope: actor.boardScope ?? 'all boards this principal can reach'
+      boardScope: actor.boardScope ?? 'all boards this principal can reach',
+      // The token's half of the question only; the role is the other half, and differs per board.
+      canChangeStructure,
+      structure: canChangeStructure
+        ? `This token permits changing structure. Each change still needs yourRole "admin" on that board (or on that workspace, for create_board and edit_ticket_type)${actor.boardScope ? '; being pinned to one board, it cannot create boards or edit ticket types' : ''}.`
+        : 'This token cannot change structure: that takes the admin scope. Tickets, comments and moves are unaffected.'
     })
   })
 
   server.registerTool('list_boards', {
     title: 'List boards',
-    description: 'Every board this token can see, with its lanes and how many tickets are on it, plus the workspaces the boards are grouped into. Start here — every other tool needs a board or a ticket id.',
+    description: 'Every board this token can see, with its lanes and how many tickets are on it, plus the workspaces the boards are grouped into. Start here — every other tool needs a board or a ticket id. yourRole on a workspace is "admin" where you may create boards and edit ticket types (null where you only see it through one of its boards); on a board, "admin" is where the structure tools work.',
     annotations: readsOnly,
     inputSchema: {}
   }, async () => {
@@ -233,7 +305,7 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
     return reply({
       // Name and description up front rather than a bare workspaceId on each board: what a
       // workspace is for is exactly the context an agent lacks when it picks a board.
-      workspaces: workspaces.map(workspace => ({ id: workspace.id, name: workspace.name, description: workspace.description })),
+      workspaces: workspaces.map(workspace => ({ id: workspace.id, name: workspace.name, description: workspace.description, yourRole: workspace.role })),
       boards: boards.map(board => ({
         id: board.id,
         workspaceId: board.workspaceId,
@@ -254,28 +326,7 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       + 'anything, so lane and label names and type ids are the ones that actually exist.',
     annotations: readsOnly,
     inputSchema: { boardId: z.string().describe('From list_boards.') }
-  }, async ({ boardId }) => {
-    const [{ board }, { labels }, { categories }, { types }, { workspaces }] = await Promise.all([
-      call<{ board: BoardSummary }>(ops.boardGet, { boardId }),
-      call<{ labels: Array<{ name: string; ticketCount: number }> }>(ops.labelList, { boardId }),
-      call<{ categories: Array<{ name: string; color: string; ticketCount: number }> }>(ops.categoryList, { boardId }),
-      call<{ types: TicketTypeSummary[] }>(ops.ticketTypeList, { boardId }),
-      call<{ workspaces: WorkspaceSummary[] }>(ops.workspaceList, {})
-    ])
-    const home = workspaces.find(workspace => workspace.id === board.workspaceId)
-    return reply({
-      id: board.id,
-      workspace: { id: board.workspaceId, name: home?.name ?? null, description: home?.description ?? null },
-      name: board.name,
-      description: board.description,
-      yourRole: board.role,
-      lanes: board.lanes.map(laneOf),
-      members: board.members.map(member => ({ id: member.userId, name: `${member.firstName} ${member.lastName}`.trim(), role: member.role, ...(member.isService ? { isAgent: true } : {}) })),
-      labels: labels.map(label => label.name),
-      categories: categories.map(category => category.name),
-      ticketTypes: types.map(type => ({ id: type.id, name: type.name }))
-    })
-  })
+  }, async ({ boardId }) => reply(await overviewOf(boardId)))
 
   server.registerTool('search_tickets', {
     title: 'Search tickets',
@@ -666,7 +717,12 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       + 'ticket\'s round closing as it starts the next: new_round (done or skipped) or round_missed '
       + '(the next round came while it was still open — worth a look), each with the `date` of the round and `next`. Give `since` to pick '
       + 'up where you left off; it defaults to the last seven days. Edits to a ticket’s title, '
-      + 'description or labels leave no trace here — this reads the same history get_ticket shows.',
+      + 'description or labels leave no trace in `entries`, which read the same history get_ticket shows. '
+      + '`structure` lists, newest first, what was done to the board itself: renamed or re-described, lanes added, '
+      + 'changed, reordered or deleted, members added, re-roled or removed, categories and labels created, '
+      + 'renamed or deleted — each with `operation`, `by`, `via`, `at` and a `detail` of what the change recorded, '
+      + 'plus the target\'s current name. It reaches back as far as the audit log is kept (a year by default) '
+      + 'and shows only changes that went through.',
     annotations: readsOnly,
     inputSchema: {
       boardId: z.string().describe('From list_boards.'),
@@ -675,9 +731,12 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
     }
   }, async ({ boardId, since, limit }) => {
     const from = since ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
-    const { activity } = await call<{ activity: Array<TicketActivityEntry & { ticketNumber: number; ticketTitle: string }> }>(
-      ops.boardActivity, { boardId, since: from, limit: limit ?? 50 }
-    )
+    const [{ activity }, { entries: structure }] = await Promise.all([
+      call<{ activity: Array<TicketActivityEntry & { ticketNumber: number; ticketTitle: string }> }>(
+        ops.boardActivity, { boardId, since: from, limit: limit ?? 50 }
+      ),
+      call<{ entries: StructureEntry[] }>(ops.boardStructureList, { boardId, since: from, limit: limit ?? 50 })
+    ])
     return reply({
       since: from,
       entries: activity.map(entry => ({
@@ -687,6 +746,13 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
         via: entry.agentId,
         at: entry.createdAt,
         detail: activityDetail(entry)
+      })),
+      structure: structure.map(entry => ({
+        operation: entry.operation,
+        by: nameOf(entry.principal),
+        via: entry.agentId,
+        at: entry.at,
+        detail: { ...entry.changes, ...(entry.targetName ? { target: entry.targetName } : {}) }
       }))
     })
   })
@@ -751,5 +817,377 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
   }, async ({ ticketId }) => {
     const { ticket } = await call<{ ticket: Ticket }>(ops.ticketRestore, { ticketId })
     return reply({ id: ticket.id, laneId: ticket.laneId })
+  })
+
+  /* ── structure ──────────────────────────────────────────────────────────── */
+
+  server.registerTool('create_board', {
+    title: 'Create a board',
+    description:
+      'Open a new board in a workspace; you become its administrator. Without lanes it gets the '
+      + 'default Import, Backlog, In Progress and Done. With lanes it gets exactly those, left to '
+      + 'right, and no import lane — that one belongs to the TestFlight and Jira connections, set up '
+      + 'in the UI. New tickets land in the first lane that is not the import lane unless they name one. '
+      + `${WORKSPACE_NOTE} Replies with the board as board_overview shows it.`,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    inputSchema: {
+      name: z.string().max(40),
+      workspaceId: z.string().optional().describe('From list_boards, one where your yourRole is "admin". Omit for the default workspace.'),
+      description: z.string().max(200).optional().describe('Shown under the board title.'),
+      lanes: z.array(z.object({
+        name: z.string().max(30),
+        isDone: z.boolean().optional().describe('Holds finished work: a subticket here counts as done, due dates stop warning.'),
+        isLive: z.boolean().optional().describe('Holds finished work that is running, a campaign in market: counts as done too, and the live window warns instead. Wins over isDone.')
+      })).min(1).max(30).optional().describe('The lanes, left to right. Omit for the default four.')
+    }
+  }, async (input) => {
+    const { board } = await call<{ board: BoardSummary }>(ops.boardCreate, input)
+    return reply(await overviewOf(board.id))
+  })
+
+  server.registerTool('update_board', {
+    title: 'Rename or describe a board',
+    description: `Change a board's name or the description shown under its title; what is omitted stays. ${STRUCTURE_NOTE}`,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    inputSchema: {
+      boardId: z.string(),
+      name: z.string().max(40).optional(),
+      description: z.string().max(200).optional().describe('An empty string clears it.')
+    }
+  }, async ({ boardId, name, description }) => {
+    // Only these two: the operation also takes the sync settings, which stay with the UI.
+    if (name === undefined && description === undefined) throw createError({ statusCode: 400, statusMessage: 'Give a name, a description, or both.' })
+    const { board } = await call<{ board: BoardSummary }>(ops.boardUpdate, { boardId, name, description })
+    return reply({ id: board.id, name: board.name, description: board.description })
+  })
+
+  server.registerTool('delete_board', {
+    title: 'Delete an empty board',
+    description:
+      'Delete a board that holds no tickets at all — archived ones count, since deleting the board '
+      + 'would delete them for good. A board with tickets is refused: move them to another board of '
+      + 'the workspace with move_ticket first (restore archived ones to move them). Its lanes, '
+      + `labels, categories and memberships go with it. The last board of the instance stays. ${STRUCTURE_NOTE}`,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    inputSchema: { boardId: z.string() }
+  }, async ({ boardId }) => {
+    // Always set, and checked by the operation inside the deleting transaction — the count is
+    // not this tool's to make, so nothing filed in the meantime can be swept away.
+    await call(ops.boardDelete, { boardId, onlyIfEmpty: true })
+    return reply({ deleted: boardId })
+  })
+
+  server.registerTool('save_lane', {
+    title: 'Add or change a lane',
+    description:
+      'Without laneId, adds a lane (name required) at the right end, or at index. With laneId, '
+      + 'changes what is given: name, isDone, isLive, and index — its place, 0 being the leftmost. '
+      + 'isDone marks a lane of finished work; isLive one of finished work that is running, like a '
+      + 'campaign in market. Both make a ticket there count as finished: a subticket is ticked off on '
+      + 'its parents, and a recurring ticket closes its round as done. They exclude each other: '
+      + 'switching isLive on switches isDone off, and isDone on switches isLive off. The import lane is '
+      + 'neither. Replies with the board\'s lanes, and a note when the change turns a lane\'s tickets '
+      + `finished or open again. ${STRUCTURE_NOTE}`,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    inputSchema: {
+      boardId: z.string(),
+      laneId: z.string().optional().describe('From board_overview. Omit to add a lane.'),
+      name: z.string().max(30).optional(),
+      isDone: z.boolean().optional(),
+      isLive: z.boolean().optional(),
+      index: z.number().int().min(0).max(29).optional().describe('Where the lane sits, 0 being the leftmost; past the end puts it last.')
+    }
+  }, async ({ boardId, laneId, name, isDone, isLive, index }) => {
+    const before = (await call<{ lanes: LaneSummary[] }>(ops.laneList, { boardId })).lanes
+    let targetId: string
+    let lanes: LaneSummary[]
+    if (!laneId) {
+      if (!name) throw createError({ statusCode: 400, statusMessage: 'A new lane needs a name. To change a lane, give its laneId.' })
+      const created = await call<{ lane: { id: string }; lanes: LaneSummary[] }>(ops.laneCreate, { boardId, name, isDone, isLive })
+      targetId = created.lane.id
+      lanes = created.lanes
+    } else {
+      if (!before.some(lane => lane.id === laneId)) throw createError({ statusCode: 404, statusMessage: 'Lane not found on this board.' })
+      targetId = laneId
+      const edits = name !== undefined || isDone !== undefined || isLive !== undefined
+      if (!edits && index === undefined) throw createError({ statusCode: 400, statusMessage: 'Nothing to change: give a name, isDone, isLive or index.' })
+      lanes = edits ? (await call<{ lanes: LaneSummary[] }>(ops.laneUpdate, { boardId, laneId, name, isDone, isLive })).lanes : before
+    }
+    if (index !== undefined) {
+      const order = lanes.map(lane => lane.id).filter(id => id !== targetId)
+      order.splice(Math.min(index, order.length), 0, targetId)
+      if (order.join() !== lanes.map(lane => lane.id).join()) {
+        lanes = (await call<{ lanes: LaneSummary[] }>(ops.laneReorder, { boardId, laneIds: order })).lanes
+      }
+    }
+    const previous = before.find(lane => lane.id === targetId)
+    const now = lanes.find(lane => lane.id === targetId)!
+    const notes: string[] = []
+    // What a flag means to the tickets already there is the part an agent would not guess.
+    if (previous && previous.ticketCount && finishes(previous) !== finishes(now)) {
+      const count = `${previous.ticketCount} ticket${previous.ticketCount === 1 ? '' : 's'} in this lane`
+      notes.push(finishes(now)
+        ? `${count} now count as finished: as subtickets they are ticked off on their parents, their due dates stop warning, and a recurring one here closes its round as done.`
+        : `${count} count as open again: as subtickets they are unticked on their parents, their due dates warn again, and a recurring one left here closes its round as missed unless all its to-dos are ticked.`)
+    }
+    if (isDone && isLive) notes.push('isDone and isLive exclude each other; isLive won, so isDone is off.')
+    if (now.isImport && (isDone || isLive)) notes.push('The import lane is neither done nor live; those flags were left off.')
+    return reply({ laneId: targetId, lanes: lanes.map(laneOf), ...(notes.length ? { note: notes.join(' ') } : {}) })
+  })
+
+  server.registerTool('delete_lane', {
+    title: 'Delete a lane',
+    description:
+      'Remove a lane. An empty one goes directly. One holding tickets needs exactly one of '
+      + 'moveTicketsTo — another lane of the same board, where they land at the end — or '
+      + 'archiveTickets: true, which archives them (a board admin can restore them). Archived tickets '
+      + 'of the lane move to the board\'s first lane either way, so restoring one has somewhere to go. '
+      + `The import lane and a board's last lane cannot be deleted. ${STRUCTURE_NOTE}`,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    inputSchema: {
+      boardId: z.string(),
+      laneId: z.string(),
+      moveTicketsTo: z.string().optional().describe('A lane id of the same board.'),
+      archiveTickets: z.boolean().optional()
+    }
+  }, async ({ boardId, laneId, moveTicketsTo, archiveTickets }) => {
+    if (moveTicketsTo && archiveTickets) throw createError({ statusCode: 400, statusMessage: 'Give moveTicketsTo or archiveTickets, not both.' })
+    const { lanes } = await call<{ lanes: LaneSummary[] }>(ops.laneList, { boardId })
+    const lane = lanes.find(item => item.id === laneId)
+    if (!lane) throw createError({ statusCode: 404, statusMessage: 'Lane not found on this board.' })
+    if (moveTicketsTo && !lanes.some(item => item.id === moveTicketsTo && item.id !== laneId)) {
+      throw createError({ statusCode: 422, statusMessage: 'moveTicketsTo has to be another lane of this board.' })
+    }
+    if (lane.ticketCount && !moveTicketsTo && !archiveTickets) {
+      throw createError({
+        statusCode: 409,
+        statusMessage: `This lane holds ${lane.ticketCount} ticket${lane.ticketCount === 1 ? '' : 's'}. Delete it with moveTicketsTo set to another lane of the board to keep them there, or with archiveTickets: true to archive them.`
+      })
+    }
+    // `empty` rather than `archive` for a lane that looked empty: the operation re-counts inside
+    // its transaction, so a ticket filed since the read above is refused, not archived.
+    const mode = moveTicketsTo ? { mode: 'move', targetLaneId: moveTicketsTo } : archiveTickets ? { mode: 'archive' } : { mode: 'empty' }
+    const result = await call<{ lanes: LaneSummary[] }>(ops.laneDelete, { boardId, laneId, ...mode })
+    return reply({
+      deleted: laneId,
+      ...(lane.ticketCount ? { [moveTicketsTo ? 'ticketsMoved' : 'ticketsArchived']: lane.ticketCount } : {}),
+      lanes: result.lanes.map(laneOf)
+    })
+  })
+
+  server.registerTool('member_candidates', {
+    title: 'Who can join a board',
+    description: `The people and agents with an account here who are not on this board yet — the userIds set_board_member takes. ${STRUCTURE_NOTE}`,
+    annotations: readsOnly,
+    inputSchema: { boardId: z.string() }
+  }, async ({ boardId }) => {
+    const { candidates } = await call<{ candidates: Array<{ id: string; firstName: string; lastName: string; isService: boolean }> }>(ops.memberCandidates, { boardId })
+    // Names only, as board_overview shows its members: an agent adds somebody by id.
+    return reply(candidates.map(person => ({ id: person.id, name: `${person.firstName} ${person.lastName}`.trim(), ...(person.isService ? { isAgent: true } : {}) })))
+  })
+
+  server.registerTool('set_board_member', {
+    title: 'Add a member or change their role',
+    description:
+      'Add somebody to a board, or change the role they hold there: viewer reads, editor works '
+      + 'tickets, admin also changes the board itself. mayAutomate is whether that account may work '
+      + 'the board through the API or an agent rather than only in the browser; omitted, an existing '
+      + 'member keeps theirs and a new one starts without. Admins and agents always may, whatever it '
+      + 'says. Demoting the last administrator is refused. userId comes from member_candidates or '
+      + `board_overview. Replies with the members as board_overview shows them. ${STRUCTURE_NOTE}`,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    inputSchema: {
+      boardId: z.string(),
+      userId: z.string(),
+      role: z.enum(['viewer', 'editor', 'admin']),
+      mayAutomate: z.boolean().optional()
+    }
+  }, async (input) => {
+    const { board } = await call<{ board: BoardSummary | null }>(ops.memberSet, input)
+    const members = board?.members ?? (await call<{ members: BoardMember[] }>(ops.memberList, { boardId: input.boardId })).members
+    return reply({ members: members.map(memberOf) })
+  })
+
+  server.registerTool('remove_board_member', {
+    title: 'Remove a member',
+    description:
+      'Take somebody off a board. Tickets assigned to them keep that assignee until somebody '
+      + 'changes it; their comments and history stay. The last administrator cannot be removed, and '
+      + 'an agent that reaches the board through a workspace-wide grant is not a member to remove '
+      + `here. Replies with the members left. ${STRUCTURE_NOTE}`,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    inputSchema: { boardId: z.string(), userId: z.string() }
+  }, async (input) => {
+    const { board } = await call<{ board: BoardSummary | null }>(ops.memberRemove, input)
+    const members = board?.members ?? (await call<{ members: BoardMember[] }>(ops.memberList, { boardId: input.boardId })).members
+    return reply({ members: members.map(memberOf) })
+  })
+
+  server.registerTool('edit_label', {
+    title: 'Rename or delete a label',
+    description:
+      'Labels belong to a board and come into being when a ticket names one. rename gives one a new '
+      + 'name on every ticket; onto a name another label already has, the two merge and each ticket '
+      + 'keeps the one label. delete takes it off every ticket. Names match case-insensitively; a new '
+      + 'name is 1–30 characters. Replies with the board\'s labels and how many tickets carried the '
+      + `label. ${STRUCTURE_NOTE}`,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    inputSchema: {
+      boardId: z.string(),
+      name: z.string().max(30).describe('The label as board_overview lists it.'),
+      action: z.enum(['rename', 'delete']),
+      newName: z.string().max(30).optional().describe('For rename.')
+    }
+  }, async ({ boardId, name, action, newName }) => {
+    if (action === 'rename' && !newName) throw createError({ statusCode: 400, statusMessage: 'A rename needs newName.' })
+    const result = action === 'rename'
+      ? await call<{ labels: LabelSummary[]; ticketsTouched: number; merged: boolean }>(ops.labelRename, { boardId, name, newName })
+      : await call<{ labels: LabelSummary[]; ticketsTouched: number }>(ops.labelDelete, { boardId, name })
+    return reply({
+      labels: result.labels.map(label => label.name),
+      ticketsTouched: result.ticketsTouched,
+      ...('merged' in result && result.merged ? { merged: true } : {})
+    })
+  })
+
+  server.registerTool('edit_category', {
+    title: 'Create, change or delete a category',
+    description:
+      'A board\'s categories, each ticket having at most one. create adds one (a ticket naming an '
+      + 'unknown category also adds it, in neutral); update renames it with newName or recolours it; '
+      + 'delete removes it, and its tickets are left without a category. Addressed by name, as '
+      + `board_overview lists them. Colours: ${categoryColors.join(', ')}. ${STRUCTURE_NOTE}`,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    inputSchema: {
+      boardId: z.string(),
+      action: z.enum(['create', 'update', 'delete']),
+      name: z.string().max(30),
+      newName: z.string().max(30).optional().describe('For update.'),
+      color: z.enum(categoryColors).optional().describe('For create (defaults to neutral) and update.')
+    }
+  }, async ({ boardId, action, name, newName, color }) => {
+    let uncategorised: number | null = null
+    if (action === 'create') {
+      await call(ops.categoryCreate, { boardId, name, color })
+    } else {
+      const { categories } = await call<{ categories: CategorySummary[] }>(ops.categoryList, { boardId })
+      const found = categories.find(category => category.name.toLocaleLowerCase('en') === name.trim().toLocaleLowerCase('en'))
+      if (!found) throw createError({ statusCode: 404, statusMessage: `This board has no category named “${name.trim()}”. board_overview lists the ones it has.` })
+      if (action === 'update') {
+        if (!newName && !color) throw createError({ statusCode: 400, statusMessage: 'An update needs newName, color, or both.' })
+        await call(ops.categoryUpdate, { categoryId: found.id, name: newName, color })
+      } else {
+        await call(ops.categoryDelete, { categoryId: found.id })
+        uncategorised = found.ticketCount
+      }
+    }
+    const { categories } = await call<{ categories: CategorySummary[] }>(ops.categoryList, { boardId })
+    return reply({ categories: categories.map(categoryOf), ...(uncategorised !== null ? { ticketsUncategorised: uncategorised } : {}) })
+  })
+
+  server.registerTool('edit_ticket_type', {
+    title: 'Create, change or delete a ticket type',
+    description:
+      'Ticket types — Email, Bug, Campaign — belong to a workspace and are shared by its boards. '
+      + 'create needs a name and the workspace, given as workspaceId or as one of its boards; update '
+      + 'renames or recolours the type with typeId; delete removes it, and its tickets become untyped. '
+      + `Colours: ${ticketTypeColors.join(', ')} — the colour doubles as the card background, none leaves the card as it is. `
+      + 'A new type gets the Ticket icon; picking another icon is left to the workspace settings in the UI. '
+      + `Replies with the workspace's types. ${WORKSPACE_NOTE}`,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    inputSchema: {
+      action: z.enum(['create', 'update', 'delete']),
+      boardId: z.string().optional().describe('For create: the type goes to this board\'s workspace.'),
+      workspaceId: z.string().optional().describe('For create, instead of boardId.'),
+      typeId: z.string().optional().describe('For update and delete: from board_overview.ticketTypes.'),
+      name: z.string().max(30).optional().describe('Required for create.'),
+      color: z.enum(ticketTypeColors).optional().describe('For create (defaults to neutral) and update.')
+    }
+  }, async ({ action, boardId, workspaceId, typeId, name, color }) => {
+    let untyped: number | null = null
+    let home: string
+    if (action === 'create') {
+      if (!name) throw createError({ statusCode: 400, statusMessage: 'A new type needs a name.' })
+      const target = workspaceId ?? (boardId ? (await call<{ board: BoardSummary }>(ops.boardGet, { boardId })).board.workspaceId : null)
+      if (!target) throw createError({ statusCode: 400, statusMessage: 'Name the workspace, with workspaceId or one of its boards as boardId.' })
+      home = (await call<{ type: TicketType }>(ops.ticketTypeCreate, { workspaceId: target, name, color })).type.workspaceId
+    } else {
+      if (!typeId) throw createError({ statusCode: 400, statusMessage: `To ${action} a type, give its typeId.` })
+      if (action === 'update') {
+        if (!name && !color) throw createError({ statusCode: 400, statusMessage: 'An update needs a name, a color, or both.' })
+        home = (await call<{ type: TicketType }>(ops.ticketTypeUpdate, { typeId, name, color })).type.workspaceId
+      } else {
+        // Read before the delete only to say how many tickets lose the type; the delete itself
+        // is where access is decided, and an unknown id is its 404 to give.
+        const known = findTicketType(typeId)
+        const before = known ? (await call<{ types: TicketTypeSummary[] }>(ops.ticketTypeList, { workspaceId: known.workspaceId }).catch(() => ({ types: [] as TicketTypeSummary[] }))).types : []
+        await call(ops.ticketTypeDelete, { typeId })
+        home = known!.workspaceId
+        untyped = before.find(type => type.id === typeId)?.ticketCount ?? 0
+      }
+    }
+    const { types } = await call<{ types: TicketTypeSummary[] }>(ops.ticketTypeList, { workspaceId: home })
+    return reply({ workspaceId: home, types: types.map(ticketTypeOf), ...(untyped !== null ? { ticketsUntyped: untyped } : {}) })
+  })
+
+  server.registerTool('move_tickets', {
+    title: 'Move several tickets',
+    description:
+      'Move up to 50 tickets of one board into a lane, so they sit together in the order given, the '
+      + 'first at index (0 is the top, the default) counted among the lane\'s other tickets. Tickets '
+      + 'already in the lane are reordered the same way. Each move is its own change, recorded and '
+      + 'announced like move_ticket; a lane with isDone or isLive finishes them as it does there. If one '
+      + 'fails the rest are not attempted, and the reply says what moved and why the one stopped. '
+      + 'Moving onto another board stays with move_ticket and boardId. Needs editor, like move_ticket.',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    inputSchema: {
+      laneId: z.string().describe('The destination lane, from board_overview.'),
+      ticketIds: z.array(z.string()).min(1).max(50).describe('In the order they should end up in.'),
+      index: z.number().int().min(0).max(10000).optional().describe('Where the first one lands among the lane\'s other tickets; past the end puts them last.')
+    }
+  }, async ({ laneId, ticketIds, index }) => {
+    if (new Set(ticketIds).size !== ticketIds.length) throw createError({ statusCode: 400, statusMessage: 'Name each ticket once.' })
+    // Everything is checked before anything moves, so a bad id or a stray board costs nothing.
+    const tickets = await Promise.all(ticketIds.map(ticketId => call<{ ticket: Ticket }>(ops.ticketGet, { ticketId }).then(result => result.ticket)))
+    const boardId = tickets[0]!.boardId
+    if (tickets.some(ticket => ticket.boardId !== boardId)) {
+      throw createError({ statusCode: 422, statusMessage: 'All tickets have to be on one board, the lane\'s. Move tickets between boards with move_ticket and boardId.' })
+    }
+    const archived = tickets.find(ticket => ticket.archivedAt)
+    if (archived) throw createError({ statusCode: 409, statusMessage: `Ticket ${archived.ticketNumber} is archived; restore it first.` })
+    const { lanes } = await call<{ lanes: LaneSummary[] }>(ops.laneList, { boardId })
+    if (!lanes.some(lane => lane.id === laneId)) {
+      throw createError({ statusCode: 422, statusMessage: 'This lane is not on the board these tickets are on. Move tickets between boards with move_ticket and boardId.' })
+    }
+
+    // The lane as it will be, kept in step with each move. A ticket's index is counted with it
+    // taken out of the lane, so each one is placed right after the one before it — which stays
+    // right however many of the others started above the insertion point, in this lane or not.
+    const { tickets: onBoard } = await call<{ tickets: Ticket[] }>(ops.ticketList, { boardId })
+    const moving = new Set(ticketIds)
+    let lane = onBoard.filter(ticket => ticket.laneId === laneId).map(ticket => ticket.id)
+    const others = lane.filter(id => !moving.has(id))
+    const anchor = Math.min(index ?? 0, others.length) > 0 ? others[Math.min(index ?? 0, others.length) - 1]! : null
+
+    const moved: Ticket[] = []
+    for (const [i, ticketId] of ticketIds.entries()) {
+      const rest = lane.filter(id => id !== ticketId)
+      const after = i === 0 ? anchor : ticketIds[i - 1]!
+      const position = after ? rest.indexOf(after) + 1 : 0
+      try {
+        moved.push((await call<{ ticket: Ticket }>(ops.ticketMove, { ticketId, laneId, index: position })).ticket)
+      } catch (error) {
+        const failed = tickets[i]!
+        return reply({
+          laneId,
+          moved: moved.map(ticket => ({ id: ticket.id, number: ticket.ticketNumber, title: ticket.title })),
+          failed: { id: failed.id, number: failed.ticketNumber, error: (error as { statusMessage?: string; message?: string }).statusMessage || (error as Error).message },
+          notAttempted: tickets.slice(i + 1).map(ticket => ({ id: ticket.id, number: ticket.ticketNumber }))
+        })
+      }
+      rest.splice(position, 0, ticketId)
+      lane = rest
+    }
+    return reply({ laneId, moved: moved.map(ticket => ({ id: ticket.id, number: ticket.ticketNumber, title: ticket.title })) })
   })
 }

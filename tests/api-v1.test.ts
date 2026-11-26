@@ -78,6 +78,28 @@ describe('the v1 surface', () => {
       }
     })
 
+    it('reaches every structure operation the MCP tools use', () => {
+      // Parity with the structure tools: whatever an agent can do to a board, a script can.
+      const exposed = new Map(routes.v1Routes.map(route => [route.operation.name, `${route.method} ${route.path}`]))
+      expect(Object.fromEntries(['board.create', 'board.update', 'board.delete', 'board.structure.list',
+        'lane.create', 'lane.update', 'lane.reorder', 'lane.delete',
+        'member.candidates', 'member.set', 'member.remove',
+        'category.list', 'category.create', 'category.update', 'category.delete',
+        'label.list', 'label.rename', 'label.delete',
+        'ticket.type.list', 'ticket.type.create', 'ticket.type.update', 'ticket.type.delete', 'ticket.type.reorder', 'ticket.move'
+      ].map(name => [name, exposed.has(name)]))).toEqual(expect.not.objectContaining({ '': false }))
+      for (const name of ['board.structure.list', 'category.create', 'label.rename', 'label.delete', 'ticket.type.create', 'ticket.type.update', 'ticket.type.delete', 'ticket.type.reorder', 'category.update', 'category.delete', 'label.list']) {
+        expect(exposed.has(name), name).toBe(true)
+      }
+      // The full audit log and the workspace itself stay off it.
+      expect(exposed.has('audit.list')).toBe(false)
+      expect(exposed.has('workspace.create')).toBe(false)
+      expect(exposed.get('label.rename')).toBe('PATCH /boards/{boardId}/labels/{name}')
+      expect(exposed.get('label.delete')).toBe('DELETE /boards/{boardId}/labels/{name}')
+      expect(exposed.get('category.create')).toBe('POST /boards/{boardId}/categories')
+      expect(exposed.get('board.structure.list')).toBe('GET /boards/{boardId}/structure-log')
+    })
+
     it('matches paths, fills parameters, and tells a wrong verb from a wrong URL', () => {
       const matched = routes.matchRoute('GET', '/boards/b_1/tickets')
       expect(matched?.route.operation.name).toBe('ticket.list')
@@ -135,8 +157,11 @@ describe('the v1 surface', () => {
     it('publishes named types rather than __schema0', () => {
       expect(JSON.stringify(spec)).not.toContain('__schema')
       expect(Object.keys(spec.components.schemas)).toEqual(
-        expect.arrayContaining(['Ticket', 'Person', 'BoardSummary', 'TicketComment', 'Problem', 'TicketTypeSummary', 'TicketTypeIcon', 'TicketTypeRef'])
+        expect.arrayContaining(['Ticket', 'Person', 'BoardSummary', 'TicketComment', 'Problem', 'TicketTypeSummary', 'TicketTypeIcon', 'TicketTypeRef', 'TimelineNode'])
       )
+      // Recursive, so its subtickets point back at itself rather than at an unnamed piece.
+      const node = spec.components.schemas.TimelineNode as { properties: { children: { items: { $ref: string } } } }
+      expect(node.properties.children.items.$ref).toBe('#/components/schemas/TimelineNode')
     })
 
     it('publishes the ticket types of a workspace', () => {
@@ -216,6 +241,40 @@ describe('the v1 surface', () => {
       expect(byName.mode!.required).toBe(true)
       expect(byName.targetLaneId!.required).toBe(false)
       expect(del.parameters.filter(p => p.in === 'path').map(p => p.name)).toEqual(['boardId', 'laneId'])
+    })
+
+    it('offers every branch of a union\'s discriminator, not just the first', () => {
+      const del = spec.paths['/boards/{boardId}/lanes/{laneId}']!.delete as { parameters: Array<{ name: string; schema: { enum?: string[] } }> }
+      expect(del.parameters.find(p => p.name === 'mode')!.schema.enum).toEqual(['move', 'archive', 'empty'])
+    })
+
+    /**
+     * zod numbers the unnamed pieces of every schema it converts from `__schema0` again, so
+     * folding them into one registry afterwards handed every route the last conversion's.
+     */
+    it('keeps every route\'s own unnamed schemas, rather than whichever was converted last', () => {
+      for (const [path, methods] of Object.entries(spec.paths)) {
+        for (const [method, operation] of Object.entries(methods) as Array<[string, { parameters: Array<{ name: string; in: string; schema: { type?: unknown } }> }]>) {
+          for (const parameter of operation.parameters.filter(p => p.in === 'path')) {
+            expect(['string', 'integer'], `${method} ${path} ${parameter.name}`).toContain(parameter.schema.type)
+          }
+        }
+      }
+      const del = spec.paths['/boards/{boardId}']!.delete as { parameters: Array<{ name: string; in: string; required: boolean; schema: { type?: string } }> }
+      expect(del.parameters.find(p => p.name === 'onlyIfEmpty')).toMatchObject({ in: 'query', required: false, schema: { type: 'boolean' } })
+    })
+
+    it('publishes the extended inputs of board and lane creation', () => {
+      const board = (spec.paths['/boards']!.post as { requestBody: { content: Record<string, { schema: { properties: Record<string, { type?: string; items?: { properties?: Record<string, unknown> } }>; required: string[] } }> } })
+        .requestBody.content['application/json']!.schema
+      expect(board.properties.description).toMatchObject({ type: 'string' })
+      expect(board.properties.lanes).toMatchObject({ type: 'array' })
+      expect(Object.keys(board.properties.lanes!.items!.properties!)).toEqual(['name', 'isDone', 'isLive'])
+      expect(board.required).toEqual(['name'])
+      const lane = (spec.paths['/boards/{boardId}/lanes']!.post as { requestBody: { content: Record<string, { schema: { properties: Record<string, { type?: string }>; required: string[] } }> } })
+        .requestBody.content['application/json']!.schema
+      expect(lane.properties.isDone).toMatchObject({ type: 'boolean' })
+      expect(lane.required).toEqual(['name'])
     })
 
     it('puts a GET’s non-path inputs in the query string, not a body', () => {
@@ -323,5 +382,77 @@ describe('the v1 surface', () => {
       const owner = db.findUser(db.listUsers()[0]!.id)!
       return { principalId: owner.id, agentId: null, tokenId: null, channel: 'api' as const, principal: owner, scopes: null, boardScope: null }
     }
+  })
+
+  /**
+   * The routes as the dispatcher runs them: defaults, then the query string (already coerced to
+   * booleans and numbers), then the body, then the path last — all through `run` as a token.
+   */
+  describe('structure over v1', () => {
+    const owner = () => db.findUser(db.listUsers()[0]!.id)!
+    const token = (scopes: Array<'read' | 'write' | 'admin'> = ['read', 'write', 'admin']) =>
+      ({ principalId: owner().id, agentId: 'script', tokenId: 'tok_v1', channel: 'api' as const, principal: owner(), scopes, boardScope: null })
+    const send = async <T = Record<string, any>>(method: string, path: string, { query = {}, body = {}, scopes }: { query?: Record<string, unknown>; body?: Record<string, unknown>; scopes?: Array<'read' | 'write' | 'admin'> } = {}) => {
+      const matched = routes.matchRoute(method, path)
+      if (!matched) throw new Error(`no route for ${method} ${path}`)
+      const input = { ...matched.route.defaults, ...query, ...(method === 'GET' || method === 'DELETE' ? {} : body), ...matched.params }
+      return { status: matched.route.status ?? 200, body: await ops.run(matched.route.operation, token(scopes), input) as T }
+    }
+
+    it('opens a board with its own lanes, adds a flagged lane, and keeps the old defaults', async () => {
+      const created = await send('POST', '/boards', { body: { name: 'Scripted', description: 'By a script', lanes: [{ name: 'In' }, { name: 'Out', isDone: true }] } })
+      expect(created.status).toBe(201)
+      expect(created.body.board.lanes.map((lane: { name: string; isDone: boolean }) => [lane.name, lane.isDone])).toEqual([['In', false], ['Out', true]])
+      expect(created.body.board.description).toBe('By a script')
+      const lane = await send('POST', `/boards/${created.body.board.id}/lanes`, { body: { name: 'Live', isLive: true } })
+      expect(lane.status).toBe(201)
+      expect(lane.body.lane).toMatchObject({ name: 'Live', isLive: true, isDone: false })
+      // A name alone is what a client that predates this sent, and it still gets the four.
+      const plain = await send('POST', '/boards', { body: { name: 'Plain' } })
+      expect(plain.body.board.lanes.map((item: { name: string }) => item.name)).toEqual(['Import', 'Backlog', 'In Progress', 'Done'])
+      expect((await send('POST', `/boards/${plain.body.board.id}/lanes`, { body: { name: 'Extra' } })).body.lane).toMatchObject({ isDone: false, isLive: false })
+    })
+
+    it('deletes a board with tickets only without onlyIfEmpty', async () => {
+      const board = (await send('POST', '/boards', { body: { name: 'Doomed', lanes: [{ name: 'Only' }] } })).body.board
+      db.createTicket(board.id, { title: 'Holds it', laneId: board.lanes[0].id } as never, null)
+      await expect(send('DELETE', `/boards/${board.id}`, { query: { onlyIfEmpty: true } })).rejects.toMatchObject({ statusCode: 409 })
+      expect(db.findBoard(board.id)).not.toBeNull()
+      expect((await send('DELETE', `/boards/${board.id}`)).status).toBe(204)
+      expect(db.findBoard(board.id)).toBeNull()
+    })
+
+    it('creates categories and renames, merges and deletes labels by name', async () => {
+      const board = (await send('POST', '/boards', { body: { name: 'Vocabulary', lanes: [{ name: 'Only' }] } })).body.board
+      const category = await send('POST', `/boards/${board.id}/categories`, { body: { name: 'Ops', color: 'teal' } })
+      expect(category).toMatchObject({ status: 201, body: { category: { name: 'Ops', color: 'teal' } } })
+      db.createTicket(board.id, { title: 'Labelled', laneId: board.lanes[0].id, labels: ['needs review', 'qa'] } as never, null)
+      const renamed = await send('PATCH', `/boards/${board.id}/labels/${encodeURIComponent('Needs Review')}`, { body: { newName: 'QA' } })
+      expect(renamed.body).toMatchObject({ ticketsTouched: 1, merged: true, label: { name: 'qa' } })
+      expect(renamed.body.labels.map((label: { name: string }) => label.name)).toEqual(['qa'])
+      const deleted = await send('DELETE', `/boards/${board.id}/labels/qa`)
+      expect(deleted.body).toEqual({ ticketsTouched: 1, labels: [] })
+      // Changing a board's vocabulary is an administrator's, and the token is the ceiling.
+      await expect(send('POST', `/boards/${board.id}/categories`, { body: { name: 'Nope' }, scopes: ['read', 'write'] })).rejects.toMatchObject({ statusCode: 403 })
+
+      // And all of it is readable, with the read scope, from the structure log.
+      const log = await send('GET', `/boards/${board.id}/structure-log`, { scopes: ['read'] })
+      expect(log.body.entries.map((entry: { operation: string }) => entry.operation)).toEqual(['label.delete', 'label.rename', 'category.create', 'board.create'])
+      expect(log.body.entries[0]).not.toHaveProperty('ip')
+      expect(log.body.entries[0].principal).toEqual({ id: owner().id, firstName: 'Grace', lastName: 'Hopper' })
+    })
+
+    it('manages a workspace\'s ticket types', async () => {
+      const workspaceId = db.listBoards()[0]!.workspaceId
+      const created = await send('POST', `/workspaces/${workspaceId}/ticket-types`, { body: { name: 'Webinar', color: 'blue' } })
+      expect(created).toMatchObject({ status: 201, body: { type: { name: 'Webinar', color: 'blue', icon: { kind: 'lucide', name: 'Ticket' } } } })
+      const typeId = created.body.type.id
+      expect((await send('PATCH', `/ticket-types/${typeId}`, { body: { name: 'Seminar' } })).body.type.name).toBe('Seminar')
+      const { types } = (await send('GET', `/workspaces/${workspaceId}/ticket-types`)).body
+      const reversed = types.map((type: { id: string }) => type.id).reverse()
+      expect((await send('PATCH', `/workspaces/${workspaceId}/ticket-type-order`, { body: { typeIds: reversed } })).body.types.map((type: { id: string }) => type.id)).toEqual(reversed)
+      expect((await send('DELETE', `/ticket-types/${typeId}`)).status).toBe(204)
+      await expect(send('PATCH', `/ticket-types/${typeId}`, { body: { name: 'Gone' } })).rejects.toMatchObject({ statusCode: 404 })
+    })
   })
 })

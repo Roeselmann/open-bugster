@@ -429,6 +429,9 @@ const named: Record<string, z.ZodType> = {
   Attachment: attachmentSchema,
   SubticketRef: subticketRefSchema,
   DependencyRef: dependencyRefSchema,
+  // Named because it is recursive: unnamed, its own `children` had nothing to point at once
+  // the OpenAPI generator folded zod's anonymous pieces back in.
+  TimelineNode: timelineNodeSchema,
   TicketTodo: ticketTodoSchema,
   AppleFeedback: appleFeedbackSchema,
   Ticket: ticketSchema,

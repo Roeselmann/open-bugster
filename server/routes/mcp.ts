@@ -57,7 +57,16 @@ export default defineEventHandler(async (event) => {
         'Everything you do is recorded against the principal this token acts for, with your agent',
         'label beside it. That is usually a person; it can also be an agent with an account of its',
         'own — whoami says which, and then tickets assigned to that principal are your work. Call',
-        'whoami if a write is refused: the token may be more restricted than the principal is.'
+        'whoami if a write is refused: the token may be more restricted than the principal is.',
+        '',
+        'A second group of tools changes the boards themselves: create_board, update_board,',
+        'delete_board (empty boards only), save_lane, delete_lane, member_candidates, set_board_member,',
+        'remove_board_member, edit_label, edit_category and edit_ticket_type. They need a token with the',
+        'admin scope, and the principal has to be an administrator of the board — or of the workspace,',
+        'for create_board and edit_ticket_type. whoami says with canChangeStructure whether the token',
+        'allows it; list_boards shows yourRole per board and per workspace. move_tickets, which puts',
+        'several tickets of a board into a lane in one go, needs only editor. whats_new lists what was',
+        'changed on a board\'s structure under structure.'
       ].join('\n')
     }
   )

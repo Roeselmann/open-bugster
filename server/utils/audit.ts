@@ -107,6 +107,32 @@ export function listAudit(filter: AuditFilter = {}): AuditEntry[] {
   return rows.map(toEntry)
 }
 
+/**
+ * The successful entries among `operations` that shaped one board, newest first.
+ *
+ * Narrower than `listAudit` on purpose — it backs a read that board *viewers* get, so it
+ * never returns a refused or failed attempt, and the caller picks the operations. A board's
+ * creation is the one entry that does not carry the board's id: `board.create` runs against
+ * the workspace, so its row has no board and names the new board as its target instead.
+ */
+export function listBoardStructureAudit(boardId: string, operations: readonly string[], options: { since?: string; limit?: number } = {}): AuditEntry[] {
+  if (!operations.length) return []
+  const placeholders = operations.map(() => '?').join(', ')
+  const params: Array<string | number> = [...operations, boardId, boardId]
+  let since = ''
+  if (options.since) { since = 'AND at >= ?'; params.push(options.since) }
+  params.push(Math.min(Math.max(options.limit ?? 50, 1), 500))
+  const rows = getDb().prepare(`
+    SELECT * FROM audit_log
+    WHERE result = 'ok' AND operation IN (${placeholders})
+      AND (board_id = ? OR (board_id IS NULL AND operation = 'board.create' AND target_type = 'board' AND target_id = ?))
+      ${since}
+    ORDER BY at DESC, rowid DESC
+    LIMIT ?
+  `).all(...params) as AuditRow[]
+  return rows.map(toEntry)
+}
+
 export function countAudit(): number {
   return (getDb().prepare('SELECT COUNT(*) AS total FROM audit_log').get() as { total: number }).total
 }

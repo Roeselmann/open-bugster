@@ -3,8 +3,8 @@ import * as ops from '~~/server/operations'
 import type { AnyOperation } from '~~/server/operations'
 import {
   boardSummarySchema, categorySummarySchema, laneSummarySchema, labelSummarySchema,
-  attachmentSchema, boardMemberSchema, personSchema, syncRunSchema, ticketActivitySchema,
-  dependencyRefSchema, subticketRefSchema, ticketCommentSchema, ticketSchema, ticketTypeSummarySchema, timelineNodeSchema, workspaceSummarySchema
+  attachmentSchema, boardMemberSchema, categorySchema, laneSchema, personSchema, syncRunSchema, ticketActivitySchema,
+  dependencyRefSchema, subticketRefSchema, ticketCommentSchema, ticketSchema, ticketTypeSchema, ticketTypeSummarySchema, timelineNodeSchema, workspaceSummarySchema
 } from '~~/shared/schemas/domain'
 
 const shiftDatesSchema = z.object({ from: z.string().nullable(), to: z.string().nullable() })
@@ -19,6 +19,22 @@ const shiftResultSchema = z.object({
     ticketId: z.string(), ticketNumber: z.number().int(), title: z.string().nullable(),
     reason: z.enum(['finished', 'no_access'])
   })).describe('Tickets the push stopped at: finished work, or a ticket the caller may not edit.')
+})
+
+const labelChangeSchema = z.object({
+  ticketsTouched: z.number().int().describe('How many tickets carried the label before.'),
+  labels: z.array(labelSummarySchema).describe('The board\'s labels afterwards.')
+})
+
+const structureEntrySchema = z.object({
+  operation: z.string().describe('The operation, e.g. `lane.update`.'),
+  at: z.string(),
+  principal: z.object({ id: z.string(), firstName: z.string(), lastName: z.string() }).nullable().describe('Who did it; null once their account is gone.'),
+  agentId: z.string().nullable().describe('The agent label of the token it came through, if any.'),
+  targetType: z.string(),
+  targetId: z.string().nullable(),
+  targetName: z.string().nullable().describe('The target\'s name as it is now; null once it is gone.'),
+  changes: z.record(z.string(), z.unknown()).describe('The fields the operation records about itself — ids and names of board things, never secrets.')
 })
 
 export interface V1Route {
@@ -49,28 +65,41 @@ export interface V1Route {
  * Deliberately absent: user administration, tokens, service identities and the App Store
  * Connect credentials. Those are instance administration, and handing them to a token surface
  * is a decision worth making on its own rather than by including them here for symmetry.
+ *
+ * A board's structure — lanes, members, categories, labels, and its workspace's ticket types —
+ * is here in full, at parity with the MCP structure tools: an agent with an account of its own
+ * organises its boards, and a script should be able to do what that agent can.
  */
 export const v1Routes: readonly V1Route[] = [
   // Workspaces
   // Read-only here for now: managing workspaces stays with the UI, for the same reason user
   // administration does. A token learns which workspace each board belongs to and no more.
   { method: 'GET', path: '/workspaces', operation: ops.workspaceList, response: z.object({ workspaces: z.array(workspaceSummarySchema) }) },
-  // The vocabulary a ticket's `typeId` draws from. Managing the types stays with the UI too.
+  // The vocabulary a ticket's `typeId` draws from, managed by the workspace's administrators.
+  // The workspace itself stays with the UI; its types are board structure, and are here.
   { method: 'GET', path: '/workspaces/{workspaceId}/ticket-types', operation: ops.ticketTypeList, response: z.object({ types: z.array(ticketTypeSummarySchema) }) },
+  { method: 'POST', path: '/workspaces/{workspaceId}/ticket-types', operation: ops.ticketTypeCreate, status: 201, response: z.object({ type: ticketTypeSchema }) },
+  { method: 'PATCH', path: '/workspaces/{workspaceId}/ticket-type-order', operation: ops.ticketTypeReorder, response: z.object({ types: z.array(ticketTypeSummarySchema) }) },
+  { method: 'PATCH', path: '/ticket-types/{typeId}', operation: ops.ticketTypeUpdate, response: z.object({ type: ticketTypeSchema }) },
+  { method: 'DELETE', path: '/ticket-types/{typeId}', operation: ops.ticketTypeDelete, status: 204 },
 
   // Boards
   { method: 'GET', path: '/boards', operation: ops.boardList, response: z.object({ boards: z.array(boardSummarySchema) }) },
   { method: 'POST', path: '/boards', operation: ops.boardCreate, status: 201, response: z.object({ board: boardSummarySchema }) },
   { method: 'GET', path: '/boards/{boardId}', operation: ops.boardGet, response: z.object({ board: boardSummarySchema }) },
   { method: 'PATCH', path: '/boards/{boardId}', operation: ops.boardUpdate, response: z.object({ board: boardSummarySchema }) },
+  // `?onlyIfEmpty=true` refuses with 409 while the board holds any ticket, archived ones too.
   { method: 'DELETE', path: '/boards/{boardId}', operation: ops.boardDelete, status: 204 },
+  // What was done to the board's lanes, members, categories and labels — readable by every
+  // member, unlike the full audit log, which stays off this surface.
+  { method: 'GET', path: '/boards/{boardId}/structure-log', operation: ops.boardStructureList, response: z.object({ entries: z.array(structureEntrySchema) }) },
 
   // Lanes
   { method: 'GET', path: '/boards/{boardId}/timeline', operation: ops.boardTimelineGet, response: z.object({ timeline: z.array(timelineNodeSchema).describe('The board\'s tickets that lead a tree, in lane order, each with its subtickets below; only trees with a date somewhere.') }) },
   { method: 'GET', path: '/boards/{boardId}/lanes', operation: ops.laneList, response: z.object({ lanes: z.array(laneSummarySchema) }) },
-  { method: 'POST', path: '/boards/{boardId}/lanes', operation: ops.laneCreate, status: 201, response: z.object({ lanes: z.array(laneSummarySchema) }) },
+  { method: 'POST', path: '/boards/{boardId}/lanes', operation: ops.laneCreate, status: 201, response: z.object({ lane: laneSchema.describe('The lane just added, at the right end.'), lanes: z.array(laneSummarySchema) }) },
   { method: 'PATCH', path: '/boards/{boardId}/lanes/{laneId}', operation: ops.laneUpdate, response: z.object({ lanes: z.array(laneSummarySchema) }) },
-  { method: 'DELETE', path: '/boards/{boardId}/lanes/{laneId}', operation: ops.laneDelete, response: z.object({ lanes: z.array(laneSummarySchema) }) },
+  { method: 'DELETE', path: '/boards/{boardId}/lanes/{laneId}', operation: ops.laneDelete, response: z.object({ lanes: z.array(laneSummarySchema), deleted: z.object({ id: z.string(), name: z.string() }).describe('The lane that was removed.') }) },
   { method: 'PATCH', path: '/boards/{boardId}/lane-order', operation: ops.laneReorder, response: z.object({ lanes: z.array(laneSummarySchema) }) },
 
   // Members
@@ -155,9 +184,16 @@ export const v1Routes: readonly V1Route[] = [
 
   // Categories and labels
   { method: 'GET', path: '/boards/{boardId}/categories', operation: ops.categoryList, response: z.object({ categories: z.array(categorySummarySchema) }) },
+  { method: 'POST', path: '/boards/{boardId}/categories', operation: ops.categoryCreate, status: 201, response: z.object({ category: categorySchema }) },
   { method: 'PATCH', path: '/categories/{categoryId}', operation: ops.categoryUpdate, response: z.object({ category: categorySummarySchema.partial({ ticketCount: true }) }) },
   { method: 'DELETE', path: '/categories/{categoryId}', operation: ops.categoryDelete, status: 204 },
   { method: 'GET', path: '/boards/{boardId}/labels', operation: ops.labelList, response: z.object({ labels: z.array(labelSummarySchema) }) },
+  // A label is known by its name, so the name is the path segment — percent-encode it.
+  { method: 'PATCH', path: '/boards/{boardId}/labels/{name}', operation: ops.labelRename, response: labelChangeSchema.extend({
+    label: z.object({ id: z.string(), name: z.string() }).nullable().describe('The label that carries the tickets now.'),
+    merged: z.boolean().describe('True when newName already belonged to another label, which now holds the tickets of both.')
+  }) },
+  { method: 'DELETE', path: '/boards/{boardId}/labels/{name}', operation: ops.labelDelete, response: labelChangeSchema },
 
   // Imports — TestFlight or Jira, chosen by `provider`
   { method: 'GET', path: '/boards/{boardId}/import', operation: ops.importStatus, response: z.object({ run: syncRunSchema.nullable() }) },

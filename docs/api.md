@@ -47,6 +47,8 @@ Lists are paged with a cursor, errors are `application/problem+json` with a stab
 
 **Board settings → Audit** shows every change made on a board and every attempt that was refused, with the person, the agent, and the channel it came through. It holds ids rather than names, so anonymizing somebody empties it of anything identifying without losing the history. Entries older than `AUDIT_RETENTION_DAYS` (a year by default) are swept at startup.
 
+The structural part of it — lanes, members, categories, labels, the board's name — is also readable by everyone on the board, as `GET /api/v1/boards/{boardId}/structure-log` and under `structure` in the MCP `whats_new`. That read returns successful changes only, with the fields each operation records about itself, and no IPs, token ids or refused attempts.
+
 ## How it works
 
 - **Token format** is `bgs_<uuid>_<secret>`. The id locates the row, the secret is compared against a SHA-256 hash in constant time. Expired and revoked tokens are refused, and a failed token is itself audited as `auth.token` denied.
@@ -73,7 +75,7 @@ Lists are paged with a cursor, errors are `application/problem+json` with a stab
 | [server/utils/problem.ts](../server/utils/problem.ts) | `application/problem+json` shapes and their `type` values. |
 | [server/utils/rate-limit.ts](../server/utils/rate-limit.ts) | `checkRateLimit`, `rateLimitMax`. |
 | [server/utils/audit.ts](../server/utils/audit.ts) | `writeAudit`, `listAudit`, `pruneAudit`, `auditRetentionDays`. Table `audit_log`. |
-| [server/operations/board-domain.ts](../server/operations/board-domain.ts) | `audit.list` (board admin). |
+| [server/operations/board-domain.ts](../server/operations/board-domain.ts) | `audit.list` (board admin); `board.structure.list` (board viewer: successful structural entries only, allowlisted fields, no IPs or token ids). |
 | [server/operations/run.ts](../server/operations/run.ts) | Where every entry is written; `selectChanges` applies the allowlist. |
 | [server/plugins/audit-retention.ts](../server/plugins/audit-retention.ts) | The startup sweep of audit entries, idempotency keys, and delivery attempts. |
 | [server/utils/db.ts](../server/utils/db.ts) | `ensureActorContext`, `ensureAuditLog`, `ensureServiceIdentities`, `ensureApiTokens`, `ensureIdempotencyKeys`, `ensureBoardMemberAutomation`; `findIdempotent`, `saveIdempotent`, `pruneIdempotent`, `boardAutomationAllowed`. |
@@ -86,7 +88,7 @@ Lists are paged with a cursor, errors are `application/problem+json` with a stab
 ## Surfaces
 
 - **Internal routes:** `server/api/tokens/index.get.ts`, `index.post.ts`, `[id].delete.ts`; `server/api/services/index.get.ts`, `index.post.ts`, `[id].patch.ts`, `[id].delete.ts`, `[id]/access.put.ts`; `server/api/boards/[id]/audit.get.ts`; `server/api/mcp-info.get.ts`.
-- **REST v1:** the full table in `routes.ts`, grouped as workspaces, boards, lanes, members, tickets, attachments, comments, categories and labels, and the imports (`GET`/`POST /boards/{boardId}/import`, TestFlight or Jira by `provider`). Deliberately absent: user administration, tokens, service identities, App Store Connect and Jira credentials, webhooks, and the audit log.
+- **REST v1:** the full table in `routes.ts`, grouped as workspaces (read, plus their ticket types), boards, lanes, members, tickets, attachments, comments, categories and labels, and the imports (`GET`/`POST /boards/{boardId}/import`, TestFlight or Jira by `provider`). A board's structure is at parity with the MCP structure tools: `POST /boards` with `lanes`, `DELETE /boards/{boardId}?onlyIfEmpty=true`, `POST /boards/{boardId}/categories`, `PATCH|DELETE /boards/{boardId}/labels/{name}`, the ticket types under `/workspaces/{workspaceId}/ticket-types` and `/ticket-types/{typeId}`, and `GET /boards/{boardId}/structure-log` — the viewer-safe slice of the audit log. Deliberately absent: user administration, tokens, service identities, App Store Connect and Jira credentials, webhooks, workspace management, and the full audit log.
 - **MCP:** `whoami` shows the principal, agent label, and scopes behind a token, and whether that principal is a person (`kind: "person"`) or an agent of its own (`kind: "agent"`).
 - **Webhooks:** none of the operations here emit events.
 

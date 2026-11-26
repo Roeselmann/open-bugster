@@ -184,6 +184,12 @@ function jsonSchemaOf(schema: z.ZodType, registry?: Record<string, unknown>): { 
   // OpenAPI one, where some generators choke on it.
   delete produced.$schema
 
+  // zod numbers the unnamed pieces it lifts out afresh for every schema it converts, so one
+  // route's `__schema0` is a lane id and the next one's a label. Resolved here, inside the
+  // document that defined them, before anything reaches the registry all routes share —
+  // folding them in afterwards gave every route whichever `__schema0` was converted last.
+  inlineLocalAnonymous(produced)
+
   // Before the definitions are lifted out, not after: a definition can reference another one
   // (`BoardSummary` names `LaneSummary`), and rewriting only the top level leaves every one of
   // those pointing at a `$defs` block that is about to stop existing.
@@ -250,6 +256,33 @@ function inlineAnonymous(registry: Record<string, unknown>, paths: Record<string
 }
 
 
+/** Replaces every `#/$defs/__schemaN` reference in one converted schema with its definition. */
+function inlineLocalAnonymous(produced: Record<string, unknown>) {
+  const defs = produced.$defs as Record<string, unknown> | undefined
+  if (!defs) return
+  const anonymous = new Map(Object.entries(defs).filter(([name]) => /^__schema\d+$/.test(name)))
+  if (!anonymous.size) return
+  for (const name of anonymous.keys()) delete defs[name]
+
+  const resolve = (node: unknown, expanding: ReadonlySet<string>): unknown => {
+    if (!node || typeof node !== 'object') return node
+    if (Array.isArray(node)) return node.map(item => resolve(item, expanding))
+    const record = node as Record<string, unknown>
+    const ref = typeof record.$ref === 'string' && record.$ref.startsWith('#/$defs/') ? record.$ref.slice('#/$defs/'.length) : null
+    // A self-referencing piece is left as a reference rather than expanded forever.
+    if (ref && anonymous.has(ref) && !expanding.has(ref)) {
+      return resolve(JSON.parse(JSON.stringify(anonymous.get(ref))), new Set([...expanding, ref]))
+    }
+    return Object.fromEntries(Object.entries(record).map(([key, value]) => [key, resolve(value, expanding)]))
+  }
+
+  for (const [key, value] of Object.entries(produced)) {
+    if (key !== '$defs') produced[key] = resolve(value, new Set())
+  }
+  for (const [name, value] of Object.entries(defs)) defs[name] = resolve(value, new Set())
+  if (!Object.keys(defs).length) delete produced.$defs
+}
+
 /** The branches of a union input, or nothing for an ordinary object. */
 function branchesOf(schema: Record<string, unknown>): Array<Record<string, unknown>> {
   const union = (schema.anyOf ?? schema.oneOf) as Array<Record<string, unknown>> | undefined
@@ -262,6 +295,15 @@ function mergedProperties(schema: { properties?: unknown }, branches: Array<Reco
   const merged: Record<string, unknown> = {}
   for (const branch of branches) {
     for (const [name, definition] of Object.entries((branch.properties ?? {}) as Record<string, unknown>)) {
+      const previous = merged[name] as { const?: unknown; enum?: unknown[]; type?: unknown } | undefined
+      const constant = (definition as { const?: unknown }).const
+      // The discriminator is a different constant in every branch; as a query parameter it is
+      // one field taking any of them, so `mode` reads move | archive | empty rather than move.
+      if (previous && constant !== undefined && (previous.const !== undefined || previous.enum)) {
+        const values = previous.enum ?? [previous.const]
+        merged[name] = { type: previous.type, enum: values.includes(constant) ? values : [...values, constant] }
+        continue
+      }
       merged[name] ??= definition
     }
   }

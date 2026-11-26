@@ -51,8 +51,8 @@ A board can be **moved** to another workspace and **duplicated**, into the same 
 ## Surfaces
 
 - **Internal routes:** `server/api/workspaces/index.get.ts`, `index.post.ts`, `[id].patch.ts`, `[id].delete.ts`, `[id]/board-order.patch.ts`, `[id]/members/[userId].put.ts`, `[id]/members/[userId].delete.ts`, `[id]/members/candidates.get.ts`; `server/api/boards/[id]/move.post.ts`, `duplicate.post.ts`.
-- **REST v1:** `GET /workspaces` only. Board payloads carry `workspaceId`, and `POST /boards` accepts one. Workspace management stays internal, for the same reason user administration does.
-- **MCP:** `list_boards` and `board_overview` report the workspace a board belongs to. There is no workspace tool.
+- **REST v1:** `GET /workspaces`. Board payloads carry `workspaceId`, and `POST /boards` accepts one. Workspace management stays internal, for the same reason user administration does. A workspace's ticket types are reachable: `GET|POST /workspaces/{workspaceId}/ticket-types`, `PATCH /workspaces/{workspaceId}/ticket-type-order`, `PATCH|DELETE /ticket-types/{typeId}` (workspace admin, token with the `admin` scope and not pinned to a board).
+- **MCP:** `list_boards` and `board_overview` report the workspace a board belongs to, and `list_boards` your `yourRole` in each. `create_board` opens a board in a workspace you administer, and `edit_ticket_type` creates, changes and deletes its ticket types. There is no tool for the workspace itself.
 - **Webhooks:** none. Webhooks are board-scoped.
 
 ## Tests
