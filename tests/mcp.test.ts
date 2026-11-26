@@ -346,6 +346,14 @@ describe('the MCP tool surface', () => {
       expect(full.todos.map((todo: { text: string; subticketId?: string }) => [todo.text, todo.subticketId ?? null])).toEqual([['Press kit', sub.id], ['Plan', null]])
     })
 
+    it('files a ticket that waits on another in one call, as a plain ticket and as a subticket', async () => {
+      const first = await call('create_ticket', { boardId, laneId, title: 'Copy' })
+      const second = await call('create_ticket', { boardId, laneId, title: 'Design', waitsOn: [first.id] })
+      expect(second.waitsOn).toEqual([first.number])
+      const sub = await call('create_ticket', { boardId, title: 'Approval', parentTicketId: second.id, waitsOn: [first.id] })
+      expect(sub.waitsOn).toEqual([first.number])
+    })
+
     it('lets an agent trace a subticket both ways and see where it gets done', async () => {
       // The lanes say which one finishes a ticket, so an agent need not guess from a name.
       const overview = await call('board_overview', { boardId })

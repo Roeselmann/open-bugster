@@ -567,6 +567,10 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       todos: z.array(z.object({ text: z.string().min(1).max(500), completed: z.boolean().default(false), decision: DECISION_INPUT }).transform(openDecision)).max(100).optional()
         .describe('The ticket’s initial to-do list, in order. An item with decision is a question for people to decide.'),
       strictOrder: z.boolean().optional().describe(STRICT_ORDER_FIELD),
+      // Filing a plan is mostly filing tickets that wait on each other; without this every
+      // dependency cost a second call to update_ticket.
+      waitsOn: z.array(z.string()).max(50).optional()
+        .describe('Ids of the tickets this one waits on, finish-to-start: it starts once they end. Same workspace only.'),
       placement: z.enum(['top', 'bottom']).optional()
         .describe('Where the ticket lands in its lane. Defaults to the bottom; "top" pushes the lane’s other tickets down one.'),
       parentTicketId: z.string().optional()
