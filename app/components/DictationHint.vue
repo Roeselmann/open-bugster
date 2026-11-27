@@ -1,20 +1,22 @@
 <script setup lang="ts">
 import { Mic } from '@lucide/vue'
 
-// macOS dictation works in every text field, but no web page can start it: there is no
-// attribute or API for that. The keyboard shortcut is the only way in, so this names it.
-// Phones and tablets show a microphone on their own keyboard and need no hint; iPadOS
-// reports itself as a Mac, which its touch points give away.
-const isMac = ref(false)
+// macOS dictation and Windows voice typing work in every text field, but no web page can
+// start them: there is no attribute or API for that. The keyboard shortcut is the only way
+// in, so this names it. Phones and tablets show a microphone on their own keyboard and need
+// no hint; iPadOS reports itself as a Mac, which its touch points give away. Linux has no
+// built-in dictation, so it gets nothing either.
+const system = ref<'mac' | 'windows' | null>(null)
 onMounted(() => {
   const platform = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform || navigator.platform || ''
-  isMac.value = /mac/i.test(platform) && navigator.maxTouchPoints < 2
+  if (/mac/i.test(platform) && navigator.maxTouchPoints < 2) system.value = 'mac'
+  else if (/win/i.test(platform)) system.value = 'windows'
 })
 </script>
 
 <template>
   <p
-    v-if="isMac"
+    v-if="system === 'mac'"
     class="muted flex items-center gap-1.5 text-xs"
     title="macOS dictation types into any text field. It starts with the 🌐 / fn key pressed twice, or the microphone key (F5) on newer keyboards. If nothing happens, or your keyboard has neither, turn it on and pick a shortcut under System Settings → Keyboard → Dictation. Edit → Start Dictation works too."
   >
@@ -22,5 +24,14 @@ onMounted(() => {
     <kbd class="rounded border border-[var(--line)] px-1 font-sans text-[11px]">🌐 / fn</kbd>
     <span>twice or</span>
     <kbd class="inline-flex items-center rounded border border-[var(--line)] px-1 py-px" aria-label="microphone key"><Mic :size="11" aria-hidden="true" /></kbd>
+  </p>
+  <p
+    v-else-if="system === 'windows'"
+    class="muted flex items-center gap-1.5 text-xs"
+    title="Windows voice typing types into any text field. Press Win + H again, or click the microphone in its toolbar, to stop. It needs Windows 10 or 11 and a language that supports voice typing."
+  >
+    <Mic :size="13" aria-hidden="true" />
+    <span>Dictate: press</span>
+    <kbd class="rounded border border-[var(--line)] px-1 font-sans text-[11px]">Win + H</kbd>
   </p>
 </template>
