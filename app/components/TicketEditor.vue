@@ -1831,7 +1831,7 @@ function focusTitle(event: Event) {
 
               <template v-if="lifecycleOn">
                 <!-- A milestone is one day, kept as its due date: an event, so no start and no live window. -->
-                <label v-if="schedule === 'milestone'" class="block sm:w-2/3 sm:pr-2">
+                <div v-if="schedule === 'milestone'" class="block sm:w-2/3 sm:pr-2">
                   <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]">
                     <Flag :size="14" /> Date
                     <span
@@ -1841,29 +1841,28 @@ function focusTitle(event: Event) {
                     ><AlarmClock :size="11" /> {{ dueText }}</span>
                   </span>
                   <span class="flex gap-2">
-                    <input
+                    <UiDateInput
                       v-model="form.dueDate"
-                      type="date"
-                      data-milestone-date
-                      class="focus-ring surface-strong h-11 min-w-0 flex-1 rounded-xl px-3 text-sm outline-none"
+                      class="flex-1"
                       :class="dueState === 'alert' ? 'ring-2 ring-rose-600' : dueState === 'warning' ? 'ring-2 ring-orange-400' : ''"
-                      :readonly="!canEdit"
+                      aria-label="Date"
+                      :clearable="false"
+                      :disabled="!canEdit"
+                      data-milestone-date
                       @change="commitMilestone"
-                    >
-                    <input
+                    />
+                    <UiTimeInput
                       v-model="form.dueTime"
-                      type="time"
-                      class="focus-ring surface-strong h-11 w-[7.5rem] shrink-0 rounded-xl px-3 text-sm tabular-nums outline-none disabled:opacity-50"
-                      :disabled="!form.dueDate"
-                      :readonly="!canEdit"
+                      class="w-[8.5rem] shrink-0"
+                      :disabled="!canEdit || !form.dueDate"
                       aria-label="Time of day"
                       :title="`Optional: time of day, ${timeZone}`"
                       data-time-due
                       @change="commitTime('dueTime')"
-                    >
+                    />
                   </span>
                   <span class="muted mt-1 block text-[11px]">Time optional, in {{ timeZone }}.</span>
-                </label>
+                </div>
                 <!-- A recurring ticket: the rule, the round that is on now, and how the last rounds went. -->
                 <div v-else-if="schedule === 'recurring'" class="space-y-4" data-recurrence-block>
                   <div class="grid gap-4 sm:grid-cols-2">
@@ -1894,51 +1893,49 @@ function focusTitle(event: Event) {
                         </div>
                       </div>
                     </div>
-                    <label class="block">
+                    <div class="block">
                       <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><AlarmClock :size="14" /> At</span>
-                      <input
-                      v-model="form.dueTime"
-                      type="time"
-                      class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm tabular-nums outline-none disabled:opacity-50"
-                      :disabled="!form.dueDate"
-                      :readonly="!canEdit"
-                      aria-label="Time of each round"
-                      :title="`Optional: time of each round, ${timeZone}`"
-                      data-time-round
-                      @change="commitTime('dueTime')"
-                    >
+                      <UiTimeInput
+                        v-model="form.dueTime"
+                        :disabled="!canEdit || !form.dueDate"
+                        aria-label="Time of each round"
+                        :title="`Optional: time of each round, ${timeZone}`"
+                        data-time-round
+                        @change="commitTime('dueTime')"
+                      />
                       <span class="muted mt-1 block text-[11px]">Empty: all day. In {{ timeZone }}.</span>
-                    </label>
+                    </div>
                   </div>
                   <p v-if="ruleText" class="muted -mt-2 text-xs" data-recurrence-summary>{{ ruleText }}{{ rule.until ? `, until ${dateText(rule.until)}` : '' }}<template v-if="roundLine"> · {{ roundLine }}</template></p>
 
                   <!-- When the series runs, start and end side by side. -->
                   <div class="grid gap-4 sm:grid-cols-2">
-                    <label class="block">
+                    <div class="block">
                       <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><CalendarArrowUp :size="14" /> Starts on</span>
                       <!-- The series' start and its beat: the weekday or day of the month every round keeps. -->
-                      <input
+                      <UiDateInput
                         v-model="rule.anchor"
-                        type="date"
-                        class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
-                        :readonly="!canEdit"
+                        aria-label="Series starts on"
+                        :clearable="false"
+                        :disabled="!canEdit"
                         data-recurrence-anchor
                         @change="commitRule"
-                      >
-                    </label>
-                    <label class="block">
+                      />
+                    </div>
+                    <div class="block">
                       <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><Flag :size="14" /> Ends on</span>
-                      <input
-                        v-model="rule.until"
-                        type="date"
-                        class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
+                      <UiDateInput
+                        :model-value="rule.until ?? ''"
                         :min="rule.anchor || undefined"
-                        :readonly="!canEdit"
+                        aria-label="Series ends on"
+                        placeholder="No end"
+                        :disabled="!canEdit"
                         data-recurrence-until
+                        @update:model-value="rule.until = $event || null"
                         @change="commitRule"
-                      >
+                      />
                       <span class="muted mt-1 block text-[11px]">Empty: no end.</span>
-                    </label>
+                    </div>
                   </div>
                   <div class="block">
                     <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><SquareKanban :size="14" /> Each new round goes to</span>
@@ -2016,20 +2013,22 @@ function focusTitle(event: Event) {
                   </div>
                 </div>
                 <template v-else>
-                <div class="grid gap-4 sm:grid-cols-2">
-                  <label class="block">
+                <!-- With the due date it spans the ticket on a timeline; the same day is a one-day bar. One calendar shows both. -->
+                <UiDateRangeInput
+                  v-model:start="form.startDate"
+                  v-model:end="form.dueDate"
+                  start-label="Start date"
+                  end-label="Due date"
+                  start-placeholder="No start"
+                  end-placeholder="No due date"
+                  :end-class="dueState === 'alert' ? 'ring-2 ring-rose-600' : dueState === 'warning' ? 'ring-2 ring-orange-400' : ''"
+                  :disabled="!canEdit"
+                  @change="commitSpan($event === 'start' ? 'startDate' : 'dueDate')"
+                >
+                  <template #start-label>
                     <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><CalendarArrowUp :size="14" /> Start date</span>
-                    <!-- With the due date it spans the ticket on a timeline; the same day is a one-day bar. -->
-                    <input
-                      v-model="form.startDate"
-                      type="date"
-                      class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
-                      :max="form.dueDate || undefined"
-                      :readonly="!canEdit"
-                      @change="commitSpan('startDate')"
-                    >
-                  </label>
-                  <label class="block">
+                  </template>
+                  <template #end-label>
                     <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]">
                       <Calendar :size="14" /> Due date
                       <span
@@ -2038,21 +2037,22 @@ function focusTitle(event: Event) {
                         :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700'"
                       ><AlarmClock :size="11" /> {{ dueText }}</span>
                     </span>
-                    <input
-                      v-model="form.dueDate"
-                      type="date"
-                      class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
-                      :class="dueState === 'alert' ? 'ring-2 ring-rose-600' : dueState === 'warning' ? 'ring-2 ring-orange-400' : ''"
-                      :min="form.startDate || undefined"
-                      :readonly="!canEdit"
-                      @change="commitSpan('dueDate')"
-                    >
-                  </label>
-                </div>
+                  </template>
+                </UiDateRangeInput>
 
                 <!-- The days it is out in the world, apart from the days it is worked on: a campaign's run, an approval until it expires. -->
-                <div class="grid gap-4 sm:grid-cols-2">
-                  <label class="block">
+                <UiDateRangeInput
+                  v-model:start="form.liveFrom"
+                  v-model:end="form.liveUntil"
+                  start-label="Live from"
+                  end-label="Live until"
+                  start-placeholder="Not set"
+                  end-placeholder="Not set"
+                  :end-class="liveState === 'alert' ? 'ring-2 ring-rose-600' : liveState === 'warning' ? 'ring-2 ring-orange-400' : ''"
+                  :disabled="!canEdit"
+                  @change="commitLiveWindow($event === 'start' ? 'liveFrom' : 'liveUntil')"
+                >
+                  <template #start-label>
                     <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]">
                       <Radio :size="14" /> Live from
                       <!-- Both dates go in one save. -->
@@ -2064,29 +2064,19 @@ function focusTitle(event: Event) {
                         @click.prevent="removeLiveWindow"
                       ><X :size="11" aria-hidden="true" /> Clear</button>
                     </span>
-                    <span class="flex gap-2">
-                    <input
-                      v-model="form.liveFrom"
-                      type="date"
-                      class="focus-ring surface-strong h-11 min-w-0 flex-1 rounded-xl px-3 text-sm outline-none"
-                      :max="form.liveUntil || undefined"
-                      :readonly="!canEdit"
-                      @change="commitLiveWindow('liveFrom')"
-                    >
-                    <input
+                  </template>
+                  <template #start-after>
+                    <UiTimeInput
                       v-model="form.liveFromTime"
-                      type="time"
-                      class="focus-ring surface-strong h-11 w-[7.5rem] shrink-0 rounded-xl px-3 text-sm tabular-nums outline-none disabled:opacity-50"
-                      :disabled="!form.liveFrom"
-                      :readonly="!canEdit"
+                      class="w-[8.5rem] shrink-0"
+                      :disabled="!canEdit || !form.liveFrom"
                       aria-label="Time it goes live"
                       :title="`Optional: time it goes live, ${timeZone}`"
                       data-time-live-from
                       @change="commitTime('liveFromTime')"
-                    >
-                    </span>
-                  </label>
-                  <label class="block">
+                    />
+                  </template>
+                  <template #end-label>
                     <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]">
                       <Radio :size="14" /> Live until
                       <span
@@ -2095,30 +2085,19 @@ function focusTitle(event: Event) {
                         :class="liveState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700'"
                       >{{ liveText }}</span>
                     </span>
-                    <span class="flex gap-2">
-                    <input
-                      v-model="form.liveUntil"
-                      type="date"
-                      class="focus-ring surface-strong h-11 min-w-0 flex-1 rounded-xl px-3 text-sm outline-none"
-                      :class="liveState === 'alert' ? 'ring-2 ring-rose-600' : liveState === 'warning' ? 'ring-2 ring-orange-400' : ''"
-                      :min="form.liveFrom || undefined"
-                      :readonly="!canEdit"
-                      @change="commitLiveWindow('liveUntil')"
-                    >
-                    <input
+                  </template>
+                  <template #end-after>
+                    <UiTimeInput
                       v-model="form.liveUntilTime"
-                      type="time"
-                      class="focus-ring surface-strong h-11 w-[7.5rem] shrink-0 rounded-xl px-3 text-sm tabular-nums outline-none disabled:opacity-50"
-                      :disabled="!form.liveUntil"
-                      :readonly="!canEdit"
+                      class="w-[8.5rem] shrink-0"
+                      :disabled="!canEdit || !form.liveUntil"
                       aria-label="Time it comes down"
                       :title="`Optional: time it comes down, ${timeZone}`"
                       data-time-live-until
                       @change="commitTime('liveUntilTime')"
-                    >
-                    </span>
-                  </label>
-                </div>
+                    />
+                  </template>
+                </UiDateRangeInput>
                 <p v-if="form.liveFrom || form.liveUntil" class="muted -mt-2 text-[11px]">Times optional, in {{ timeZone }}.</p>
                 </template>
 
