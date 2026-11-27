@@ -1478,6 +1478,7 @@ function focusTitle(event: Event) {
                 </button>
               </div>
               <textarea v-if="editingDescription" id="ticket-description" ref="descriptionInput" v-model="form.description" v-autosize maxlength="10000" rows="5" class="focus-ring surface-strong w-full resize-none rounded-xl px-3.5 py-3 text-sm leading-relaxed outline-none" placeholder="Context, expected behavior, notes… Markdown is supported." />
+              <DictationHint v-if="editingDescription" class="mt-1.5" />
               <MarkdownView
                 v-else
                 :source="form.description"

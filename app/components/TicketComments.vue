@@ -151,8 +151,9 @@ async function confirmDelete() {
         class="focus-ring surface-strong w-full resize-none rounded-xl px-3.5 py-3 text-sm leading-relaxed outline-none"
         placeholder="Write a comment… Markdown is supported."
       />
-      <div class="mt-2 flex justify-end">
-        <button type="button" :disabled="posting || !draft.trim()" class="focus-ring h-9 rounded-xl bg-[var(--primary)] px-3.5 text-sm font-semibold text-[var(--primary-ink)] transition hover:opacity-85 disabled:opacity-50" @click="post">
+      <div class="mt-2 flex items-center justify-between gap-3">
+        <DictationHint />
+        <button type="button" :disabled="posting || !draft.trim()" class="focus-ring ml-auto h-9 rounded-xl bg-[var(--primary)] px-3.5 text-sm font-semibold text-[var(--primary-ink)] transition hover:opacity-85 disabled:opacity-50" @click="post">
           {{ posting ? 'Posting…' : 'Comment' }}
         </button>
       </div>
