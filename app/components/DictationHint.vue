@@ -16,9 +16,11 @@ onMounted(() => {
   <p
     v-if="isMac"
     class="muted flex items-center gap-1.5 text-xs"
-    title="macOS dictation types into any text field. If nothing happens, turn it on under System Settings → Keyboard → Dictation, where the shortcut can also be changed."
+    title="macOS dictation types into any text field. It starts with the 🌐 / fn key pressed twice, or the microphone key (F5) on newer keyboards. If nothing happens, or your keyboard has neither, turn it on and pick a shortcut under System Settings → Keyboard → Dictation. Edit → Start Dictation works too."
   >
-    <Mic :size="13" aria-hidden="true" />
-    <span>Press <kbd class="rounded border border-[var(--line)] px-1 font-sans text-[11px]">fn</kbd> twice to dictate</span>
+    <span>Dictate: press</span>
+    <kbd class="rounded border border-[var(--line)] px-1 font-sans text-[11px]">🌐 / fn</kbd>
+    <span>twice or</span>
+    <kbd class="inline-flex items-center rounded border border-[var(--line)] px-1 py-px" aria-label="microphone key"><Mic :size="11" aria-hidden="true" /></kbd>
   </p>
 </template>
