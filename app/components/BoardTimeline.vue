@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ChevronDown, LoaderCircle, TriangleAlert } from '@lucide/vue'
 import type { TimelineNode } from '~~/shared/types/domain'
-import { boardToday } from '~~/shared/utils/due-date'
 import { flattenForest, timelineBounds, timelineWarnings } from '~~/shared/utils/timeline'
 
 /**
@@ -21,7 +20,7 @@ const roots = ref<TimelineNode[]>([])
 const loaded = ref(false)
 const loading = ref(false)
 const failed = ref(false)
-const today = boardToday()
+const today = useBoardToday()
 
 async function load() {
   loading.value = true

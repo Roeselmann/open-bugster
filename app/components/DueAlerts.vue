@@ -2,7 +2,7 @@
 import { AlarmClock, ChevronRight, X } from '@lucide/vue'
 import { PopoverClose, PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from 'reka-ui'
 import type { DueTicket } from '~~/shared/types/domain'
-import { boardToday, daysUntil } from '~~/shared/utils/due-date'
+import { daysUntil } from '~~/shared/utils/due-date'
 
 const { tickets, refresh } = useDueTickets()
 const { boards } = useBoards()
@@ -38,11 +38,10 @@ const groups = computed(() => {
   return workspaces
 })
 
-const today = boardToday()
 // Far-off dates read better as a date than as a count of days.
 const dateFormatter = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', timeZone: 'UTC' })
 function dueText(ticket: DueTicket) {
-  const days = daysUntil(ticket.date, today) ?? 0
+  const days = daysUntil(ticket.date, ticket.today) ?? 0
   if (ticket.kind === 'live') {
     if (days > 30) return `live until ${dateFormatter.format(new Date(`${ticket.date}T00:00:00Z`))}`
     if (days === 0) return 'ends today'

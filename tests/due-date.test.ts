@@ -39,6 +39,13 @@ describe('boardToday', () => {
     expect(boardToday(new Date('2026-11-02T23:30:00Z'))).toBe('2026-11-03')
     expect(boardToday(new Date('2026-11-02T10:00:00Z'))).toBe('2026-11-02')
   })
+
+  it('reads it in the workspace’s own zone, and falls back to Berlin for one it does not know', () => {
+    expect(boardToday(new Date('2026-11-02T23:30:00Z'), 'America/New_York')).toBe('2026-11-02')
+    expect(boardToday(new Date('2026-11-02T14:30:00Z'), 'Asia/Tokyo')).toBe('2026-11-02')
+    expect(boardToday(new Date('2026-11-02T15:30:00Z'), 'Asia/Tokyo')).toBe('2026-11-03')
+    expect(boardToday(new Date('2026-11-02T23:30:00Z'), 'Mars/Olympus')).toBe('2026-11-03')
+  })
 })
 
 describe('dueDescription', () => {

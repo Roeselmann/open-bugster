@@ -37,6 +37,8 @@ export default defineEventHandler(async (event) => {
         'startDate to dueDate is when it is worked on: dueDate is a deadline.',
         'liveFrom to liveUntil is when it is out in the world: a campaign in market, an asset until its',
         'approval expires. A campaign\'s dueDate is its go-live, not the end of its run.',
+        'A milestone, a recurring ticket\'s rounds and either end of a live window can carry a time of',
+        'day (dueTime, liveFromTime, liveUntilTime: HH:MM in the workspace\'s timeZone from list_boards).',
         'A ticket can wait on others (waitsOn, finish-to-start: it starts once they end). To move a',
         'plan, shift the ticket in update_ticket: everything waiting on it moves along. Dry-run it first.',
         'A recurring ticket is the same card coming round again, like a calendar series: its dueDate is',

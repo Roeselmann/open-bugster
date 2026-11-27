@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ArrowRightToLine, ChevronDown, ChevronRight, Diamond, EyeOff, LocateFixed, ZoomIn, ZoomOut } from '@lucide/vue'
 import type { TimelineNode } from '~~/shared/types/domain'
-import { boardToday, daysUntil } from '~~/shared/utils/due-date'
+import { daysUntil } from '~~/shared/utils/due-date'
 import { flattenForest, flattenTimeline, isMilestone, liveSpanOf, roundMarks, spanOf, timelineBounds } from '~~/shared/utils/timeline'
 
 /**
@@ -22,7 +22,7 @@ const props = withDefaults(defineProps<{
 }>(), { size: 'compact' })
 const emit = defineEmits<{ toggle: [path: string] }>()
 
-const today = boardToday()
+const today = useBoardToday()
 const full = computed(() => props.size === 'full')
 
 // --- Zoom ---------------------------------------------------------------------------------
@@ -249,17 +249,21 @@ function barClass(node: TimelineNode) {
   if (props.warned.has(node.id)) return 'bg-orange-400'
   return 'bg-[var(--accent)]'
 }
+/** A day as the chart says it, with the time of day the ticket gives that very day. */
+function dayAt(day: string, ticketDay: string | null, time: string | null) {
+  return time && day === ticketDay ? `${dayOf(day)}, ${time}` : dayOf(day)
+}
 function spanLabel(node: TimelineNode) {
   const span = spanOf(node)
   const live = liveSpanOf(node)
-  const work = span ? (span.start === span.end ? dayOf(span.start) : `${dayOf(span.start)} – ${dayOf(span.end)}`) : null
-  const out = live ? `live ${dayOf(live.start)} – ${dayOf(live.end)}` : null
+  const work = span ? (span.start === span.end ? dayAt(span.start, node.dueDate, node.dueTime) : `${dayOf(span.start)} – ${dayOf(span.end)}`) : null
+  const out = live ? `live ${dayAt(live.start, node.liveFrom, node.liveFromTime)} – ${dayAt(live.end, node.liveUntil, node.liveUntilTime)}` : null
   return [work, out].filter(Boolean).join(' · ') || 'No dates'
 }
 // A due date alone is a deadline; with a start it is a span of work; a milestone is its day.
 function dateLabel(node: TimelineNode) {
   const span = spanOf(node)!
-  if (isMilestone(node)) return dayOf(span.start)
+  if (isMilestone(node)) return dayAt(span.start, node.dueDate, node.dueTime)
   if (!node.startDate) return `due ${dayOf(span.end)}`
   return span.start === span.end ? dayOf(span.start) : `${dayOf(span.start)} – ${dayOf(span.end)}`
 }

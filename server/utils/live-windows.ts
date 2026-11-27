@@ -1,4 +1,3 @@
-import { boardToday } from '../../shared/utils/due-date'
 import { findLane, findTicket, sweepLiveWindows, sweepRounds, type LiveSignal, type RoundSignal } from './db'
 import { clockEvents, dispatch } from './webhook'
 
@@ -10,7 +9,7 @@ import { clockEvents, dispatch } from './webhook'
  * consequence of it, fire and forget like every other event, so a dead receiver cannot make
  * the next pass announce the same go-live again.
  */
-export function runLiveSweep(today = boardToday()): LiveSignal[] {
+export function runLiveSweep(today?: string): LiveSignal[] {
   const signals = sweepLiveWindows(today)
   for (const signal of signals) {
     try {
@@ -44,7 +43,7 @@ export function liveSweepMinutes(): number {
  * for a round that went by unfinished, `ticket.new_round` for one that was done. As with the
  * live windows, the round row written first is what makes this happen once.
  */
-export function runRoundSweep(today = boardToday()): RoundSignal[] {
+export function runRoundSweep(today?: string): RoundSignal[] {
   const signals = sweepRounds(today)
   for (const signal of signals) {
     try {

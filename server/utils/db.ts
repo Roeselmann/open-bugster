@@ -26,7 +26,7 @@ export const SYSTEM_AUTHOR: ActivityAuthor = { principalId: null, agentId: null,
 import { decisionAnswer } from '../../shared/utils/todo-progress'
 import { nextRound as nextRoundOf, occurrenceOnOrBefore, reopenableRound, roundCloses } from '../../shared/utils/recurrence'
 import { DEFAULT_TICKET_TYPES, DEFAULT_WORKSPACE_NAME } from '../../shared/utils/constants'
-import { boardToday, daysUntil, dueLevel, liveLevel } from '../../shared/utils/due-date'
+import { boardToday, daysUntil, DEFAULT_TIME_ZONE, dueLevel, liveLevel } from '../../shared/utils/due-date'
 import { decryptSecret, encryptSecret, secretKeyAvailable } from './secret-box'
 import { hashStoredPassword } from './password'
 import { getServerConfig } from './config'
@@ -349,6 +349,7 @@ export function getDb() {
   ensureBoardMemberAutomation(database)
   ensureWorkspaces(database)
   ensureWorkspaceDescription(database)
+  ensureWorkspaceTimeZone(database)
   ensureTicketTypes(database)
   // After `ensureTicketTypes`: the column references the table that migration creates.
   ensureBoardImportType(database)
@@ -377,6 +378,7 @@ export function getDb() {
   ensureLaneLive(database)
   ensureTicketDependencies(database)
   ensureTicketSchedule(database)
+  ensureTicketTimes(database)
   ensureTicketStrictOrder(database)
   ensureTicketRecurrence(database)
   // Not in `boardIndexes`: that block also runs inside `ensureBoards`, before an upgrading
@@ -1989,6 +1991,13 @@ export function ensureWorkspaceDescription(db: Database.Database) {
   return true
 }
 
+/** The time zone a workspace's dates and times of day are read in. Existing ones keep Berlin, the clock they always had. */
+export function ensureWorkspaceTimeZone(db: Database.Database) {
+  if (tableColumns(db, 'workspaces').has('time_zone')) return false
+  db.exec(`ALTER TABLE workspaces ADD COLUMN time_zone TEXT NOT NULL DEFAULT '${DEFAULT_TIME_ZONE}'`)
+  return true
+}
+
 /**
  * Ticket types: a workspace-owned vocabulary for what kind of thing a ticket is, and a
  * nullable pointer from each ticket. Mirrors `ensureWorkspaces`: the column on `tickets` is
@@ -2193,6 +2202,18 @@ export function ensureTicketSchedule(db: Database.Database) {
   return true
 }
 
+/**
+ * An optional time of day, HH:MM in the workspace's time zone, beside the days that are an
+ * event: a milestone's or a round's due date, and the start and end of a live window. The
+ * days stay plain dates, so a client that knows nothing of times reads them as before.
+ */
+export function ensureTicketTimes(db: Database.Database) {
+  const columns = tableColumns(db, 'tickets')
+  const missing = ['due_time', 'live_from_time', 'live_until_time'].filter(name => !columns.has(name))
+  for (const name of missing) db.exec(`ALTER TABLE tickets ADD COLUMN ${name} TEXT`)
+  return missing.length > 0
+}
+
 /** A to-do list worked strictly top to bottom: its subtickets then wait on each other in turn. */
 export function ensureTicketStrictOrder(db: Database.Database) {
   if (tableColumns(db, 'tickets').has('strict_order')) return false
@@ -2293,13 +2314,13 @@ type BoardRow = {
   workspace_id: string
 }
 
-type WorkspaceRow = { id: string; name: string; description: string; position: number; created_at: string }
+type WorkspaceRow = { id: string; name: string; description: string; time_zone?: string; position: number; created_at: string }
 
 type LaneRow = { id: string; board_id: string; name: string; position: number; is_import: number; is_done: number; is_live: number }
 
 type TicketRow = {
   id: string; ticket_number: number; board_id: string; lane_id: string; title: string; description: string
-  position: number; priority: TicketPriority; schedule?: TicketSchedule; start_date: string | null; due_date: string | null; live_from: string | null; live_until: string | null; build_number: string | null; link: string | null; cover_attachment_id: string | null; card_images: string | null
+  position: number; priority: TicketPriority; schedule?: TicketSchedule; start_date: string | null; due_date: string | null; live_from: string | null; live_until: string | null; due_time?: string | null; live_from_time?: string | null; live_until_time?: string | null; build_number: string | null; link: string | null; cover_attachment_id: string | null; card_images: string | null
   source: TicketSource; external_id: string | null; created_at: string; updated_at: string; archived_at: string | null
   category_id: string | null; author_id: string | null; assignee_id: string | null; type_id: string | null
   strict_order?: number
@@ -2509,7 +2530,7 @@ export function boardAutomationAllowed(boardId: string, userId: string): boolean
 }
 
 function toWorkspace(row: WorkspaceRow): Workspace {
-  return { id: row.id, name: row.name, description: row.description, position: row.position, createdAt: row.created_at }
+  return { id: row.id, name: row.name, description: row.description, timeZone: row.time_zone ?? DEFAULT_TIME_ZONE, position: row.position, createdAt: row.created_at }
 }
 
 export function workspaceMembers(workspaceId: string): WorkspaceMember[] {
@@ -2629,13 +2650,13 @@ export function createWorkspace(name: string, creatorId: string | null = null): 
   return findWorkspaceSummary(id, creatorId ? { userId: creatorId, instanceAdmin: false } : null)!
 }
 
-export function updateWorkspace(id: string, input: { name?: string; description?: string }, viewer?: BoardViewer | null): WorkspaceSummary | null {
+export function updateWorkspace(id: string, input: { name?: string; description?: string; timeZone?: string }, viewer?: BoardViewer | null): WorkspaceSummary | null {
   const db = getDb()
   const row = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id) as WorkspaceRow | undefined
   if (!row) return null
   // `??` keeps an omitted field as it was, while an empty string really clears it.
-  db.prepare('UPDATE workspaces SET name = ?, description = ? WHERE id = ?')
-    .run(input.name ?? row.name, input.description ?? row.description, id)
+  db.prepare('UPDATE workspaces SET name = ?, description = ?, time_zone = ? WHERE id = ?')
+    .run(input.name ?? row.name, input.description ?? row.description, input.timeZone ?? row.time_zone ?? DEFAULT_TIME_ZONE, id)
   return findWorkspaceSummary(id, viewer)
 }
 
@@ -2774,9 +2795,9 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
       // once — the per-row MAX subquery `createTicket` uses would rescan for every ticket.
       let nextNumber = (db.prepare('SELECT COALESCE(MAX(ticket_number), 0) AS value FROM tickets').get() as { value: number }).value
       const insertTicket = db.prepare(`
-        INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, schedule, start_date, due_date, live_from, live_until, build_number, source, external_id, created_at, updated_at, archived_at, author_id, assignee_id, category_id, type_id,
+        INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, schedule, start_date, due_date, live_from, live_until, due_time, live_from_time, live_until_time, build_number, source, external_id, created_at, updated_at, archived_at, author_id, assignee_id, category_id, type_id,
           strict_order, recurrence_frequency, recurrence_interval, recurrence_anchor, recurrence_until, recurrence_reset_todos, recurrence_lane_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
       const labelsOf = db.prepare('SELECT label_id FROM ticket_labels WHERE ticket_id = ?')
       const attachLabel = db.prepare('INSERT INTO ticket_labels (ticket_id, label_id) VALUES (?, ?)')
@@ -2805,7 +2826,8 @@ export function duplicateBoard(sourceId: string, options: BoardDuplicateOptions)
         nextNumber += 1
         insertTicket.run(
           ticketId, nextNumber, id, laneIds.get(ticket.lane_id)!, ticket.title, ticket.description,
-          ticket.position, ticket.priority, ticket.schedule ?? 'none', ticket.start_date, ticket.due_date, ticket.live_from, ticket.live_until, ticket.build_number, ticket.source,
+          ticket.position, ticket.priority, ticket.schedule ?? 'none', ticket.start_date, ticket.due_date, ticket.live_from, ticket.live_until,
+          ticket.due_time ?? null, ticket.live_from_time ?? null, ticket.live_until_time ?? null, ticket.build_number, ticket.source,
           ticket.external_id, ticket.created_at, ticket.updated_at, ticket.archived_at,
           ticket.author_id, ticket.assignee_id, ticket.category_id ? categoryIds.get(ticket.category_id) ?? null : null,
           ticket.type_id,
@@ -3376,6 +3398,9 @@ function hydrateTicket(row: TicketRow): Ticket {
     dueDate: row.due_date,
     liveFrom: row.live_from ?? null,
     liveUntil: row.live_until ?? null,
+    dueTime: row.due_date ? row.due_time ?? null : null,
+    liveFromTime: row.live_from ? row.live_from_time ?? null : null,
+    liveUntilTime: row.live_until ? row.live_until_time ?? null : null,
     recurrence,
     nextRound: recurrence && row.due_date ? nextRoundOf(recurrence, row.due_date) : null,
     rounds: recurrence ? listRounds(row.id) : [],
@@ -3411,13 +3436,29 @@ function hydrateTicket(row: TicketRow): Ticket {
  * outlives its run. Finished work in a done lane is left out. Ordered by workspace and board,
  * the most pressing first.
  */
-export function listDueTickets(viewer: BoardViewer, today = boardToday()): DueTicket[] {
+/** The time zone of a board's workspace, which its days and times of day are read in. */
+export function boardTimeZone(boardId: string): string {
+  const row = getDb().prepare('SELECT w.time_zone FROM boards b JOIN workspaces w ON w.id = b.workspace_id WHERE b.id = ?').get(boardId) as { time_zone: string } | undefined
+  return row?.time_zone ?? DEFAULT_TIME_ZONE
+}
+
+/** Today on a board: the date in its workspace's time zone. */
+export function boardTodayOf(boardId: string, now = new Date()): string {
+  return boardToday(now, boardTimeZone(boardId))
+}
+
+/** `today` as given (tests pin it), else today in that time zone. */
+function todayIn(timeZone: string | null | undefined, today?: string): string {
+  return today ?? boardToday(new Date(), timeZone ?? DEFAULT_TIME_ZONE)
+}
+
+export function listDueTickets(viewer: BoardViewer, today?: string): DueTicket[] {
   const scoped = !viewer.instanceAdmin
   const rows = getDb().prepare(`
     SELECT t.id, t.ticket_number, t.title, l.is_live,
       CASE WHEN l.is_live = 1 THEN t.live_until ELSE t.due_date END AS watched,
       b.id AS board_id, b.name AS board_name,
-      b.due_warning_days, b.due_alert_days, w.id AS workspace_id, w.name AS workspace_name
+      b.due_warning_days, b.due_alert_days, w.id AS workspace_id, w.name AS workspace_name, w.time_zone
     FROM tickets t
     JOIN boards b ON b.id = t.board_id
     JOIN lanes l ON l.id = t.lane_id
@@ -3428,17 +3469,21 @@ export function listDueTickets(viewer: BoardViewer, today = boardToday()): DueTi
     ORDER BY w.position, w.created_at, b.position, b.created_at, watched, t.ticket_number
   `).all(scoped ? { userId: viewer.userId } : {}) as Array<{
     id: string; ticket_number: number; title: string; is_live: number; watched: string; board_id: string; board_name: string
-    due_warning_days: number; due_alert_days: number; workspace_id: string; workspace_name: string
+    due_warning_days: number; due_alert_days: number; workspace_id: string; workspace_name: string; time_zone: string
   }>
-  return rows.map(row => ({
-    id: row.id, ticketNumber: row.ticket_number, title: row.title,
-    kind: row.is_live ? 'live' as const : 'due' as const,
-    date: row.watched,
-    level: row.is_live
-      ? liveLevel(row.watched, today, row.due_warning_days)
-      : dueLevel(row.watched, today, { warningDays: row.due_warning_days, alertDays: row.due_alert_days }),
-    boardId: row.board_id, boardName: row.board_name, workspaceId: row.workspace_id, workspaceName: row.workspace_name
-  }))
+  return rows.map(row => {
+    const day = todayIn(row.time_zone, today)
+    return {
+      id: row.id, ticketNumber: row.ticket_number, title: row.title,
+      kind: row.is_live ? 'live' as const : 'due' as const,
+      date: row.watched,
+      today: day,
+      level: row.is_live
+        ? liveLevel(row.watched, day, row.due_warning_days)
+        : dueLevel(row.watched, day, { warningDays: row.due_warning_days, alertDays: row.due_alert_days }),
+      boardId: row.board_id, boardName: row.board_name, workspaceId: row.workspace_id, workspaceName: row.workspace_name
+    }
+  })
 }
 
 /**
@@ -3472,20 +3517,22 @@ export interface LiveSignal {
  * A go-live more than `LIVE_START_GRACE_DAYS` ago, or one whose window has already closed,
  * is not announced after the fact.
  */
-export function sweepLiveWindows(today = boardToday()): LiveSignal[] {
+export function sweepLiveWindows(pinnedToday?: string): LiveSignal[] {
   const db = getDb()
   const candidates = db.prepare(`
-    SELECT t.id, t.board_id, t.live_from, t.live_until, l.is_live, b.due_warning_days
+    SELECT t.id, t.board_id, t.live_from, t.live_until, l.is_live, b.due_warning_days, w.time_zone
     FROM tickets t
     JOIN lanes l ON l.id = t.lane_id
     JOIN boards b ON b.id = t.board_id
+    JOIN workspaces w ON w.id = b.workspace_id
     WHERE t.archived_at IS NULL AND (t.live_from IS NOT NULL OR (t.live_until IS NOT NULL AND l.is_live = 1))
-  `).all() as Array<{ id: string; board_id: string; live_from: string | null; live_until: string | null; is_live: number; due_warning_days: number }>
+  `).all() as Array<{ id: string; board_id: string; live_from: string | null; live_until: string | null; is_live: number; due_warning_days: number; time_zone: string }>
 
   const noted = db.prepare(`SELECT 1 FROM ticket_activity WHERE ticket_id = ? AND kind = ? AND json_extract(payload, '$.date') = ?`)
   const signals: LiveSignal[] = []
   for (const row of candidates) {
     const wanted: Array<Omit<LiveSignal, 'ticketId' | 'boardId'>> = []
+    const today = todayIn(row.time_zone, pinnedToday)
     const untilDays = row.live_until ? daysUntil(row.live_until, today) : null
     const fromDays = row.live_from ? daysUntil(row.live_from, today) : null
     if (row.live_from && fromDays !== null && fromDays <= 0 && fromDays >= -LIVE_START_GRACE_DAYS && (untilDays === null || untilDays >= 0)) {
@@ -3533,10 +3580,11 @@ export interface RoundSignal {
  * the latest day up to today, so a server that was down does not stack up rounds nobody saw.
  * Null for a ticket that does not recur, or whose round the calendar has closed already.
  */
-export function closeRound(ticketId: string, outcome: Exclude<RoundOutcome, 'missed'> | null, actor: ActivityAuthor | null, today = boardToday()): RoundSignal | null {
+export function closeRound(ticketId: string, outcome: Exclude<RoundOutcome, 'missed'> | null, actor: ActivityAuthor | null, pinnedToday?: string): RoundSignal | null {
   const db = getDb()
   const ticket = findTicket(ticketId)
   if (!ticket || ticket.archivedAt || !ticket.recurrence || !ticket.dueDate) return null
+  const today = pinnedToday ?? boardTodayOf(ticket.boardId)
   const rule = ticket.recurrence
   const due = ticket.dueDate
   if (!outcome && db.prepare('SELECT 1 FROM ticket_rounds WHERE ticket_id = ? AND due_date = ?').get(ticketId, due)) return null
@@ -3600,10 +3648,11 @@ interface RoundSnapshot {
  * closed before snapshots were kept gets its date back and nothing else. Null when there is no
  * round that may be opened (see `reopenableRound`).
  */
-export function reopenRound(ticketId: string, actor: ActivityAuthor | null, today = boardToday()): { date: string; outcome: RoundOutcome } | null {
+export function reopenRound(ticketId: string, actor: ActivityAuthor | null, pinnedToday?: string): { date: string; outcome: RoundOutcome } | null {
   const db = getDb()
   const ticket = findTicket(ticketId)
   if (!ticket) return null
+  const today = pinnedToday ?? boardTodayOf(ticket.boardId)
   const date = reopenableRound(ticket, today)
   if (!date) return null
   const row = db.prepare('SELECT outcome, snapshot FROM ticket_rounds WHERE ticket_id = ? AND due_date = ?').get(ticketId, date) as { outcome: RoundOutcome; snapshot: string | null } | undefined
@@ -3633,15 +3682,18 @@ export function reopenRound(ticketId: string, actor: ActivityAuthor | null, toda
  * last round of a series, the day after it. Each round closes once — the row it leaves behind
  * is what keeps a later pass from closing it again.
  */
-export function sweepRounds(today = boardToday()): RoundSignal[] {
+export function sweepRounds(pinnedToday?: string): RoundSignal[] {
   const rows = getDb().prepare(`
-    SELECT t.id, t.due_date, t.recurrence_frequency, t.recurrence_interval, t.recurrence_anchor, t.recurrence_until, t.recurrence_reset_todos, t.recurrence_lane_id
+    SELECT t.id, t.due_date, t.recurrence_frequency, t.recurrence_interval, t.recurrence_anchor, t.recurrence_until, t.recurrence_reset_todos, t.recurrence_lane_id, w.time_zone
     FROM tickets t
+    JOIN boards b ON b.id = t.board_id
+    JOIN workspaces w ON w.id = b.workspace_id
     WHERE t.archived_at IS NULL AND t.recurrence_frequency IS NOT NULL AND t.due_date IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM ticket_rounds r WHERE r.ticket_id = t.id AND r.due_date = t.due_date)
-  `).all() as Array<Pick<TicketRow, 'id' | 'due_date' | 'recurrence_frequency' | 'recurrence_interval' | 'recurrence_anchor' | 'recurrence_until' | 'recurrence_reset_todos' | 'recurrence_lane_id'>>
+  `).all() as Array<Pick<TicketRow, 'id' | 'due_date' | 'recurrence_frequency' | 'recurrence_interval' | 'recurrence_anchor' | 'recurrence_until' | 'recurrence_reset_todos' | 'recurrence_lane_id'> & { time_zone: string }>
   const signals: RoundSignal[] = []
   for (const row of rows) {
+    const today = todayIn(row.time_zone, pinnedToday)
     const rule = recurrenceOf(row)
     if (!rule || !row.due_date || today < roundCloses(rule, row.due_date)) continue
     const signal = closeRound(row.id, null, SYSTEM_AUTHOR, today)
@@ -4067,7 +4119,7 @@ const TIMELINE_LIMIT = 500
 export function ticketTimeline(rootId: string, canRead: (boardId: string) => boolean, budget = { left: TIMELINE_LIMIT }): TimelineNode | null {
   const db = getDb()
   const readNode = db.prepare(`
-    SELECT t.id, t.ticket_number, t.title, t.board_id, t.type_id, t.schedule, t.start_date, t.due_date, t.live_from, t.live_until, t.archived_at,
+    SELECT t.id, t.ticket_number, t.title, t.board_id, t.type_id, t.schedule, t.start_date, t.due_date, t.live_from, t.live_until, t.due_time, t.live_from_time, t.live_until_time, t.archived_at,
       t.recurrence_frequency, t.recurrence_interval, t.recurrence_anchor, t.recurrence_until, t.recurrence_reset_todos, t.recurrence_lane_id,
       b.name AS board_name, l.name AS lane_name, MAX(l.is_done, l.is_live) AS is_done, l.is_live
     FROM tickets t JOIN boards b ON b.id = t.board_id JOIN lanes l ON l.id = t.lane_id
@@ -4092,6 +4144,7 @@ export function ticketTimeline(rootId: string, canRead: (boardId: string) => boo
     const row = readNode.get(id) as {
       id: string; ticket_number: number; title: string; board_id: string; type_id: string | null; schedule: TicketSchedule
       start_date: string | null; due_date: string | null; live_from: string | null; live_until: string | null; archived_at: string | null
+      due_time: string | null; live_from_time: string | null; live_until_time: string | null
       board_name: string; lane_name: string; is_done: number; is_live: number
     } & Pick<TicketRow, 'recurrence_frequency' | 'recurrence_interval' | 'recurrence_anchor' | 'recurrence_until' | 'recurrence_reset_todos' | 'recurrence_lane_id'> | undefined
     if (!row || budget.left <= 0) return null
@@ -4114,6 +4167,9 @@ export function ticketTimeline(rootId: string, canRead: (boardId: string) => boo
       live: Boolean(row.is_live),
       liveFrom: row.live_from,
       liveUntil: row.live_until,
+      dueTime: row.due_date ? row.due_time : null,
+      liveFromTime: row.live_from ? row.live_from_time : null,
+      liveUntilTime: row.live_until ? row.live_until_time : null,
       recurrence: recurrenceOf(row),
       rounds: row.recurrence_frequency ? listRounds(row.id, 60).map(round => ({ date: round.date, outcome: round.outcome })) : [],
       waitsOn: dependencyRefs('waitsOn', row.id),
@@ -4493,6 +4549,10 @@ export interface TicketInput {
   dueDate?: string | null
   liveFrom?: string | null
   liveUntil?: string | null
+  /** HH:MM beside a milestone's or a round's due date, settled with the schedule like the dates. */
+  dueTime?: string | null
+  liveFromTime?: string | null
+  liveUntilTime?: string | null
   /** A recurring ticket's rule, settled with the schedule; its return lane checked by the caller. */
   recurrence?: TicketRecurrence | null
   buildNumber?: string | null
@@ -4546,12 +4606,14 @@ export function createTicket(boardId: string, input: TicketInput, author: Person
     // Appended first either way; a ticket asked to the top is then shuffled with the lane.
     const position = nextPosition(lane.id)
     const recurrence = input.schedule === 'recurring' ? input.recurrence ?? null : null
-    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, schedule, start_date, due_date, live_from, live_until, build_number, source, created_at, updated_at, author_id, assignee_id, category_id, type_id,
+    db.prepare(`INSERT INTO tickets (id, ticket_number, board_id, lane_id, title, description, position, priority, schedule, start_date, due_date, live_from, live_until, due_time, live_from_time, live_until_time, build_number, source, created_at, updated_at, author_id, assignee_id, category_id, type_id,
         recurrence_frequency, recurrence_interval, recurrence_anchor, recurrence_until, recurrence_reset_todos, recurrence_lane_id)
-      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      VALUES (?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM tickets), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, boardId, lane.id, input.title, input.description || '', position, input.priority || 'medium',
       storedSchedule(input.schedule ?? (input.startDate || input.dueDate || input.liveFrom || input.liveUntil ? 'lifecycle' : 'none')),
-      input.startDate || null, input.dueDate || null, input.liveFrom || null, input.liveUntil || null, input.buildNumber || null, now, now,
+      input.startDate || null, input.dueDate || null, input.liveFrom || null, input.liveUntil || null,
+      (input.dueDate && input.dueTime) || null, (input.liveFrom && input.liveFromTime) || null, (input.liveUntil && input.liveUntilTime) || null,
+      input.buildNumber || null, now, now,
       author?.id || null, input.assigneeId || null, categoryId, input.typeId || null, ...recurrenceColumns(recurrence)
     )
     if (input.placement === 'top') {
@@ -4583,6 +4645,10 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
   const dueDate = input.dueDate === undefined ? existing.dueDate : input.dueDate || null
   const liveFrom = input.liveFrom === undefined ? existing.liveFrom : input.liveFrom || null
   const liveUntil = input.liveUntil === undefined ? existing.liveUntil : input.liveUntil || null
+  // A time of day goes with its day: a day removed takes its time along.
+  const dueTime = dueDate ? (input.dueTime === undefined ? existing.dueTime : input.dueTime || null) : null
+  const liveFromTime = liveFrom ? (input.liveFromTime === undefined ? existing.liveFromTime : input.liveFromTime || null) : null
+  const liveUntilTime = liveUntil ? (input.liveUntilTime === undefined ? existing.liveUntilTime : input.liveUntilTime || null) : null
   // A caller that only knows dates (an import, a sync) gives an undated ticket a lifecycle.
   const schedule = input.schedule ?? (existing.schedule === 'none' && (startDate || dueDate || liveFrom || liveUntil) ? 'lifecycle' : existing.schedule)
   // The rule lives as long as the schedule says recurring; any other schedule has none.
@@ -4592,7 +4658,7 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
   const typeId = input.typeId === undefined ? existing.type?.id || null : input.typeId || null
   getDb().transaction(() => {
     const categoryId = input.categoryName === undefined ? existing.category?.id || null : resolveCategoryId(existing.boardId, input.categoryName)
-    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, schedule = ?, start_date = ?, due_date = ?, live_from = ?, live_until = ?, build_number = ?, assignee_id = ?, author_id = ?, category_id = ?, type_id = ?, updated_at = ?,
+    getDb().prepare(`UPDATE tickets SET title = ?, description = ?, priority = ?, schedule = ?, start_date = ?, due_date = ?, live_from = ?, live_until = ?, due_time = ?, live_from_time = ?, live_until_time = ?, build_number = ?, assignee_id = ?, author_id = ?, category_id = ?, type_id = ?, updated_at = ?,
         recurrence_frequency = ?, recurrence_interval = ?, recurrence_anchor = ?, recurrence_until = ?, recurrence_reset_todos = ?, recurrence_lane_id = ? WHERE id = ?`).run(
       input.title ?? existing.title,
       input.description ?? existing.description,
@@ -4602,6 +4668,9 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
       dueDate,
       liveFrom,
       liveUntil,
+      dueTime,
+      liveFromTime,
+      liveUntilTime,
       input.buildNumber === undefined ? (existing.source === 'manual' ? existing.buildNumber : null) : input.buildNumber || null,
       assigneeId,
       authorId,
@@ -4637,9 +4706,16 @@ export function updateTicket(id: string, input: Partial<TicketInput>, actor: Act
       recordActivity(id, actor, 'recurrence', { frequency: recurrence.frequency, interval: String(recurrence.interval), anchor: recurrence.anchor, until: recurrence.until })
     }
     if (startDate !== existing.startDate) recordActivity(id, actor, 'start_date', { from: existing.startDate, to: startDate })
-    if (dueDate !== existing.dueDate) recordActivity(id, actor, 'due_date', { from: existing.dueDate, to: dueDate })
-    if (liveFrom !== existing.liveFrom) recordActivity(id, actor, 'live_from', { from: existing.liveFrom, to: liveFrom })
-    if (liveUntil !== existing.liveUntil) recordActivity(id, actor, 'live_until', { from: existing.liveUntil, to: liveUntil })
+    // A day and its time of day read as one moment in the history: "2026-12-01 09:00".
+    const moment = (day: string | null, time: string | null) => day && time ? `${day} ${time}` : day
+    const changed = (kind: ActivityKind, before: [string | null, string | null], after: [string | null, string | null]) => {
+      const from = moment(...before)
+      const to = moment(...after)
+      if (from !== to) recordActivity(id, actor, kind, { from, to })
+    }
+    changed('due_date', [existing.dueDate, existing.dueTime], [dueDate, dueTime])
+    changed('live_from', [existing.liveFrom, existing.liveFromTime], [liveFrom, liveFromTime])
+    changed('live_until', [existing.liveUntil, existing.liveUntilTime], [liveUntil, liveUntilTime])
     if (assigneeId !== (existing.assignee?.id || null)) {
       recordActivity(id, actor, assigneeId ? 'assigned' : 'unassigned', { from: existing.assignee?.id || null, to: assigneeId })
     }

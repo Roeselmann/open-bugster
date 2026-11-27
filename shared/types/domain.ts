@@ -345,6 +345,8 @@ export interface Workspace {
   name: string
   /** Shown next to the workspace name in the header. Empty when the workspace has none. */
   description: string
+  /** The IANA time zone its dates and times of day are read in, such as "Europe/Berlin". */
+  timeZone: string
   position: number
   createdAt: string
 }
@@ -559,6 +561,10 @@ export interface TimelineNode {
   live: boolean
   liveFrom: string | null
   liveUntil: string | null
+  /** The times of day beside those days, HH:MM in the workspace's time zone; null for a whole day. */
+  dueTime: string | null
+  liveFromTime: string | null
+  liveUntilTime: string | null
   /** The rule of a recurring ticket; null for every other schedule. */
   recurrence: TicketRecurrence | null
   /** A recurring ticket's past rounds, newest first, with how each ended. */
@@ -620,6 +626,13 @@ export interface TicketPatch {
   /** The days it is out in the world, YYYY-MM-DD; the until never before the from. */
   liveFrom?: string | null
   liveUntil?: string | null
+  /**
+   * A time of day, HH:MM in the workspace's time zone, beside a milestone's or a round's due
+   * date and the days of the live window. A lifecycle's due date is a deadline and has none.
+   */
+  dueTime?: string | null
+  liveFromTime?: string | null
+  liveUntilTime?: string | null
   buildNumber?: string | null
   /** The whole list, in order; it replaces what the ticket had. */
   links?: TicketLinkInput[]
@@ -707,6 +720,8 @@ export interface DueTicket {
   title: string
   kind: 'due' | 'live'
   date: string
+  /** Today in the ticket's workspace, to count the days to `date` from. */
+  today: string
   level: 'none' | 'warning' | 'alert'
   boardId: string
   boardName: string
@@ -736,6 +751,13 @@ export interface Ticket {
    */
   liveFrom: string | null
   liveUntil: string | null
+  /**
+   * The time of day beside a day that is an event — a milestone or round (`dueTime`), going
+   * live, coming down — HH:MM in the workspace's time zone. Null: the whole day.
+   */
+  dueTime: string | null
+  liveFromTime: string | null
+  liveUntilTime: string | null
   /** The rule of a recurring ticket; null for every other schedule. */
   recurrence: TicketRecurrence | null
   /** The round after the one that is on now; null when the ticket does not recur or its series ends. */

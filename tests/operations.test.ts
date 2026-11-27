@@ -174,6 +174,51 @@ describe('the operation registry', () => {
       expect(db.listActivity(pinned.id).filter(entry => entry.kind === 'schedule').map(entry => entry.payload.to)).toEqual(['lifecycle', 'none', 'lifecycle', 'milestone'])
     })
 
+    it('gives the days that are an event a time of day, and a deadline none', async () => {
+      type Result = { ticket: { id: string; schedule: string; dueDate: string | null; dueTime: string | null; liveFrom: string | null; liveFromTime: string | null; liveUntil: string | null; liveUntilTime: string | null } }
+      const create = (input: Record<string, unknown>) => ops.run(ops.ticketCreate, actorOf('editor'), { boardId, laneId, title: 'Timed', ...input }) as Promise<Result>
+      const update = (ticketId: string, input: Record<string, unknown>) => ops.run(ops.ticketUpdate, actorOf('editor'), { ticketId, ...input }) as Promise<Result>
+
+      // A meeting at ten; "9:30" is read as 09:30, and nonsense is refused.
+      const meeting = (await create({ schedule: 'milestone', dueDate: '2026-05-12', dueTime: '10:00' })).ticket
+      expect(meeting).toMatchObject({ schedule: 'milestone', dueDate: '2026-05-12', dueTime: '10:00' })
+      expect((await update(meeting.id, { dueTime: '9:30' })).ticket.dueTime).toBe('09:30')
+      expect(await statusOf(update(meeting.id, { dueTime: '25:00' }))).toBe(422)
+      expect(await statusOf(update(meeting.id, { dueTime: 'ten' }))).toBe(422)
+      // A whole day again, and the history reads the day and the time as one moment.
+      expect((await update(meeting.id, { dueTime: null })).ticket).toMatchObject({ dueDate: '2026-05-12', dueTime: null })
+      expect(db.listActivity(meeting.id).filter(entry => entry.kind === 'due_date').map(entry => entry.payload.to)).toEqual(['2026-05-12', '2026-05-12 09:30'])
+
+      // A lifecycle's due date is a deadline: no time, and a switch drops the one a milestone had.
+      expect(await statusOf(create({ dueDate: '2026-05-08', dueTime: '17:00' }))).toBe(422)
+      await update(meeting.id, { dueTime: '10:00' })
+      expect((await update(meeting.id, { schedule: 'lifecycle' })).ticket).toMatchObject({ schedule: 'lifecycle', dueDate: '2026-05-12', dueTime: null })
+
+      // The live window takes a time at either end; a time without its day is refused, a day removed takes its time.
+      const launch = (await create({ dueDate: '2026-06-01', liveFrom: '2026-06-01', liveFromTime: '09:00', liveUntil: '2026-06-30', liveUntilTime: '18:00' })).ticket
+      expect(launch).toMatchObject({ liveFromTime: '09:00', liveUntilTime: '18:00' })
+      expect(await statusOf(create({ dueDate: '2026-06-01', liveUntilTime: '18:00' }))).toBe(422)
+      expect((await update(launch.id, { liveUntil: null })).ticket).toMatchObject({ liveUntil: null, liveUntilTime: null, liveFromTime: '09:00' })
+      // On one day, the window still runs forwards.
+      expect(await statusOf(update(launch.id, { liveUntil: '2026-06-01', liveUntilTime: '08:00' }))).toBe(422)
+      // Shifting the plan moves days, not times.
+      expect((await ops.run(ops.ticketShift, actorOf('editor'), { ticketId: launch.id, days: 2, dryRun: false }), db.findTicket(launch.id))).toMatchObject({ dueDate: '2026-06-03', liveFromTime: '09:00' })
+    })
+
+    it('reads a workspace’s days in its own time zone, which only a known zone may be', async () => {
+      const owner = actorOf('owner')
+      const workspaceId = db.findBoard(boardId)!.workspaceId
+      expect(db.findWorkspace(workspaceId)!.timeZone).toBe('Europe/Berlin')
+      expect(await statusOf(ops.run(ops.workspaceUpdate, owner, { workspaceId, timeZone: 'Mars/Olympus' }))).toBe(422)
+      // Stored as the runtime spells it.
+      const { workspace } = await ops.run(ops.workspaceUpdate, owner, { workspaceId, timeZone: 'america/new_york' }) as { workspace: { timeZone: string } }
+      expect(workspace.timeZone).toBe('America/New_York')
+      expect(db.boardTimeZone(boardId)).toBe('America/New_York')
+      // Late evening in New York is already the next day in Berlin.
+      expect(db.boardTodayOf(boardId, new Date('2026-11-02T23:30:00Z'))).toBe('2026-11-02')
+      await ops.run(ops.workspaceUpdate, owner, { workspaceId, timeZone: 'Europe/Berlin' })
+    })
+
     it('sorts existing tickets into a schedule once: the same day without a live window is a milestone', () => {
       const ids = ['a', 'b', 'c', 'd'].map(() => db.createTicket(boardId, { title: 'Before schedules' })!.id)
       const raw = db.getDb()

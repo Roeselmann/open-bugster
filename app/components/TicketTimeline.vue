@@ -2,7 +2,6 @@
 import { ChartGantt, ChevronDown, LoaderCircle, Maximize2, Minimize2, TriangleAlert } from '@lucide/vue'
 import { DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui'
 import type { TimelineNode } from '~~/shared/types/domain'
-import { boardToday } from '~~/shared/utils/due-date'
 import { timelineBounds, timelineWarnings } from '~~/shared/utils/timeline'
 
 /**
@@ -22,7 +21,7 @@ const collapsed = ref(new Set<string>())
 const expanded = ref(false)
 // The warnings sit folded behind a small link; the editor stays calm until someone asks.
 const warningsOpen = ref(false)
-const today = boardToday()
+const today = useBoardToday()
 
 async function load() {
   loading.value = true

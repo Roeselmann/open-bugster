@@ -147,6 +147,9 @@ export const timelineNodeSchema = z.object({
   live: z.boolean().describe('Whether it sits in a live lane.'),
   liveFrom: z.string().nullable(),
   liveUntil: z.string().nullable(),
+  dueTime: z.string().nullable(),
+  liveFromTime: z.string().nullable(),
+  liveUntilTime: z.string().nullable(),
   recurrence: ticketRecurrenceSchema.nullable(),
   rounds: z.array(ticketRoundSchema.pick({ date: true, outcome: true })).describe('A recurring ticket\'s past rounds, newest first.'),
   waitsOn: z.array(dependencyRefSchema).describe('The tickets it waits on, wherever they are.'),
@@ -234,6 +237,9 @@ export const ticketSchema = z.object({
   dueDate: z.string().nullable(),
   liveFrom: z.string().nullable().describe('The first day it is out in the world, YYYY-MM-DD: a campaign\'s start in market, an asset\'s release.'),
   liveUntil: z.string().nullable().describe('The last day it is out, YYYY-MM-DD: a campaign\'s end, an approval\'s expiry. Warns while the ticket sits in a live lane.'),
+  dueTime: z.string().nullable().describe('The time of day of a milestone or of each round, HH:MM in the workspace\'s time zone (`timeZone` on the workspace). Null: the whole day. A lifecycle\'s due date is a deadline and has none.'),
+  liveFromTime: z.string().nullable().describe('The time it goes live on `liveFrom`, HH:MM in the workspace\'s time zone; null: the whole day.'),
+  liveUntilTime: z.string().nullable().describe('The time it comes down on `liveUntil`, HH:MM in the workspace\'s time zone; null: the whole day.'),
   recurrence: ticketRecurrenceSchema.nullable().describe('Set for a recurring ticket: when its rounds come. Null for every other schedule.'),
   nextRound: z.string().nullable().describe('The day the round after the current one is due; null when the ticket does not recur or its series ends with this round.'),
   rounds: z.array(ticketRoundSchema).describe('A recurring ticket\'s last twelve rounds, newest first.'),
@@ -333,6 +339,7 @@ export const workspaceSchema = z.object({
   id: z.string(),
   name: z.string(),
   description: z.string(),
+  timeZone: z.string().describe('The IANA time zone its dates and times of day are read in, such as "Europe/Berlin".'),
   position: z.number().int(),
   createdAt: z.string()
 }).describe('The level above boards. Groups them; grants no board access by itself.')

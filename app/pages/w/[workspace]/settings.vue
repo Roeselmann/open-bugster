@@ -27,14 +27,18 @@ const { notice, notify, closeNotice } = useNotify()
 
 const name = ref('')
 const description = ref('')
+const timeZone = ref('')
 watchEffect(() => {
   if (!workspace.value) return
   name.value = workspace.value.name
   description.value = workspace.value.description
+  timeZone.value = workspace.value.timeZone
 })
+// Every zone the browser knows, for picking; the server checks what is typed in anyway.
+const timeZones = typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : []
 const savingDetails = ref(false)
 const unsavedDetails = computed(() => Boolean(workspace.value)
-  && (name.value.trim() !== workspace.value!.name || description.value.trim() !== workspace.value!.description))
+  && (name.value.trim() !== workspace.value!.name || description.value.trim() !== workspace.value!.description || timeZone.value.trim() !== workspace.value!.timeZone))
 
 async function saveDetails() {
   if (!name.value.trim() || !unsavedDetails.value || savingDetails.value || !workspace.value) return
@@ -42,7 +46,7 @@ async function saveDetails() {
   try {
     await $fetch(`/api/workspaces/${workspaceId.value}`, {
       method: 'PATCH',
-      body: { name: name.value.trim(), description: description.value.trim() },
+      body: { name: name.value.trim(), description: description.value.trim(), timeZone: timeZone.value.trim() },
     })
     await refreshWorkspaces()
     notify('success', 'Workspace saved.')
@@ -442,6 +446,11 @@ async function deleteWorkspace() {
             />
             <span class="muted mt-1.5 block text-xs">{{ description.trim().length }}/200 · leave it empty to show nothing next to the name.</span>
           </label>
+          <div class="mt-4 block">
+            <label for="workspace-time-zone" class="mb-2 block text-xs font-bold uppercase tracking-[.08em]">Time zone</label>
+            <UiCombobox id="workspace-time-zone" v-model="timeZone" :options="timeZones" :max-length="64" placeholder="Europe/Berlin" aria-label="Time zone" />
+            <span class="muted mt-1.5 block text-xs">Times of day on tickets — a meeting at 10:00, a go-live at 9:00 — mean this zone, and the boards count their days in it.</span>
+          </div>
           <div class="mt-4 flex justify-end">
             <button
               type="submit"

@@ -19,7 +19,7 @@ import type { Attachment, BoardMember, DependencyRef, ShiftResult, Category, Lab
 import { describeRecurrence, nextRound as nextRoundOf, occurrenceOnOrAfter, reopenableRound } from '~~/shared/utils/recurrence'
 import { TODO_LIGHT_LABELS, todoLight } from '~~/shared/utils/todo-progress'
 import { PRIORITY_LABELS } from '~~/shared/utils/constants'
-import { boardToday, dueDescription, dueLevel, liveDescription, liveLevel } from '~~/shared/utils/due-date'
+import { dueDescription, dueLevel, liveDescription, liveLevel } from '~~/shared/utils/due-date'
 import { dependencyWarnings } from '~~/shared/utils/timeline'
 import { cardImageCandidates, cardImages } from '~~/shared/utils/card-images'
 
@@ -51,9 +51,10 @@ const emit = defineEmits<{
   createSubticket: [ticket: Ticket, input: { boardId: string; laneId: string; title: string; description: string }, done: (ok: boolean) => void]
 }>()
 
-const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, startDate: '', dueDate: '', liveFrom: '', liveUntil: '', buildNumber: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '', typeId: 'none', laneId: '', placement: 'bottom' as 'top' | 'bottom' })
+const form = reactive({ title: '', description: '', priority: 'medium' as TicketPriority, startDate: '', dueDate: '', liveFrom: '', liveUntil: '', dueTime: '', liveFromTime: '', liveUntilTime: '', buildNumber: '', assigneeId: 'unassigned', authorId: 'unassigned', labels: [] as string[], categoryName: '', typeId: 'none', laneId: '', placement: 'bottom' as 'top' | 'bottom' })
 // Lit the same way as the card, and follows the field while it is being changed.
-const today = boardToday()
+const today = useBoardToday()
+const timeZone = useTimeZone()
 const currentLane = computed(() => {
   const laneId = props.ticket ? props.ticket.laneId : form.laneId
   return props.lanes.find(lane => lane.id === laneId)
@@ -338,14 +339,16 @@ function scrollPaneIntoView(tab: EditorTab) {
 // The schedule's one-line summary in Details, and the way from there to the block in Plan.
 const shortDate = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', timeZone: 'UTC' })
 const dateText = (date: string) => shortDate.format(new Date(`${date}T00:00:00Z`))
+/** "Dec 1", or "Dec 1, 09:00" with a time of day. */
+const momentText = (date: string, time: string) => (time ? `${dateText(date)}, ${time}` : dateText(date))
 const scheduleSummary = computed(() => {
   if (schedule.value === 'none') return 'No schedule'
-  if (schedule.value === 'milestone') return form.dueDate ? `Milestone · ${dateText(form.dueDate)}` : 'Milestone · no date yet'
-  if (schedule.value === 'recurring') return ruleText.value ? `${ruleText.value}${roundLine.value ? ` · ${roundLine.value}` : ''}` : 'Recurring · no rule yet'
+  if (schedule.value === 'milestone') return form.dueDate ? `Milestone · ${momentText(form.dueDate, form.dueTime)}` : 'Milestone · no date yet'
+  if (schedule.value === 'recurring') return ruleText.value ? `${ruleText.value}${form.dueTime ? ` at ${form.dueTime}` : ''}${roundLine.value ? ` · ${roundLine.value}` : ''}` : 'Recurring · no rule yet'
   const work = form.startDate && form.dueDate ? `${dateText(form.startDate)} – ${dateText(form.dueDate)}`
     : form.dueDate ? `Due ${dateText(form.dueDate)}`
     : form.startDate ? `From ${dateText(form.startDate)}` : null
-  const live = form.liveFrom || form.liveUntil ? `live ${form.liveFrom ? dateText(form.liveFrom) : '…'} – ${form.liveUntil ? dateText(form.liveUntil) : '…'}` : null
+  const live = form.liveFrom || form.liveUntil ? `live ${form.liveFrom ? momentText(form.liveFrom, form.liveFromTime) : '…'} – ${form.liveUntil ? momentText(form.liveUntil, form.liveUntilTime) : '…'}` : null
   return [work, live].filter(Boolean).join(' · ') || 'Lifecycle · no dates yet'
 })
 function openSchedule() {
@@ -574,6 +577,9 @@ watch(() => props.ticket, (ticket, previous) => {
   form.dueDate = ticket?.dueDate || ''
   form.liveFrom = ticket?.liveFrom || ''
   form.liveUntil = ticket?.liveUntil || ''
+  form.dueTime = ticket?.dueTime || ''
+  form.liveFromTime = ticket?.liveFromTime || ''
+  form.liveUntilTime = ticket?.liveUntilTime || ''
   if (!sameTicket || ticket?.schedule === scheduleChoice.value) scheduleChoice.value = null
   // The saved rule, or the one being set up while the switch to recurring is on its way.
   if (ticket?.recurrence || scheduleChoice.value !== 'recurring') loadRule(ticket?.recurrence)
@@ -630,6 +636,10 @@ const payload = {
   dueDate: () => form.dueDate || null,
   liveFrom: () => form.liveFrom || null,
   liveUntil: () => form.liveUntil || null,
+  // A time only goes with its day, and a lifecycle's due date has none.
+  dueTime: () => (form.dueDate && (schedule.value === 'milestone' || schedule.value === 'recurring') && form.dueTime) || null,
+  liveFromTime: () => (form.liveFrom && form.liveFromTime) || null,
+  liveUntilTime: () => (form.liveUntil && form.liveUntilTime) || null,
   buildNumber: () => form.buildNumber.trim() || null,
   categoryName: () => form.categoryName.trim() || null,
   labels: () => [...form.labels],
@@ -736,8 +746,7 @@ function commit(changes: TicketPatch) {
 
 function removeLiveWindow() {
   const hadDates = Boolean(props.ticket?.liveFrom || props.ticket?.liveUntil)
-  form.liveFrom = ''
-  form.liveUntil = ''
+  form.liveFrom = form.liveUntil = form.liveFromTime = form.liveUntilTime = ''
   if (hadDates) commit({ liveFrom: null, liveUntil: null })
 }
 
@@ -773,6 +782,7 @@ function setSchedule(next: TicketSchedule) {
   if (next === 'none') {
     parkSchedule(key)
     form.startDate = form.dueDate = form.liveFrom = form.liveUntil = ''
+    form.dueTime = form.liveFromTime = form.liveUntilTime = ''
     dependencyPicking.value = false
     shiftOpen.value = false
     const changes: TicketPatch = saved && saved.schedule !== 'none' ? { schedule: 'none' } : {}
@@ -788,7 +798,7 @@ function setSchedule(next: TicketSchedule) {
       frequency: 'weekly', interval: 1, anchor: form.dueDate || form.startDate || parked?.dueDate || today, until: null, resetTodos: true,
       returnLaneId: currentLane.value && !currentLane.value.isDone && !currentLane.value.isLive && !currentLane.value.isImport ? currentLane.value.id : null
     })
-    form.startDate = form.liveFrom = form.liveUntil = ''
+    form.startDate = form.liveFrom = form.liveUntil = form.liveFromTime = form.liveUntilTime = ''
     form.dueDate = occurrenceOnOrAfter(rule, today)
     commit({ schedule: 'recurring', recurrence: ruleInput() })
     return
@@ -797,12 +807,14 @@ function setSchedule(next: TicketSchedule) {
     parkSchedule(key)
     const restored = !form.dueDate && !form.startDate && Boolean(parked?.dueDate || parked?.startDate)
     form.dueDate = form.dueDate || form.startDate || parked?.dueDate || parked?.startDate || ''
-    form.startDate = form.liveFrom = form.liveUntil = ''
+    form.startDate = form.liveFrom = form.liveUntil = form.liveFromTime = form.liveUntilTime = ''
     if (form.dueDate) commit(restored ? { schedule: 'milestone', dueDate: form.dueDate } : { schedule: 'milestone' })
     return
   }
   // Back to a lifecycle: whatever is empty comes back from the last switch away, if anything.
   const changes: TicketPatch = { schedule: 'lifecycle' }
+  // A lifecycle's due date is a deadline, a whole day: the server drops the time as well.
+  form.dueTime = ''
   if (parked) {
     for (const field of ['startDate', 'dueDate', 'liveFrom', 'liveUntil'] as const) {
       if (!form[field] && parked[field]) {
@@ -821,6 +833,16 @@ function setSchedule(next: TicketSchedule) {
 /** The schedule goes along with a date when it has not been saved yet: a milestone getting its day. */
 function withSchedule(changes: TicketPatch): TicketPatch {
   return props.ticket && schedule.value !== props.ticket.schedule ? { schedule: schedule.value, ...changes } : changes
+}
+
+/**
+ * A time of day beside its day, saved on its own; empty makes it a whole day again. Without
+ * its day there is nothing to put it on, so it waits for one.
+ */
+function commitTime(field: 'dueTime' | 'liveFromTime' | 'liveUntilTime') {
+  const day = field === 'dueTime' ? form.dueDate : field === 'liveFromTime' ? form.liveFrom : form.liveUntil
+  if (!day) return
+  commit(withSchedule({ [field]: payload[field]() }))
 }
 
 /** A milestone is its day: clearing it puts the saved day back rather than leave it without one. */
@@ -948,6 +970,8 @@ function shiftText(dates: ShiftResult['moves'][number]) {
 
 /** An end before its start drags the start along, and back, as the span does. */
 function commitLiveWindow(changed: 'liveFrom' | 'liveUntil') {
+  if (!form.liveFrom) form.liveFromTime = ''
+  if (!form.liveUntil) form.liveUntilTime = ''
   if (form.liveFrom && form.liveUntil && form.liveFrom > form.liveUntil) {
     if (changed === 'liveFrom') form.liveUntil = form.liveFrom
     else form.liveFrom = form.liveUntil
@@ -1020,7 +1044,7 @@ function submit(options: { stayOpen?: boolean } = {}) {
   const manualFields = isManual.value ? { buildNumber: payload.buildNumber() } : {}
   // Sent only by somebody allowed to set it — the API rejects it from anyone else.
   const authorFields = canAttribute.value ? { authorId: payload.authorId() } : {}
-  emit('save', { ...shared, ...manualFields, ...authorFields, laneId: form.laneId || undefined, placement: form.placement, title: form.title.trim(), description: form.description, priority: form.priority, schedule: schedule.value === 'milestone' && !form.dueDate ? 'none' : schedule.value, startDate: payload.startDate(), dueDate: payload.dueDate(), liveFrom: payload.liveFrom(), liveUntil: payload.liveUntil(), recurrence: schedule.value === 'recurring' && rule.anchor ? ruleInput() : undefined, links: [...links.value], labels: payload.labels(), categoryName: payload.categoryName(), typeId: payload.typeId(), stayOpen: options.stayOpen === true })
+  emit('save', { ...shared, ...manualFields, ...authorFields, laneId: form.laneId || undefined, placement: form.placement, title: form.title.trim(), description: form.description, priority: form.priority, schedule: schedule.value === 'milestone' && !form.dueDate ? 'none' : schedule.value, startDate: payload.startDate(), dueDate: payload.dueDate(), liveFrom: payload.liveFrom(), liveUntil: payload.liveUntil(), dueTime: payload.dueTime(), liveFromTime: payload.liveFromTime(), liveUntilTime: payload.liveUntilTime(), recurrence: schedule.value === 'recurring' && rule.anchor ? ruleInput() : undefined, links: [...links.value], labels: payload.labels(), categoryName: payload.categoryName(), typeId: payload.typeId(), stayOpen: options.stayOpen === true })
 }
 
 // Links save as soon as one is added, removed or switched between preview and text.
@@ -1807,7 +1831,7 @@ function focusTitle(event: Event) {
 
               <template v-if="lifecycleOn">
                 <!-- A milestone is one day, kept as its due date: an event, so no start and no live window. -->
-                <label v-if="schedule === 'milestone'" class="block sm:w-1/2 sm:pr-2">
+                <label v-if="schedule === 'milestone'" class="block sm:w-2/3 sm:pr-2">
                   <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]">
                     <Flag :size="14" /> Date
                     <span
@@ -1816,15 +1840,29 @@ function focusTitle(event: Event) {
                       :class="dueState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700'"
                     ><AlarmClock :size="11" /> {{ dueText }}</span>
                   </span>
-                  <input
-                    v-model="form.dueDate"
-                    type="date"
-                    data-milestone-date
-                    class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
-                    :class="dueState === 'alert' ? 'ring-2 ring-rose-600' : dueState === 'warning' ? 'ring-2 ring-orange-400' : ''"
-                    :readonly="!canEdit"
-                    @change="commitMilestone"
-                  >
+                  <span class="flex gap-2">
+                    <input
+                      v-model="form.dueDate"
+                      type="date"
+                      data-milestone-date
+                      class="focus-ring surface-strong h-11 min-w-0 flex-1 rounded-xl px-3 text-sm outline-none"
+                      :class="dueState === 'alert' ? 'ring-2 ring-rose-600' : dueState === 'warning' ? 'ring-2 ring-orange-400' : ''"
+                      :readonly="!canEdit"
+                      @change="commitMilestone"
+                    >
+                    <input
+                      v-model="form.dueTime"
+                      type="time"
+                      class="focus-ring surface-strong h-11 w-[7.5rem] shrink-0 rounded-xl px-3 text-sm tabular-nums outline-none disabled:opacity-50"
+                      :disabled="!form.dueDate"
+                      :readonly="!canEdit"
+                      aria-label="Time of day"
+                      :title="`Optional: time of day, ${timeZone}`"
+                      data-time-due
+                      @change="commitTime('dueTime')"
+                    >
+                  </span>
+                  <span class="muted mt-1 block text-[11px]">Time optional, in {{ timeZone }}.</span>
                 </label>
                 <!-- A recurring ticket: the rule, the round that is on now, and how the last rounds went. -->
                 <div v-else-if="schedule === 'recurring'" class="space-y-4" data-recurrence-block>
@@ -1856,6 +1894,21 @@ function focusTitle(event: Event) {
                         </div>
                       </div>
                     </div>
+                    <label class="block">
+                      <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]"><AlarmClock :size="14" /> At</span>
+                      <input
+                      v-model="form.dueTime"
+                      type="time"
+                      class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm tabular-nums outline-none disabled:opacity-50"
+                      :disabled="!form.dueDate"
+                      :readonly="!canEdit"
+                      aria-label="Time of each round"
+                      :title="`Optional: time of each round, ${timeZone}`"
+                      data-time-round
+                      @change="commitTime('dueTime')"
+                    >
+                      <span class="muted mt-1 block text-[11px]">Empty: all day. In {{ timeZone }}.</span>
+                    </label>
                   </div>
                   <p v-if="ruleText" class="muted -mt-2 text-xs" data-recurrence-summary>{{ ruleText }}{{ rule.until ? `, until ${dateText(rule.until)}` : '' }}<template v-if="roundLine"> · {{ roundLine }}</template></p>
 
@@ -2011,14 +2064,27 @@ function focusTitle(event: Event) {
                         @click.prevent="removeLiveWindow"
                       ><X :size="11" aria-hidden="true" /> Clear</button>
                     </span>
+                    <span class="flex gap-2">
                     <input
                       v-model="form.liveFrom"
                       type="date"
-                      class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
+                      class="focus-ring surface-strong h-11 min-w-0 flex-1 rounded-xl px-3 text-sm outline-none"
                       :max="form.liveUntil || undefined"
                       :readonly="!canEdit"
                       @change="commitLiveWindow('liveFrom')"
                     >
+                    <input
+                      v-model="form.liveFromTime"
+                      type="time"
+                      class="focus-ring surface-strong h-11 w-[7.5rem] shrink-0 rounded-xl px-3 text-sm tabular-nums outline-none disabled:opacity-50"
+                      :disabled="!form.liveFrom"
+                      :readonly="!canEdit"
+                      aria-label="Time it goes live"
+                      :title="`Optional: time it goes live, ${timeZone}`"
+                      data-time-live-from
+                      @change="commitTime('liveFromTime')"
+                    >
+                    </span>
                   </label>
                   <label class="block">
                     <span class="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-[.08em]">
@@ -2029,17 +2095,31 @@ function focusTitle(event: Event) {
                         :class="liveState === 'alert' ? 'bg-rose-600 text-white' : 'bg-orange-400/20 text-orange-700'"
                       >{{ liveText }}</span>
                     </span>
+                    <span class="flex gap-2">
                     <input
                       v-model="form.liveUntil"
                       type="date"
-                      class="focus-ring surface-strong h-11 w-full rounded-xl px-3 text-sm outline-none"
+                      class="focus-ring surface-strong h-11 min-w-0 flex-1 rounded-xl px-3 text-sm outline-none"
                       :class="liveState === 'alert' ? 'ring-2 ring-rose-600' : liveState === 'warning' ? 'ring-2 ring-orange-400' : ''"
                       :min="form.liveFrom || undefined"
                       :readonly="!canEdit"
                       @change="commitLiveWindow('liveUntil')"
                     >
+                    <input
+                      v-model="form.liveUntilTime"
+                      type="time"
+                      class="focus-ring surface-strong h-11 w-[7.5rem] shrink-0 rounded-xl px-3 text-sm tabular-nums outline-none disabled:opacity-50"
+                      :disabled="!form.liveUntil"
+                      :readonly="!canEdit"
+                      aria-label="Time it comes down"
+                      :title="`Optional: time it comes down, ${timeZone}`"
+                      data-time-live-until
+                      @change="commitTime('liveUntilTime')"
+                    >
+                    </span>
                   </label>
                 </div>
+                <p v-if="form.liveFrom || form.liveUntil" class="muted -mt-2 text-[11px]">Times optional, in {{ timeZone }}.</p>
                 </template>
 
                 <!-- Moving the plan: these dates and everything waiting on them, by the same days. -->

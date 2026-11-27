@@ -1,13 +1,38 @@
 /** How urgently a card's due date calls for attention: nothing, orange, or red. */
 export type DueLevel = 'none' | 'warning' | 'alert'
 
-/** The board's clock: due dates are calendar days, and the cards read them in Berlin time. */
-const todayFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' })
+/** The time zone a workspace starts with, and the one a board falls back to. */
+export const DEFAULT_TIME_ZONE = 'Europe/Berlin'
 
-/** Today as YYYY-MM-DD in the board's time zone. */
-export function boardToday(now = new Date()): string {
-  return todayFormatter.format(now)
+/** Whether the runtime knows `zone` as an IANA time zone, such as "Europe/Berlin". */
+export function isTimeZone(zone: string): boolean {
+  if (!zone || zone.length > 64) return false
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone: zone })
+    return true
+  } catch {
+    return false
+  }
 }
+
+const todayFormatters = new Map<string, Intl.DateTimeFormat>()
+
+/**
+ * The board's clock: due dates are calendar days, read in the time zone of the board's
+ * workspace. A zone the runtime does not know falls back to the default rather than throwing.
+ */
+export function boardToday(now = new Date(), timeZone = DEFAULT_TIME_ZONE): string {
+  const zone = isTimeZone(timeZone) ? timeZone : DEFAULT_TIME_ZONE
+  let formatter = todayFormatters.get(zone)
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' })
+    todayFormatters.set(zone, formatter)
+  }
+  return formatter.format(now)
+}
+
+/** A wall-clock time of day, HH:MM on the 24-hour clock. */
+export const TIME_OF_DAY = /^([01]\d|2[0-3]):[0-5]\d$/
 
 /** Whole days from `today` to `dueDate`, both YYYY-MM-DD; negative once it is overdue. */
 export function daysUntil(dueDate: string, today: string): number | null {

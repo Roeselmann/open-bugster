@@ -108,7 +108,7 @@ export const WEBHOOK_EVENTS: readonly WebhookEventDoc[] = [
   {
     event: 'ticket.went_live',
     operation: null,
-    fires: 'The first day of a ticket’s live window (`liveFrom`) has come. Raised by the calendar, not by a request, at most a few minutes into the day (Europe/Berlin), whatever lane the ticket is in. A go-live more than a week late — the server was down — is not announced.',
+    fires: 'The first day of a ticket’s live window (`liveFrom`) has come. Raised by the calendar, not by a request, at most a few minutes into the day in the workspace’s time zone, whatever lane the ticket is in. A go-live more than a week late — the server was down — is not announced.',
     dataKey: 'ticket',
     holds: 'The ticket in full; beside it `data.lane` (`id`, `name`, `isLive` — false means the board has not caught up yet) and `data.date`, the day the window opened. `actor` has no principal and the channel `system`.'
   },

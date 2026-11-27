@@ -6,9 +6,8 @@ import * as ops from '~~/server/operations'
 import type { Actor } from '~~/server/utils/actor'
 import { resolveAttachmentFile } from '~~/server/utils/attachment-file'
 import { DEFAULT_PREVIEW_DIMENSION, imagePreview } from '~~/server/utils/image-preview'
-import { findTicketType, isServiceIdentity, parentTicketIdsOf, principalDescription } from '~~/server/utils/db'
+import { boardTodayOf, findTicketType, isServiceIdentity, parentTicketIdsOf, principalDescription } from '~~/server/utils/db'
 import { todoLight } from '~~/shared/utils/todo-progress'
-import { boardToday } from '~~/shared/utils/due-date'
 import { dependencyWarnings, timelineBounds, timelineWarnings } from '~~/shared/utils/timeline'
 import { describeRecurrence } from '~~/shared/utils/recurrence'
 import { categoryColors, ticketTypeColors } from '~~/shared/types/domain'
@@ -44,6 +43,9 @@ const RECURRENCE_INPUT = z.object({
   returnLaneId: z.string().nullable().optional().describe('A lane of this board the card goes back to at each new round, e.g. "Weekly", so it can sit in a done lane until then. Omit to leave it where it is.')
 }).describe('The rule of a recurring ticket, whole; it makes the ticket recurring. dueDate becomes the first round from today on unless given. On the day the next round is due the server closes the current one — done if the card is in a done or live lane or every to-do is ticked, otherwise missed (a warning) — and starts the next.')
 
+const DUE_TIME_FIELD = 'HH:MM, 24-hour, in the workspace\'s time zone (timeZone in list_boards): when a milestone or each round of a recurring ticket happens, e.g. a meeting at 10:00. Not for a lifecycle, whose dueDate is a deadline. Omit for a whole day.'
+const LIVE_TIME_FIELD = 'HH:MM, 24-hour, in the workspace\'s time zone: the time on that day of the live window, e.g. a go-live at 09:00. Shown only; warnings still go by the day. Omit for a whole day.'
+
 /** What a ticket looks like in a list: enough to choose one, and no more. */
 function slim(ticket: Ticket) {
   return {
@@ -61,12 +63,23 @@ function slim(ticket: Ticket) {
     dueDate: ticket.dueDate,
     liveFrom: ticket.liveFrom,
     liveUntil: ticket.liveUntil,
+    // Times of day only where there is one: most days are whole days.
+    ...timesOf(ticket),
     // Only for a recurring ticket: how it repeats, when the next round is, how the last one went.
     ...(ticket.recurrence ? { repeats: describeRecurrence(ticket.recurrence), nextRound: ticket.nextRound, lastRound: ticket.rounds[0] ? { date: ticket.rounds[0].date, outcome: ticket.rounds[0].outcome } : null } : {}),
     commentCount: ticket.commentCount,
     progress: progressOf(ticket.todos),
     // Numbers only here; get_ticket spells them out.
     waitsOn: ticket.waitsOn.map(item => item.ticketNumber)
+  }
+}
+
+/** The times of day a ticket or timeline node has, HH:MM in its workspace's time zone; nothing for whole days. */
+function timesOf(item: { dueTime: string | null; liveFromTime: string | null; liveUntilTime: string | null }) {
+  return {
+    ...(item.dueTime ? { dueTime: item.dueTime } : {}),
+    ...(item.liveFromTime ? { liveFromTime: item.liveFromTime } : {}),
+    ...(item.liveUntilTime ? { liveUntilTime: item.liveUntilTime } : {})
   }
 }
 
@@ -92,6 +105,7 @@ function timelineOf(node: TimelineNode): Record<string, unknown> {
     startDate: node.startDate,
     dueDate: node.dueDate,
     ...(node.liveFrom || node.liveUntil ? { live: node.live, liveFrom: node.liveFrom, liveUntil: node.liveUntil } : {}),
+    ...timesOf(node),
     ...(node.recurrence ? { repeats: describeRecurrence(node.recurrence), rounds: node.rounds.slice(0, 6) } : {}),
     ...(node.waitsOn.length ? { waitsOn: node.waitsOn.map(item => item.ticketNumber) } : {}),
     ...(node.readable ? {} : { readable: false }),
@@ -246,7 +260,7 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
     const home = workspaces.find(workspace => workspace.id === board.workspaceId)
     return {
       id: board.id,
-      workspace: { id: board.workspaceId, name: home?.name ?? null, description: home?.description ?? null },
+      workspace: { id: board.workspaceId, name: home?.name ?? null, description: home?.description ?? null, timeZone: home?.timeZone ?? null },
       name: board.name,
       description: board.description,
       yourRole: board.role,
@@ -269,7 +283,7 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
     const known = lanes ?? (await call<{ lanes: LaneSummary[] }>(ops.laneList, { boardId: ticket.boardId })).lanes
     const lane = known.find(candidate => candidate.id === ticket.laneId)
     if (!lane || !(lane.isDone || lane.isLive)) return []
-    return dependencyWarnings({ id: ticket.id, ticketNumber: ticket.ticketNumber, startDate: ticket.startDate, dueDate: ticket.dueDate, done: true, waitsOn: ticket.waitsOn }, boardToday())
+    return dependencyWarnings({ id: ticket.id, ticketNumber: ticket.ticketNumber, startDate: ticket.startDate, dueDate: ticket.dueDate, done: true, waitsOn: ticket.waitsOn }, boardTodayOf(ticket.boardId))
       .map(warning => warning.message)
   }
 
@@ -327,7 +341,7 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
     return reply({
       // Name and description up front rather than a bare workspaceId on each board: what a
       // workspace is for is exactly the context an agent lacks when it picks a board.
-      workspaces: workspaces.map(workspace => ({ id: workspace.id, name: workspace.name, description: workspace.description, yourRole: workspace.role })),
+      workspaces: workspaces.map(workspace => ({ id: workspace.id, name: workspace.name, description: workspace.description, timeZone: workspace.timeZone, yourRole: workspace.role })),
       boards: boards.map(board => ({
         id: board.id,
         workspaceId: board.workspaceId,
@@ -522,7 +536,7 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
         via: entry.agentId,
         at: entry.createdAt
       })),
-      ...(plan ? { timeline: { covers: timelineBounds(plan), warnings: timelineWarnings(plan, boardToday()).map(warning => warning.message), subtickets: plan.children.map(timelineOf) } } : {})
+      ...(plan ? { timeline: { covers: timelineBounds(plan), warnings: timelineWarnings(plan, boardTodayOf(ticket.boardId)).map(warning => warning.message), subtickets: plan.children.map(timelineOf) } } : {})
     })
   })
 
@@ -582,6 +596,9 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       dueDate: z.string().optional().describe('YYYY-MM-DD: the day the work has to be done — for a campaign its go-live, not the end of its run.'),
       liveFrom: z.string().optional().describe('YYYY-MM-DD: the first day it is out in the world, e.g. a campaign\'s start in market.'),
       liveUntil: z.string().optional().describe('YYYY-MM-DD: the last day it is out, e.g. the end of a campaign or an approval\'s expiry. Warns while the ticket sits in a lane with isLive.'),
+      dueTime: z.string().optional().describe(DUE_TIME_FIELD),
+      liveFromTime: z.string().optional().describe(LIVE_TIME_FIELD),
+      liveUntilTime: z.string().optional().describe(LIVE_TIME_FIELD),
       links: z.array(LINK_INPUT).max(50).optional().describe('Web addresses the ticket refers to, in order.'),
       labels: z.array(z.string()).max(12).optional(),
       categoryName: z.string().optional(),
@@ -634,6 +651,9 @@ export function registerTools(server: McpServer, actor: Actor, options: ToolOpti
       dueDate: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. The deadline of the work, not the end of a run.'),
       liveFrom: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. First day out in the world.'),
       liveUntil: z.string().nullable().optional().describe('YYYY-MM-DD; null removes it. Last day out; never before liveFrom.'),
+      dueTime: z.string().nullable().optional().describe(`${DUE_TIME_FIELD} null makes it a whole day again.`),
+      liveFromTime: z.string().nullable().optional().describe(`${LIVE_TIME_FIELD} null makes it a whole day again.`),
+      liveUntilTime: z.string().nullable().optional().describe(`${LIVE_TIME_FIELD} null makes it a whole day again.`),
       links: z.array(LINK_INPUT).max(50).optional()
         .describe('Replaces the whole link list — read the ticket first and send every link back, kept and new alike. Omit the field to leave the list alone.'),
       cardImageIds: z.array(z.string()).max(100).nullable().optional()

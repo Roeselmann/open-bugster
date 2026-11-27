@@ -2,7 +2,7 @@
 import { AlarmClock, ChevronDown, ChevronRight, Diamond, ListTodo, MessageSquare, Radio, Repeat, Tag } from '@lucide/vue'
 import type { Lane, Ticket } from '~~/shared/types/domain'
 import { CATEGORY_TONE_CLASSES } from '~~/shared/utils/constants'
-import { boardToday, dueLevel } from '~~/shared/utils/due-date'
+import { dueLevel } from '~~/shared/utils/due-date'
 import { todoLight } from '~~/shared/utils/todo-progress'
 
 /**
@@ -22,7 +22,7 @@ const props = withDefaults(defineProps<{
 }>(), { selectedId: null, dueWarningDays: 7, dueAlertDays: 1 })
 const emit = defineEmits<{ open: [ticket: Ticket] }>()
 
-const today = boardToday()
+const today = useBoardToday()
 
 const ticketsFor = (laneId: string) => props.tickets
   .filter(ticket => ticket.laneId === laneId)
@@ -80,12 +80,13 @@ const dayOf = (date: string) => dayFormatter.format(new Date(`${date}T00:00:00Z`
 
 /** What kind of date a ticket carries and its days in words, as the card tells it. */
 function scheduleOf(ticket: Ticket, lane: Lane) {
-  const { schedule, startDate, dueDate, liveFrom, liveUntil } = ticket
-  if (lane.isLive && (liveFrom || liveUntil)) return { icon: Radio, text: `Live ${liveFrom ? dayOf(liveFrom) : '…'} – ${liveUntil ? dayOf(liveUntil) : '…'}`, level: 'none' as const }
+  const { schedule, startDate, dueDate, liveFrom, liveUntil, dueTime, liveFromTime, liveUntilTime } = ticket
+  const at = (day: string, time: string | null) => (time ? `${dayOf(day)}, ${time}` : dayOf(day))
+  if (lane.isLive && (liveFrom || liveUntil)) return { icon: Radio, text: `Live ${liveFrom ? at(liveFrom, liveFromTime) : '…'} – ${liveUntil ? at(liveUntil, liveUntilTime) : '…'}`, level: 'none' as const }
   if (!dueDate && !startDate) return null
   const level = lane.isDone || lane.isLive ? 'none' : dueLevel(dueDate, today, { warningDays: props.dueWarningDays, alertDays: props.dueAlertDays })
-  if (schedule === 'recurring') return { icon: Repeat, text: dueDate ? dayOf(dueDate) : '', level }
-  if (schedule === 'milestone') return { icon: Diamond, text: dueDate ? dayOf(dueDate) : '', level }
+  if (schedule === 'recurring') return { icon: Repeat, text: dueDate ? at(dueDate, dueTime) : '', level }
+  if (schedule === 'milestone') return { icon: Diamond, text: dueDate ? at(dueDate, dueTime) : '', level }
   const text = startDate && dueDate && startDate !== dueDate
     ? `${dayOf(startDate)} – ${dayOf(dueDate)}`
     : dueDate ? `Due ${dayOf(dueDate)}` : `Starts ${dayOf(startDate!)}`

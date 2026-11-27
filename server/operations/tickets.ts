@@ -4,7 +4,7 @@ import { boardMemberIds, boardViewer, requireBoardAccess, requireTicketAccess } 
 import type { Actor } from '../utils/actor'
 import {
   archiveTicket, closeRound, reopenRound, createSubticket, createTicket, listActivity, listDueTickets, listBoardActivity, listTickets, listTicketsPage,
-  atomically, defaultLaneFor, dependencyRefs, findBoard, parentTicketIdsOf, findLane, findTicket, listBoards, moveTicket, boardTimeline, parentTicketRefsOf, searchSubticketCandidates, personById, restoreTicket, subticketIdsOf, ticketIdByNumber, ticketTimeline, ticketTypeBelongsToBoard, transferTicket, updateTicket, ticketsWaitingOn, waitingTicketIds, waitsOnTransitively
+  atomically, boardTodayOf, defaultLaneFor, dependencyRefs, findBoard, parentTicketIdsOf, findLane, findTicket, listBoards, moveTicket, boardTimeline, parentTicketRefsOf, searchSubticketCandidates, personById, restoreTicket, subticketIdsOf, ticketIdByNumber, ticketTimeline, ticketTypeBelongsToBoard, transferTicket, updateTicket, ticketsWaitingOn, waitingTicketIds, waitsOnTransitively
 } from '../utils/db'
 import { importedTicketUpdateSchema, subticketCreateSchema, ticketCreateSchema, ticketMoveSchema, ticketRoundCloseSchema, ticketShiftSchema, ticketTransferSchema, ticketUpdateSchema } from '../utils/validation'
 import { deleteLinkThumbnails } from '../utils/link-preview'
@@ -124,7 +124,7 @@ export const ticketCreate = defineOperation({
       throw createError({ statusCode: 422, statusMessage: 'A ticket can only be assigned to a member of this board.' })
     }
     if (rest.typeId && !ticketTypeBelongsToBoard(rest.typeId, boardId)) throw foreignType()
-    Object.assign(rest, settled({ schedule: 'none', startDate: null, dueDate: null, liveFrom: null, liveUntil: null, recurrence: null }, rest))
+    Object.assign(rest, settled({ schedule: 'none', startDate: null, dueDate: null, liveFrom: null, liveUntil: null, recurrence: null }, rest, boardId))
     checkReturnLane(boardId, rest.recurrence)
     checkNewSubtickets(ctx.actor, boardId, null, new Set(), rest.todos)
     keepDecisionsOpenFor(ctx.actor, [], rest.todos)
@@ -142,8 +142,8 @@ export const ticketCreate = defineOperation({
  * The schedule and its dates as they will stand, checked: what the schedule has no room for
  * cleared or refused, the span and the live window running forwards.
  */
-function settled(before: ScheduleFields, patch: Partial<ScheduleFields>): ScheduleFields {
-  const outcome = settleSchedule(before, patch)
+function settled(before: ScheduleFields, patch: Partial<ScheduleFields>, boardId: string): ScheduleFields {
+  const outcome = settleSchedule(before, patch, boardTodayOf(boardId))
   if (!outcome.ok) throw createError({ statusCode: 422, statusMessage: outcome.message })
   checkSpan(outcome.value.startDate, outcome.value.dueDate)
   checkLiveWindow(outcome.value.liveFrom, outcome.value.liveUntil)
@@ -194,7 +194,7 @@ export const ticketUpdate = defineOperation({
     // title should not be blocked on that.
     // The dates are checked as they will stand: a new start against the due date already set,
     // a switch to a milestone dropping the start, and so on. Untouched, they are left alone.
-    if (touchesSchedule(fields)) Object.assign(fields, settled(ticket, fields))
+    if (touchesSchedule(fields)) Object.assign(fields, settled(ticket, fields, ticket.boardId))
     if (fields.recurrence && fields.recurrence.returnLaneId !== ticket.recurrence?.returnLaneId) checkReturnLane(ticket.boardId, fields.recurrence)
     const members = boardMemberIds(ticket.boardId)
     if (fields.assigneeId && fields.assigneeId !== ticket.assignee?.id && !members.has(fields.assigneeId)) {

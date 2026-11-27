@@ -2,7 +2,7 @@
 import { AlarmClock, ArrowDownToLine, ArrowUpToLine, Check, ChevronDown, ChevronUp, CornerDownRight, Diamond, Image, Repeat, Link as LinkIcon, ListTodo, MessageSquare, Paperclip, Radio, SquareKanban, ListOrdered, Tag, TriangleAlert, Vote } from '@lucide/vue'
 import type { Lane, Ticket } from '~~/shared/types/domain'
 import { CATEGORY_TONE_CLASSES } from '~~/shared/utils/constants'
-import { boardToday, daysUntil, dueDescription, dueLevel, liveDescription, liveLevel } from '~~/shared/utils/due-date'
+import { daysUntil, dueDescription, dueLevel, liveDescription, liveLevel } from '~~/shared/utils/due-date'
 import { cardImages } from '~~/shared/utils/card-images'
 import { TODO_LIGHT_LABELS, decisionAnswer, todoLight } from '~~/shared/utils/todo-progress'
 import { describeRecurrence } from '~~/shared/utils/recurrence'
@@ -53,7 +53,7 @@ function fileDrop(event: DragEvent) {
   if (files.length) emit('dropFiles', files)
 }
 
-const today = boardToday()
+const today = useBoardToday()
 // Finished work is done with its deadline too: a done lane silences the warning. A live lane
 // does as well, and lights the card by the end of its live window instead.
 const lane = computed(() => props.lanes.find(item => item.id === props.ticket.laneId))
@@ -69,28 +69,39 @@ const dueState = computed(() => {
 const dueDayFormatter = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', timeZone: 'UTC' })
 const dayOf = (date: string) => dueDayFormatter.format(new Date(`${date}T00:00:00Z`))
 // With a start as well the card reads as a span, "3 Mar – 14 Mar", until the countdown matters more.
+// A day with a time of day says it after the day — "Due today, 10:00", "Jul 31, 18:00" — but not
+// after a count of days, where the hour adds nothing: "Overdue by 3 days", "Ends in 5 days".
+const at = (text: string, time: string | null) => (time ? `${text}, ${time}` : text)
+const atIfClose = (text: string, time: string | null, days: number | null) => (days === 0 || days === 1 ? at(text, time) : text)
 const dueText = computed(() => {
-  const { startDate, dueDate, liveFrom, liveUntil } = props.ticket
+  const { startDate, dueDate, liveFrom, liveUntil, dueTime, liveFromTime, liveUntilTime } = props.ticket
   if (inLiveLane.value) {
-    if (liveUntil) return liveDescription(liveUntil, today, dayOf)
-    return liveFrom ? `Live since ${dayOf(liveFrom)}` : 'Live'
+    if (liveUntil) {
+      const days = daysUntil(liveUntil, today)
+      const text = liveDescription(liveUntil, today, dayOf) ?? ''
+      return days !== null && days > 30 ? at(text, liveUntilTime) : atIfClose(text, liveUntilTime, days)
+    }
+    return liveFrom ? at(`Live since ${dayOf(liveFrom)}`, liveFromTime) : 'Live'
   }
   if (!dueDate) return startDate ? `Starts ${dayOf(startDate)}` : null
   // A round finished early waits in its done lane for the next one.
-  if (recurring.value && inDoneLane.value) return props.ticket.nextRound ? `Next ${dayOf(props.ticket.nextRound)}` : 'Series over'
+  if (recurring.value && inDoneLane.value) return props.ticket.nextRound ? at(`Next ${dayOf(props.ticket.nextRound)}`, dueTime) : 'Series over'
   const days = daysUntil(dueDate, today)
   if (days === null) return null
   const span = startDate && startDate !== dueDate ? `${dayOf(startDate)} – ${dayOf(dueDate)}` : null
   // A milestone is a day, not a deadline: its date reads plain, beside a flag.
-  if (inDoneLane.value || days > 30) return span ?? (props.ticket.schedule === 'milestone' ? dayOf(dueDate) : `Due ${dayOf(dueDate)}`)
+  if (inDoneLane.value || days > 30) return span ?? (props.ticket.schedule === 'milestone' ? at(dayOf(dueDate), dueTime) : at(`Due ${dayOf(dueDate)}`, dueTime))
   if (span && dueState.value === 'none') return span
-  return dueDescription(dueDate, today)
+  return atIfClose(dueDescription(dueDate, today) ?? '', dueTime, days)
 })
+const timeZone = useTimeZone()
 const dueTitle = computed(() => {
-  const { startDate, dueDate, liveFrom, liveUntil } = props.ticket
-  if (inLiveLane.value) return `Live ${liveFrom ?? '…'} to ${liveUntil ?? '…'}`
-  if (props.ticket.schedule === 'milestone') return `Milestone ${dueDate}`
-  if (recurring.value) return `${describeRecurrence(props.ticket.recurrence!)} · this round is due ${dueDate}${props.ticket.nextRound ? `, the next one ${props.ticket.nextRound}` : ', the last of the series'}`
+  const { startDate, dueDate, liveFrom, liveUntil, dueTime, liveFromTime, liveUntilTime } = props.ticket
+  const moment = (day: string | null, time: string | null) => (day && time ? `${day} ${time}` : day)
+  const zone = dueTime || liveFromTime || liveUntilTime ? ` (${timeZone.value})` : ''
+  if (inLiveLane.value) return `Live ${moment(liveFrom, liveFromTime) ?? '…'} to ${moment(liveUntil, liveUntilTime) ?? '…'}${zone}`
+  if (props.ticket.schedule === 'milestone') return `Milestone ${moment(dueDate, dueTime)}${zone}`
+  if (recurring.value) return `${describeRecurrence(props.ticket.recurrence!)}${dueTime ? ` at ${dueTime}` : ''} · this round is due ${dueDate}${props.ticket.nextRound ? `, the next one ${props.ticket.nextRound}` : ', the last of the series'}${zone}`
   if (startDate && dueDate) return startDate === dueDate ? `Due ${dueDate}` : `${startDate} to ${dueDate}`
   return startDate ? `Starts ${startDate}` : `Due ${dueDate}`
 })

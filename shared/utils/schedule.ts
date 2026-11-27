@@ -9,6 +9,10 @@ export interface ScheduleFields {
   dueDate: string | null
   liveFrom: string | null
   liveUntil: string | null
+  /** HH:MM beside the day that is an event; read as null when left out. */
+  dueTime?: string | null
+  liveFromTime?: string | null
+  liveUntilTime?: string | null
   /** The rule of a recurring ticket; null for every other schedule. */
   recurrence: TicketRecurrence | null
 }
@@ -19,6 +23,7 @@ function movesRounds(before: TicketRecurrence | null, after: TicketRecurrence): 
 }
 
 const dateKeys = ['startDate', 'dueDate', 'liveFrom', 'liveUntil'] as const
+const timeKeys = ['dueTime', 'liveFromTime', 'liveUntilTime'] as const
 
 export type ScheduleOutcome = { ok: true; value: ScheduleFields } | { ok: false; message: string }
 
@@ -34,8 +39,41 @@ export type ScheduleOutcome = { ok: true; value: ScheduleFields } | { ok: false;
  * the series, leaving the round that was on as a milestone. A new rule — or one that puts the
  * rounds on other days — starts at the first of its rounds from `today` on; a due date sent
  * with it, or alone, moves only the current round, and the series carries on from its rule.
+ *
+ * A time of day goes with a day that is an event: a milestone's or a round's due date, and
+ * either end of a live window. A lifecycle's due date is a deadline, a whole day, so it has
+ * none. A switch drops the times the new schedule has no room for, a day removed takes its
+ * time along, and a time sent without its day, or where there is no room for one, is refused.
  */
 export function settleSchedule(before: ScheduleFields, patch: Partial<ScheduleFields>, today = boardToday()): ScheduleOutcome {
+  const outcome = settleDays(before, patch, today)
+  if (!outcome.ok) return outcome
+  const days = outcome.value
+  const sent = (key: typeof timeKeys[number]) => Boolean(patch[key])
+  const timed = days.schedule === 'milestone' || days.schedule === 'recurring'
+  if (sent('dueTime') && !timed) {
+    return { ok: false, message: days.schedule === 'lifecycle'
+      ? 'A lifecycle\'s dueDate is a deadline, a whole day: only a milestone or a recurring ticket has a dueTime.'
+      : 'A ticket without a schedule has no dates and no times.' }
+  }
+  const pick = (key: typeof timeKeys[number]) => patch[key] !== undefined ? patch[key] || null : before[key] ?? null
+  const times = {
+    dueTime: timed && days.dueDate ? pick('dueTime') : null,
+    liveFromTime: days.liveFrom ? pick('liveFromTime') : null,
+    liveUntilTime: days.liveUntil ? pick('liveUntilTime') : null
+  }
+  if ((sent('dueTime') && !days.dueDate) || (sent('liveFromTime') && !days.liveFrom) || (sent('liveUntilTime') && !days.liveUntil)) {
+    return { ok: false, message: 'A time of day needs its day: send dueDate, liveFrom or liveUntil with it, or set it first.' }
+  }
+  // On one day, the window still runs forwards.
+  if (days.liveFrom && days.liveFrom === days.liveUntil && times.liveFromTime && times.liveUntilTime && times.liveFromTime > times.liveUntilTime) {
+    return { ok: false, message: 'The end of the live window cannot be before its start.' }
+  }
+  return { ok: true, value: { ...days, ...times } }
+}
+
+/** The schedule and its days, as `settleSchedule` describes; the times are settled on top. */
+function settleDays(before: ScheduleFields, patch: Partial<ScheduleFields>, today: string): ScheduleOutcome {
   // Only the schedule's own fields: `before` is often a whole ticket, whose labels, to-dos and
   // the rest must not ride along into the update.
   const next: ScheduleFields = { schedule: before.schedule, startDate: before.startDate, dueDate: before.dueDate, liveFrom: before.liveFrom, liveUntil: before.liveUntil, recurrence: before.recurrence ?? null }
@@ -83,7 +121,7 @@ export function settleSchedule(before: ScheduleFields, patch: Partial<ScheduleFi
   return { ok: true, value: { ...next, recurrence: null } }
 }
 
-/** Whether a patch touches the schedule, any of its dates, or a recurring ticket's rule. */
+/** Whether a patch touches the schedule, any of its dates or times, or a recurring ticket's rule. */
 export function touchesSchedule(patch: Partial<ScheduleFields>): boolean {
-  return patch.schedule !== undefined || patch.recurrence !== undefined || dateKeys.some(key => patch[key] !== undefined)
+  return patch.schedule !== undefined || patch.recurrence !== undefined || [...dateKeys, ...timeKeys].some(key => patch[key] !== undefined)
 }

@@ -2,6 +2,7 @@ import { createError } from 'h3'
 import { z } from 'zod'
 import { boardRoles, categoryColors, linkDisplays, integrationProviders, recurrenceFrequencies, roundOutcomes, ticketSchedules, ticketTypeColors, ticketTypeIconNames, userRoles, userStatuses, workspaceRoles } from '../../shared/types/domain'
 import { TICKET_TYPE_ICON_DATA_URL_MAX } from '../../shared/utils/constants'
+import { isTimeZone, TIME_OF_DAY } from '../../shared/utils/due-date'
 import { isJiraSiteUrl, normalizeSiteUrl } from './jira-policy'
 
 /** Email is the identity key, so it is normalised the same way everywhere it is accepted. */
@@ -61,6 +62,10 @@ const recurrenceSchema = z.object({
   returnLaneId: idSchema.nullable().default(null)
 })
 
+/** A time of day, HH:MM on the 24-hour clock; "9:00" is read as "09:00". */
+const timeOfDay = z.string().trim().transform(value => value.replace(/^(\d):/, '0$1:'))
+  .refine(value => TIME_OF_DAY.test(value), 'A time of day is HH:MM on the 24-hour clock, such as 09:00.')
+
 const ticketShape = {
   title: z.string().trim().min(1, 'Title is required.').max(160),
   description: z.string().max(10000),
@@ -71,6 +76,9 @@ const ticketShape = {
   dueDate: z.iso.date().nullable(),
   liveFrom: z.iso.date().nullable(),
   liveUntil: z.iso.date().nullable(),
+  dueTime: timeOfDay.nullable(),
+  liveFromTime: timeOfDay.nullable(),
+  liveUntilTime: timeOfDay.nullable(),
   recurrence: recurrenceSchema.nullable(),
   buildNumber: z.string().trim().max(100).nullable(),
   /** The first link, for callers that know only one. A web address or nothing; an empty string reads as nothing. */
@@ -101,6 +109,9 @@ export const ticketCreateSchema = z.object({
   dueDate: ticketShape.dueDate.optional(),
   liveFrom: ticketShape.liveFrom.optional(),
   liveUntil: ticketShape.liveUntil.optional(),
+  dueTime: ticketShape.dueTime.optional(),
+  liveFromTime: ticketShape.liveFromTime.optional(),
+  liveUntilTime: ticketShape.liveUntilTime.optional(),
   recurrence: ticketShape.recurrence.optional(),
   buildNumber: ticketShape.buildNumber.optional(),
   link: ticketShape.link.optional(),
@@ -173,7 +184,10 @@ export const workspaceCreateSchema = z.object({
 
 export const workspaceUpdateSchema = z.object({
   name: z.string().trim().min(1, 'A workspace name is required.').max(40),
-  description: z.string().trim().max(200, 'A workspace description is at most 200 characters.')
+  description: z.string().trim().max(200, 'A workspace description is at most 200 characters.'),
+  /** An IANA zone such as "Europe/Berlin", stored as the runtime spells it. */
+  timeZone: z.string().trim().refine(isTimeZone, 'Unknown time zone. Use an IANA name such as Europe/Berlin.')
+    .transform(zone => new Intl.DateTimeFormat('en-CA', { timeZone: zone }).resolvedOptions().timeZone)
 }).partial()
 
 export const workspaceMemberSchema = z.object({
